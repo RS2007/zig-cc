@@ -14,7 +14,7 @@ pub const MemoryError = error{
     OutOfMemory,
 };
 
-const Lexer = struct {
+pub const Lexer = struct {
     buffer: []u8,
     current: u32 = 0,
     pub fn init(allocator: std.mem.Allocator, buffer: []u8) MemoryError!*Lexer {
@@ -124,11 +124,18 @@ test "testing lexer basic" {
     const fourthToken = try lexer.nextToken(allocator);
     const fifthToken = try lexer.nextToken(allocator);
     const sixthToken = try lexer.nextToken(allocator);
-    std.debug.print("{s}", .{lexer.buffer[firstToken.*.start .. firstToken.*.end + 1]});
+    const seventhToken = try lexer.nextToken(allocator);
+    const eighthToken = try lexer.nextToken(allocator);
+    const ninthToken = try lexer.nextToken(allocator);
     _ = try std.testing.expectEqual(firstToken.*, Token{ .type = TokenType.INT_TYPE, .start = 0, .end = 2 });
     _ = try std.testing.expectEqual(secondToken.*, Token{ .type = TokenType.IDENTIFIER, .start = 4, .end = 7 });
     _ = try std.testing.expectEqual(thirdToken.*, Token{ .type = TokenType.LPAREN, .start = 8, .end = 8 });
     _ = try std.testing.expectEqual(fourthToken.*, Token{ .type = TokenType.RPAREN, .start = 9, .end = 9 });
     _ = try std.testing.expectEqual(fifthToken.*, Token{ .type = TokenType.LBRACE, .start = 10, .end = 10 });
     _ = try std.testing.expectEqual(sixthToken.*, Token{ .type = TokenType.RETURN, .start = 12, .end = 17 });
+    _ = try std.testing.expectEqual(seventhToken.*, Token{ .type = TokenType.INTEGER, .start = 19, .end = 21 });
+    _ = try std.testing.expectEqual(try std.fmt.parseInt(u32, lexer.buffer[seventhToken.*.start..seventhToken.*.end], 10), 42);
+    _ = try std.testing.expectEqual(eighthToken.*, Token{ .type = TokenType.SEMICOLON, .start = 21, .end = 21 });
+    _ = try std.testing.expectEqual(ninthToken.*, Token{ .type = TokenType.RBRACE, .start = 23, .end = 23 });
+    _ = try std.testing.expect(std.mem.eql(u8, lexer.buffer[ninthToken.*.start .. ninthToken.*.end + 1], "}"));
 }
