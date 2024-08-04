@@ -26,8 +26,8 @@ pub const Parser = struct {
     pub fn parseProgram(self: *Parser) ParserError!*AST.Program {
         const intToken = try self.l.nextToken(self.allocator);
         std.debug.assert(intToken.type == lexer.TokenType.INT_TYPE);
-        const fnName = try self.l.nextToken(self.allocator);
-        std.debug.assert(fnName.type == lexer.TokenType.IDENTIFIER);
+        const fnNameToken = try self.l.nextToken(self.allocator);
+        std.debug.assert(fnNameToken.type == lexer.TokenType.IDENTIFIER);
         std.debug.assert((try self.l.nextToken(self.allocator)).type == lexer.TokenType.LPAREN);
         std.debug.assert((try self.l.nextToken(self.allocator)).type == lexer.TokenType.RPAREN);
         std.debug.assert((try self.l.nextToken(self.allocator)).type == lexer.TokenType.LBRACE);
@@ -35,7 +35,7 @@ pub const Parser = struct {
         const program = try self.allocator.create(AST.Program);
         program.* = AST.Program{
             .function = AST.FunctionDef{
-                .name = fnName,
+                .name = self.l.buffer[fnNameToken.start .. fnNameToken.end + 1],
                 .statement = stmt,
             },
         };
@@ -80,5 +80,5 @@ test "testing basic parser" {
     var l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
     var p = try Parser.init(allocator, l);
     var program = try p.parseProgram();
-    _ = try std.testing.expect(std.mem.eql(u8, programStr[program.function.name.start .. program.function.name.end + 1], "main"));
+    _ = try std.testing.expect(std.mem.eql(u8, program.function.name, "main"));
 }
