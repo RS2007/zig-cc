@@ -154,3 +154,14 @@ test "Codegenerator basic" {
     var program = try p.parseProgram();
     std.log.warn("\n{s}", .{try program.codegen(allocator)});
 }
+
+test "Negation and bitwise complement codegeneration" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const programStr = "int main(){ return ~(-2); }";
+    var l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    var program = try p.parseProgram();
+    std.log.warn("\n{s}", .{try program.codegen(allocator)});
+}

@@ -1,6 +1,6 @@
 const std = @import("std");
 
-pub const TokenType = enum { INT_TYPE, SEMICOLON, LPAREN, RPAREN, LBRACE, RBRACE, IDENTIFIER, INTEGER, RETURN, INVALID };
+pub const TokenType = enum { INT_TYPE, SEMICOLON, LPAREN, RPAREN, LBRACE, RBRACE, IDENTIFIER, INTEGER, RETURN, MINUS, TILDE, DECREMENT, INVALID };
 
 pub const Token = struct {
     type: TokenType,
@@ -8,7 +8,7 @@ pub const Token = struct {
     end: u32,
 };
 
-pub const LexerError = error{ BufferEmpty, OutOfMemory };
+pub const LexerError = error{ BufferEmpty, OutOfMemory, InvalidToken };
 
 pub const MemoryError = error{
     OutOfMemory,
@@ -28,6 +28,26 @@ pub const Lexer = struct {
         while (lexer.current < lexer.buffer.len and std.ascii.isWhitespace(lexer.buffer[lexer.current])) {
             lexer.current += 1;
         }
+    }
+
+    pub fn peekToken(lexer: *Lexer, allocator: std.mem.Allocator) LexerError!?*Token {
+        lexer.skipWhitespace();
+        if (lexer.current + 1 >= lexer.buffer.len) {
+            return null;
+        }
+        switch (lexer.buffer[lexer.current + 1]) {
+            '-' => {
+                var token = try allocator.create(Token);
+                token.type = TokenType.MINUS;
+                token.start = lexer.current + 1;
+                token.end = lexer.current + 1;
+                return token;
+            },
+            else => {
+                return null;
+            },
+        }
+        return null;
     }
 
     pub fn nextToken(lexer: *Lexer, allocator: std.mem.Allocator) LexerError!*Token {
@@ -63,6 +83,28 @@ pub const Lexer = struct {
             },
             ';' => {
                 token.type = TokenType.SEMICOLON;
+                token.start = lexer.current;
+                token.end = lexer.current;
+                lexer.current += 1;
+            },
+            '-' => {
+                const peekedToken = try lexer.peekToken(allocator);
+                if (peekedToken) |nonNullPeeked| {
+                    if (nonNullPeeked.*.type == TokenType.MINUS) {
+                        token.type = TokenType.DECREMENT;
+                        token.start = lexer.current;
+                        token.end = lexer.current + 1;
+                        lexer.current += 2;
+                    }
+                } else {
+                    token.type = TokenType.MINUS;
+                    token.start = lexer.current;
+                    token.end = lexer.current;
+                    lexer.current += 1;
+                }
+            },
+            '~' => {
+                token.type = TokenType.TILDE;
                 token.start = lexer.current;
                 token.end = lexer.current;
                 lexer.current += 1;
@@ -138,4 +180,50 @@ test "testing lexer basic" {
     _ = try std.testing.expectEqual(eighthToken.*, Token{ .type = TokenType.SEMICOLON, .start = 21, .end = 21 });
     _ = try std.testing.expectEqual(ninthToken.*, Token{ .type = TokenType.RBRACE, .start = 23, .end = 23 });
     _ = try std.testing.expect(std.mem.eql(u8, lexer.buffer[ninthToken.*.start .. ninthToken.*.end + 1], "}"));
+}
+
+test "--" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const buffer = "int main(){ return --2; }";
+    //const buffer2 = "int main(){ return ~~2; }";
+    //const buffer3 = "int main(){ return ~-2; }";
+    const lexer = try Lexer.init(allocator, @as([]u8, @constCast(buffer)));
+    _ = try lexer.nextToken(allocator); //int
+    _ = try lexer.nextToken(allocator); //main
+    _ = try lexer.nextToken(allocator); //(
+    _ = try lexer.nextToken(allocator); //)
+    _ = try lexer.nextToken(allocator); //{
+    _ = try lexer.nextToken(allocator); //return
+    const decrementToken = try lexer.nextToken(allocator); //-
+    const twoToken = try lexer.nextToken(allocator); //2
+    //std
+    _ = try std.testing.expectEqual(decrementToken.type, TokenType.DECREMENT);
+    _ = try std.testing.expectEqual(twoToken.type, TokenType.INTEGER);
+    //const lexer2 = try Lexer.init(allocator, @as([]u8, @constCast(buffer2)));
+    //const lexer3 = try Lexer.init(allocator, @as([]u8, @constCast(buffer3)));
+}
+
+test "~-" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const buffer = "int main(){ return ~-2; }";
+    //const buffer2 = "int main(){ return ~~2; }";
+    //const buffer3 = "int main(){ return ~-2; }";
+    const lexer = try Lexer.init(allocator, @as([]u8, @constCast(buffer)));
+    _ = try lexer.nextToken(allocator); //int
+    _ = try lexer.nextToken(allocator); //main
+    _ = try lexer.nextToken(allocator); //(
+    _ = try lexer.nextToken(allocator); //)
+    _ = try lexer.nextToken(allocator); //{
+    _ = try lexer.nextToken(allocator); //return
+    const tildeToken = try lexer.nextToken(allocator); //-
+    const minusToken = try lexer.nextToken(allocator); //2
+    //std
+    _ = try std.testing.expectEqual(tildeToken.type, TokenType.TILDE);
+    _ = try std.testing.expectEqual(minusToken.type, TokenType.MINUS);
+    //const lexer2 = try Lexer.init(allocator, @as([]u8, @constCast(buffer2)));
+    //const lexer3 = try Lexer.init(allocator, @as([]u8, @constCast(buffer3)));
 }
