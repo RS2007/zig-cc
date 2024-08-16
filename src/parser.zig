@@ -11,6 +11,7 @@ pub const ParserError = error{
     BufferEmpty,
     UnknownStatement,
     Overflow,
+    InvalidToken,
     InvalidCharacter,
 };
 
@@ -63,12 +64,47 @@ pub const Parser = struct {
 
     pub fn parseExpression(self: *Parser) ParserError!*AST.Expression {
         const currToken = try self.l.nextToken(self.allocator);
-        std.debug.assert(currToken.type == lexer.TokenType.INTEGER);
-        var integerExpr = try self.allocator.create(AST.Expression);
-        integerExpr.* = AST.Expression{
-            .Integer = try std.fmt.parseInt(u32, self.l.buffer[currToken.start..currToken.end], 10),
-        };
-        return integerExpr;
+        switch (currToken.type) {
+            .INTEGER => {
+                var integerExpr = try self.allocator.create(AST.Expression);
+                integerExpr.* = AST.Expression{
+                    .Integer = try std.fmt.parseInt(u32, self.l.buffer[currToken.start..currToken.end], 10),
+                };
+                return integerExpr;
+            },
+            .LPAREN => {
+                const expression = try self.parseExpression();
+                _ = try self.l.nextToken(self.allocator);
+                //self.allocator.free(rparen);
+                return expression;
+            },
+            .MINUS => {
+                const expression = try self.parseExpression();
+                var unaryExpr = try self.allocator.create(AST.Expression);
+                unaryExpr.* = AST.Expression{
+                    .Unary = AST.Unary{
+                        .unaryOp = .NEGATE,
+                        .exp = expression,
+                    },
+                };
+                return unaryExpr;
+            },
+            .TILDE => {
+                const expression = try self.parseExpression();
+                var unaryExpr = try self.allocator.create(AST.Expression);
+                unaryExpr.* = AST.Expression{
+                    .Unary = AST.Unary{
+                        .unaryOp = .COMPLEMENT,
+                        .exp = expression,
+                    },
+                };
+                return unaryExpr;
+            },
+            else => {
+                std.debug.assert(false);
+            },
+        }
+        return ParserError.InvalidToken;
     }
 };
 
