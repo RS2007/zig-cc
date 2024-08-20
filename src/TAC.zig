@@ -138,11 +138,12 @@ test "testing assembly generation" {
     // }
     var mem: [2048]u8 = std.mem.zeroes([2048]u8);
     var buf = @as([]u8, &mem);
-    var header = try std.fmt.bufPrint(buf, ".globl main\nmain:\n", .{});
+    var header = try std.fmt.bufPrint(buf, ".globl main\nmain:\npush %rbp", .{});
     buf = buf[header.len..];
     for (asmInstructions.items) |asmInst| {
-        var printedSlice = try std.fmt.bufPrint(buf, "{s}\n", .{try asmInst.stringify(allocator)});
+        var printedSlice = try std.fmt.bufPrint(buf, "\n{s}", .{try asmInst.stringify(allocator)});
         buf = buf[printedSlice.len..];
     }
-    std.log.warn("{s}", .{mem});
+
+    std.log.warn("\n\x1b[33m{s}\x1b[0m", .{mem});
 }

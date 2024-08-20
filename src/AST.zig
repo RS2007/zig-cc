@@ -43,6 +43,7 @@ pub const StatementType = enum {
 pub const ExpressionType = enum {
     Integer,
     Unary,
+    Binary,
 };
 
 pub const Program = struct {
@@ -146,9 +147,23 @@ pub const UnaryOp = enum {
     COMPLEMENT,
 };
 
+pub const BinOp = enum {
+    ADD,
+    SUBTRACT,
+    MULTIPLY,
+    DIVIDE,
+    REMAINDER,
+};
+
 pub const Unary = struct {
     unaryOp: UnaryOp,
     exp: *Expression,
+};
+
+pub const Binary = struct {
+    op: BinOp,
+    lhs: *Expression,
+    rhs: *Expression,
 };
 
 var tempGen = TempGenerator{ .state = 0 };
@@ -156,6 +171,7 @@ var tempGen = TempGenerator{ .state = 0 };
 pub const Expression = union(ExpressionType) {
     Integer: u32,
     Unary: Unary,
+    Binary: Binary,
 
     pub fn codegen(expression: *Expression, allocator: std.mem.Allocator) CodegenError![]u8 {
         switch (expression.*) {
@@ -171,6 +187,9 @@ pub const Expression = union(ExpressionType) {
                         return "";
                     },
                 }
+            },
+            else => {
+                unreachable;
             },
         }
     }
@@ -216,6 +235,9 @@ pub const Expression = union(ExpressionType) {
                         return lhsVal;
                     },
                 }
+            },
+            else => {
+                unreachable;
             },
         }
     }

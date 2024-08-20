@@ -1,6 +1,6 @@
 const std = @import("std");
 
-pub const TokenType = enum { INT_TYPE, SEMICOLON, LPAREN, RPAREN, LBRACE, RBRACE, IDENTIFIER, INTEGER, RETURN, MINUS, TILDE, DECREMENT, INVALID };
+pub const TokenType = enum { INT_TYPE, SEMICOLON, LPAREN, RPAREN, LBRACE, RBRACE, IDENTIFIER, INTEGER, RETURN, MINUS, TILDE, DECREMENT, PLUS, MULTIPLY, DIVIDE, MODULO, INVALID };
 
 pub const Token = struct {
     type: TokenType,
@@ -17,6 +17,7 @@ pub const MemoryError = error{
 pub const Lexer = struct {
     buffer: []u8,
     current: u32 = 0,
+    currentToken: ?*Token = null,
     pub fn init(allocator: std.mem.Allocator, buffer: []u8) MemoryError!*Lexer {
         const lexer = try allocator.create(Lexer);
         lexer.* = Lexer{
@@ -35,15 +36,63 @@ pub const Lexer = struct {
         if (lexer.current + 1 >= lexer.buffer.len) {
             return null;
         }
-        switch (lexer.buffer[lexer.current + 1]) {
+        switch (lexer.buffer[lexer.current]) {
             '-' => {
                 var token = try allocator.create(Token);
                 token.type = TokenType.MINUS;
-                token.start = lexer.current + 1;
-                token.end = lexer.current + 1;
+                token.start = lexer.current;
+                token.end = lexer.current;
+                return token;
+            },
+            ';' => {
+                var token = try allocator.create(Token);
+                token.type = TokenType.SEMICOLON;
+                token.start = lexer.current;
+                token.end = lexer.current;
+                return token;
+            },
+            ')' => {
+                var token = try allocator.create(Token);
+                token.type = TokenType.RPAREN;
+                token.start = lexer.current;
+                token.end = lexer.current;
+                return token;
+            },
+            '+' => {
+                var token = try allocator.create(Token);
+                token.type = TokenType.PLUS;
+                token.start = lexer.current;
+                token.end = lexer.current;
+                return token;
+            },
+            '*' => {
+                var token = try allocator.create(Token);
+                token.type = TokenType.MULTIPLY;
+                token.start = lexer.current;
+                token.end = lexer.current;
+                return token;
+            },
+            '%' => {
+                var token = try allocator.create(Token);
+                token.type = TokenType.MODULO;
+                token.start = lexer.current;
+                token.end = lexer.current;
                 return token;
             },
             else => {
+                if (std.ascii.isDigit(lexer.buffer[lexer.current])) {
+                    var token = try allocator.create(Token);
+                    const initialPtr = lexer.current;
+                    var finalPtr = lexer.current;
+                    while (finalPtr < lexer.buffer.len and std.ascii.isDigit(lexer.buffer[lexer.current])) {
+                        finalPtr += 1;
+                    }
+                    token.type = TokenType.INTEGER;
+                    token.start = initialPtr;
+                    token.end = finalPtr;
+                    lexer.currentToken = token;
+                    return token;
+                }
                 return null;
             },
         }
@@ -88,20 +137,42 @@ pub const Lexer = struct {
                 lexer.current += 1;
             },
             '-' => {
+                lexer.current += 1;
                 const peekedToken = try lexer.peekToken(allocator);
                 if (peekedToken) |nonNullPeeked| {
                     if (nonNullPeeked.*.type == TokenType.MINUS) {
                         token.type = TokenType.DECREMENT;
                         token.start = lexer.current;
                         token.end = lexer.current + 1;
-                        lexer.current += 2;
+                        lexer.current += 1;
+                    } else {
+                        token.type = TokenType.MINUS;
+                        token.start = lexer.current;
+                        token.end = lexer.current;
                     }
                 } else {
                     token.type = TokenType.MINUS;
                     token.start = lexer.current;
                     token.end = lexer.current;
-                    lexer.current += 1;
                 }
+            },
+            '+' => {
+                token.type = TokenType.PLUS;
+                token.start = lexer.current;
+                token.end = lexer.current;
+                lexer.current += 1;
+            },
+            '*' => {
+                token.type = TokenType.MULTIPLY;
+                token.start = lexer.current;
+                token.end = lexer.current;
+                lexer.current += 1;
+            },
+            '%' => {
+                token.type = TokenType.MODULO;
+                token.start = lexer.current;
+                token.end = lexer.current;
+                lexer.current += 1;
             },
             '~' => {
                 token.type = TokenType.TILDE;
@@ -118,6 +189,7 @@ pub const Lexer = struct {
                     token.type = TokenType.INTEGER;
                     token.start = initialPtr;
                     token.end = lexer.current;
+                    lexer.currentToken = token;
                     return token;
                 }
                 const initialPtr = lexer.current;
@@ -128,19 +200,23 @@ pub const Lexer = struct {
                     token.type = TokenType.INT_TYPE;
                     token.start = initialPtr;
                     token.end = lexer.current - 1;
+                    lexer.currentToken = token;
                     return token;
                 } else if (std.mem.eql(u8, lexer.buffer[initialPtr..lexer.current], "return")) {
                     token.type = TokenType.RETURN;
                     token.start = initialPtr;
                     token.end = lexer.current - 1;
+                    lexer.currentToken = token;
                     return token;
                 }
                 token.type = TokenType.IDENTIFIER;
                 token.start = initialPtr;
                 token.end = lexer.current - 1;
+                lexer.currentToken = token;
                 return token;
             },
         }
+        lexer.currentToken = token;
         return token;
     }
 };
@@ -224,6 +300,36 @@ test "~-" {
     //std
     _ = try std.testing.expectEqual(tildeToken.type, TokenType.TILDE);
     _ = try std.testing.expectEqual(minusToken.type, TokenType.MINUS);
+    //const lexer2 = try Lexer.init(allocator, @as([]u8, @constCast(buffer2)));
+    //const lexer3 = try Lexer.init(allocator, @as([]u8, @constCast(buffer3)));
+}
+
+test "+*%" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const buffer = "int main(){ return (2*3)%5+6; }";
+    //const buffer2 = "int main(){ return ~~2; }";
+    //const buffer3 = "int main(){ return ~-2; }";
+    const lexer = try Lexer.init(allocator, @as([]u8, @constCast(buffer)));
+    _ = try lexer.nextToken(allocator); //int
+    _ = try lexer.nextToken(allocator); //main
+    _ = try lexer.nextToken(allocator); //(
+    _ = try lexer.nextToken(allocator); //)
+    _ = try lexer.nextToken(allocator); //{
+    _ = try lexer.nextToken(allocator); //return
+    _ = try lexer.nextToken(allocator); //LPAREN
+    _ = try lexer.nextToken(allocator); //2
+    const multiplyToken = try lexer.nextToken(allocator); //*
+    _ = try lexer.nextToken(allocator); //3
+    _ = try lexer.nextToken(allocator); //RPAREN
+    const moduloToken = try lexer.nextToken(allocator);
+    _ = try lexer.nextToken(allocator); //5
+    const plusToken = try lexer.nextToken(allocator); //+
+    //std
+    _ = try std.testing.expectEqual(multiplyToken.type, TokenType.MULTIPLY);
+    _ = try std.testing.expectEqual(moduloToken.type, TokenType.MODULO);
+    _ = try std.testing.expectEqual(plusToken.type, TokenType.PLUS);
     //const lexer2 = try Lexer.init(allocator, @as([]u8, @constCast(buffer2)));
     //const lexer3 = try Lexer.init(allocator, @as([]u8, @constCast(buffer3)));
 }
