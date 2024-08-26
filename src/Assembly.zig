@@ -10,6 +10,8 @@ fn abs(src: i32) u32 {
 pub const Reg = enum {
     AX,
     R10,
+    DX,
+    R11,
     pub fn stringify(register: Reg, allocator: std.mem.Allocator) ast.CodegenError![]u8 {
         switch (register) {
             .AX => {
@@ -17,6 +19,12 @@ pub const Reg = enum {
             },
             .R10 => {
                 return (try std.fmt.allocPrint(allocator, "%r10d", .{}));
+            },
+            .DX => {
+                return (try std.fmt.allocPrint(allocator, "%edx", .{}));
+            },
+            .R11 => {
+                return (try std.fmt.allocPrint(allocator, "%r11d", .{}));
             },
         }
     }
@@ -38,7 +46,7 @@ pub const Operand = union(OperandType) {
                 return reg.stringify(allocator);
             },
             .Stack => |stackOff| {
-                return (try std.fmt.allocPrint(allocator, "-0x{d}(%rbp)", .{abs(stackOff)}));
+                return (try std.fmt.allocPrint(allocator, "-0x{x}(%rbp)", .{abs(stackOff)}));
             },
             else => {
                 unreachable;
@@ -52,11 +60,27 @@ pub const UnaryOp = enum {
     Not,
 };
 
+pub const BinaryOp = enum {
+    Add,
+    Subtract,
+    Multiply,
+    pub fn stringify(self: BinaryOp, allocator: std.mem.Allocator) ast.CodegenError![]u8 {
+        return (try std.fmt.allocPrint(allocator, "{s}", .{switch (self) {
+            .Add => "addl",
+            .Subtract => "subl",
+            .Multiply => "imull",
+        }}));
+    }
+};
+
 pub const InstructionType = enum {
     Mov,
     Unary,
     AllocateStack,
     Ret,
+    Binary,
+    Idiv,
+    Cdq,
 };
 
 pub const MovInst = struct {
@@ -69,11 +93,20 @@ pub const UnaryInst = struct {
     rhs: Operand,
 };
 
+pub const BinaryInst = struct {
+    op: BinaryOp,
+    lhs: Operand,
+    rhs: Operand,
+};
+
 pub const Instruction = union(InstructionType) {
     Mov: MovInst,
     Unary: UnaryInst,
     AllocateStack: u32,
     Ret: void,
+    Binary: BinaryInst,
+    Idiv: Operand,
+    Cdq: void,
 
     pub fn stringify(instruction: *Instruction, allocator: std.mem.Allocator) ast.CodegenError![]u8 {
         switch (instruction.*) {
@@ -95,6 +128,19 @@ pub const Instruction = union(InstructionType) {
             },
             .Ret => {
                 return (try std.fmt.allocPrint(allocator, "movl %eax,%edi\nmovl $0x3c,%eax\nsyscall\nleaveq\nretq", .{}));
+            },
+            .Binary => |binary| {
+                var lhsOperand = try @constCast(&binary.lhs).stringify(allocator);
+                var rhsOperand = try @constCast(&binary.rhs).stringify(allocator);
+                var instrString = try binary.op.stringify(allocator);
+                return (try std.fmt.allocPrint(allocator, "{s} {s},{s}", .{ instrString, rhsOperand, lhsOperand }));
+            },
+            .Cdq => {
+                return (try std.fmt.allocPrint(allocator, "cdq", .{}));
+            },
+            .Idiv => |operand| {
+                var operandStringified = try @constCast(&operand).stringify(allocator);
+                return (try std.fmt.allocPrint(allocator, "idiv {s}", .{operandStringified}));
             },
         }
     }
@@ -148,7 +194,7 @@ pub fn replacePseudoRegs(instructions: *std.ArrayList(*Instruction), allocator: 
     defer arena.deinit();
     var lookup = std.StringHashMap(i32).init(hashAllocator);
     var topOfStack: i32 = 0;
-    for (instructions.items) |inst| {
+    for (instructions.items, 0..) |inst, i| {
         switch (inst.*) {
             .Mov => |mov| {
                 switch (mov.src) {
@@ -200,7 +246,86 @@ pub fn replacePseudoRegs(instructions: *std.ArrayList(*Instruction), allocator: 
                     else => {},
                 }
             },
-            else => {},
+            .Binary => |binary| {
+                switch (binary.lhs) {
+                    .Pseudo => |pseudo| {
+                        if (lookup.contains(pseudo)) {
+                            inst.Binary.lhs = Operand{ .Stack = lookup.get(pseudo).? };
+                            continue;
+                        } else {
+                            topOfStack -= 4;
+                            try lookup.put(
+                                pseudo,
+                                topOfStack,
+                            );
+                            inst.Binary.lhs = Operand{ .Stack = topOfStack };
+                        }
+                    },
+                    else => {},
+                }
+                switch (binary.rhs) {
+                    .Pseudo => |pseudo| {
+                        if (lookup.contains(pseudo)) {
+                            inst.Binary.rhs = Operand{ .Stack = lookup.get(pseudo).? };
+                            continue;
+                        } else {
+                            topOfStack -= 4;
+                            try lookup.put(
+                                pseudo,
+                                topOfStack,
+                            );
+                            inst.Binary.rhs = Operand{ .Stack = topOfStack };
+                        }
+                    },
+                    else => {},
+                }
+            },
+            .Idiv => |idiv| {
+                switch (idiv) {
+                    .Reg => |reg| {
+                        if (reg != Reg.R10) {
+                            var movIdivArgToR10 = try allocator.create(Instruction);
+                            movIdivArgToR10.* = Instruction{ .Mov = MovInst{
+                                .src = idiv,
+                                .dest = Operand{ .Reg = Reg.R10 },
+                            } };
+                            try instructions.insert(
+                                i,
+                                movIdivArgToR10,
+                            );
+                            inst.Idiv = Operand{ .Reg = Reg.R10 };
+                        }
+                    },
+                    .Pseudo => |pseudo| {
+                        var movIdivArgToR10 = try allocator.create(Instruction);
+                        movIdivArgToR10.* = Instruction{ .Mov = MovInst{
+                            .src = Operand{ .Pseudo = pseudo },
+                            .dest = Operand{ .Reg = Reg.R10 },
+                        } };
+                        try instructions.insert(
+                            i,
+                            movIdivArgToR10,
+                        );
+                        inst.Idiv = Operand{ .Reg = Reg.R10 };
+                    },
+                    .Imm => |imm| {
+                        var movIdivArgToR10 = try allocator.create(Instruction);
+                        movIdivArgToR10.* = Instruction{ .Mov = MovInst{
+                            .src = Operand{ .Imm = imm },
+                            .dest = Operand{ .Reg = Reg.R10 },
+                        } };
+                        try instructions.insert(
+                            i,
+                            movIdivArgToR10,
+                        );
+                        inst.Idiv = Operand{ .Reg = Reg.R10 };
+                    },
+                    .Stack => {
+                        unreachable;
+                    },
+                }
+            },
+            .Cdq, .AllocateStack, .Ret => {},
         }
     }
     var allocateStackInst = try allocator.create(Instruction);

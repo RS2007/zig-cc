@@ -49,17 +49,6 @@ pub const ExpressionType = enum {
 pub const Program = struct {
     function: FunctionDef,
 
-    pub fn codegen(program: *Program, allocator: std.mem.Allocator) CodegenError![]u8 {
-        const fnCode = try program.function.codegen(allocator);
-        const asmHeader = ".section .note.GNU-stack,\"\",@progbits\n.text\n.global main";
-        var buffer = try allocator.alloc(u8, asmHeader.len + 1 + fnCode.len);
-        std.mem.copy(u8, buffer, asmHeader);
-        buffer[asmHeader.len] = '\n';
-        std.mem.copy(u8, buffer[asmHeader.len + 1 ..], fnCode);
-        allocator.free(fnCode);
-        return buffer;
-    }
-
     pub fn genTAC(program: *Program, allocator: std.mem.Allocator) CodegenError!std.ArrayList(*tac.Instruction) {
         var instructions = std.ArrayList(*tac.Instruction).init(allocator);
         try program.function.genTAC(&instructions, allocator);
@@ -73,18 +62,6 @@ pub const FunctionDef = struct {
     name: []u8,
     statement: *Statement,
 
-    pub fn codegen(function: *FunctionDef, allocator: std.mem.Allocator) CodegenError![]u8 {
-        //const statementCode = function.statement.codegen();
-        const statementCode = try function.statement.codegen(allocator);
-        const functionCode = try allocator.alloc(u8, function.name.len + 3 + statementCode.len);
-        std.mem.copy(u8, functionCode[0..], function.name);
-        functionCode[function.name.len + 1] = ':';
-        functionCode[function.name.len + 2] = '\n';
-        std.mem.copy(u8, functionCode[function.name.len + 3 ..], statementCode);
-        allocator.free(statementCode);
-        return functionCode;
-    }
-
     pub fn countLocals(function: *FunctionDef) u8 {
         return function.statement.countLocals();
     }
@@ -94,31 +71,6 @@ pub const FunctionDef = struct {
 };
 pub const Statement = union(StatementType) {
     Return: Return,
-
-    pub fn codegen(statement: *Statement, allocator: std.mem.Allocator) CodegenError![]u8 {
-        switch (statement.*) {
-            .Return => |retStmt| {
-                const expression = try retStmt.expression.codegen(allocator);
-                const returnCodeInst = "movq $0x3c,%rax\nsyscall\nleaveq\nretq";
-                defer allocator.free(expression);
-                var buf = try allocator.alloc(u8, expression.len + returnCodeInst.len);
-                std.mem.copy(
-                    u8,
-                    buf,
-                    expression,
-                );
-                std.mem.copy(
-                    u8,
-                    buf[expression.len..],
-                    returnCodeInst,
-                );
-                return buf;
-            },
-            //else => {
-            //    std.debug.assert(false);
-            //},
-        }
-    }
 
     pub fn genTACInstructions(statement: *Statement, instructions: *std.ArrayList(*tac.Instruction), allocator: std.mem.Allocator) CodegenError!void {
         switch (statement.*) {
@@ -168,31 +120,21 @@ pub const Binary = struct {
 
 var tempGen = TempGenerator{ .state = 0 };
 
+pub fn tacBinOpFromASTBinOp(op: BinOp) tac.BinaryOp {
+    return switch (op) {
+        .ADD => tac.BinaryOp.ADD,
+        .SUBTRACT => tac.BinaryOp.SUBTRACT,
+        .MULTIPLY => tac.BinaryOp.MULTIPLY,
+        .DIVIDE => tac.BinaryOp.DIVIDE,
+        .REMAINDER => tac.BinaryOp.REMAINDER,
+    };
+}
+
 pub const Expression = union(ExpressionType) {
     Integer: u32,
     Unary: Unary,
     Binary: Binary,
 
-    pub fn codegen(expression: *Expression, allocator: std.mem.Allocator) CodegenError![]u8 {
-        switch (expression.*) {
-            .Integer => |integer| {
-                return try std.fmt.allocPrint(allocator, "mov $0x{x},%rdi\n", .{integer});
-            },
-            .Unary => |unary| {
-                switch (unary.unaryOp) {
-                    .NEGATE => {
-                        return "";
-                    },
-                    .COMPLEMENT => {
-                        return "";
-                    },
-                }
-            },
-            else => {
-                unreachable;
-            },
-        }
-    }
     pub fn genTACInstructions(expression: *Expression, instructions: *std.ArrayList(*tac.Instruction), allocator: std.mem.Allocator) CodegenError!*tac.Val {
         switch (expression.*) {
             .Integer => |integer| {
@@ -211,7 +153,7 @@ pub const Expression = union(ExpressionType) {
                         };
                         var instr = try allocator.create(tac.Instruction);
                         instr.* = tac.Instruction{ .Unary = tac.Unary{
-                            .unary = tac.UnaryOp.NEGATE,
+                            .op = tac.UnaryOp.NEGATE,
                             .src = rhsVal,
                             .dest = lhsVal,
                         } };
@@ -227,7 +169,7 @@ pub const Expression = union(ExpressionType) {
                         };
                         var instr = try allocator.create(tac.Instruction);
                         instr.* = tac.Instruction{ .Unary = tac.Unary{
-                            .unary = tac.UnaryOp.COMPLEMENT,
+                            .op = tac.UnaryOp.COMPLEMENT,
                             .src = rhsVal,
                             .dest = lhsVal,
                         } };
@@ -236,8 +178,20 @@ pub const Expression = union(ExpressionType) {
                     },
                 }
             },
-            else => {
-                unreachable;
+            .Binary => |binary| {
+                var valLeft = try binary.lhs.genTACInstructions(instructions, allocator);
+                var valRight = try binary.rhs.genTACInstructions(instructions, allocator);
+                var storeTemp = try allocator.create(tac.Val);
+                storeTemp.* = tac.Val{ .Variable = try tempGen.genTemp(allocator) };
+                var instr = try allocator.create(tac.Instruction);
+                instr.* = tac.Instruction{ .Binary = tac.Binary{
+                    .op = tacBinOpFromASTBinOp(binary.op),
+                    .left = valLeft,
+                    .right = valRight,
+                    .dest = storeTemp,
+                } };
+                try instructions.append(instr);
+                return storeTemp;
             },
         }
     }
@@ -267,7 +221,7 @@ test "Codegenerator basic" {
     var l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
     var p = try parser.Parser.init(allocator, l);
     var program = try p.parseProgram();
-    std.log.warn("\n{s}", .{try program.codegen(allocator)});
+    std.log.warn("program: {any}\n", .{program});
 }
 
 test "Negation and bitwise complement codegeneration" {
@@ -279,7 +233,6 @@ test "Negation and bitwise complement codegeneration" {
     var p = try parser.Parser.init(allocator, l);
     var program = try p.parseProgram();
     std.log.warn("{}", .{program.function.statement.Return.expression.Unary.exp});
-    std.log.warn("\n{s}", .{try program.codegen(allocator)});
 }
 
 test "codegen TAC" {
