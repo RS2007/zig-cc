@@ -1,24 +1,72 @@
 const std = @import("std");
+const lexer = @import("./lexer.zig");
+const parser = @import("./parser.zig");
+const assembly = @import("./Assembly.zig");
 
 pub fn main() !void {
-    // Prints to stderr (it's a shortcut based on `std.io.getStdErr()`)
-    std.debug.print("All your {s} are belong to us.\n", .{"codebase"});
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
 
-    // stdout is for the actual output of your application, for example if you
-    // are implementing gzip, then only the compressed bytes should be sent to
-    // stdout, not any debugging messages.
-    const stdout_file = std.io.getStdOut().writer();
-    var bw = std.io.bufferedWriter(stdout_file);
-    const stdout = bw.writer();
+    // Access argv[1]
+    const args = try std.process.argsAlloc(allocator);
+    defer std.process.argsFree(allocator, args);
 
-    try stdout.print("Run `zig build test` to run the tests.\n", .{});
+    if (args.len <= 1) {
+        std.debug.print("Usage: {s} <filename>\n", .{args[0]});
+        return;
+    }
 
-    try bw.flush(); // don't forget to flush!
-}
+    const filename = args[1];
 
-test "simple test" {
-    var list = std.ArrayList(i32).init(std.testing.allocator);
-    defer list.deinit(); // try commenting this out and see if zig detects the memory leak!
-    try list.append(42);
-    try std.testing.expectEqual(@as(i32, 42), list.pop());
+    // Open the file for reading
+    const file = try std.fs.cwd().openFile(filename, .{});
+    defer file.close();
+
+    // Read the entire file into a buffer
+    const file_size = try file.getEndPos();
+    var buffer = try allocator.alloc(u8, file_size);
+    defer allocator.free(buffer);
+
+    _ = try file.readAll(buffer);
+    var l = try lexer.Lexer.init(allocator, buffer);
+    var p = try parser.Parser.init(allocator, l);
+    var program = try p.parseProgram();
+    var instructions = try program.genTAC(allocator);
+    var asmInstructions = std.ArrayList(*assembly.Instruction).init(allocator);
+    for (instructions.items) |inst| {
+        try inst.codegen(&asmInstructions, allocator);
+    }
+    for (asmInstructions.items) |asmInst| {
+        std.log.warn("\n \x1b[34m{any}\x1b[0m", .{asmInst});
+    }
+    try assembly.replacePseudoRegs(&asmInstructions, allocator);
+    try assembly.replaceStackToStackMov(&asmInstructions, allocator);
+    std.log.warn("POST PSEUDO REPLACEMENT AND STACK TO STACK MOVES", .{});
+    // for (asmInstructions.items) |asmInst| {
+    //     std.log.warn("\n \x1b[34m{any}\x1b[0m", .{asmInst});
+    // }
+    var mem: [2048]u8 = std.mem.zeroes([2048]u8);
+    var buf = @as([]u8, &mem);
+    var header = try std.fmt.bufPrint(buf, ".globl main\nmain:\npush %rbp", .{});
+    buf = buf[header.len..];
+    for (asmInstructions.items) |asmInst| {
+        var printedSlice = try std.fmt.bufPrint(buf, "\n{s}", .{try asmInst.stringify(allocator)});
+        buf = buf[printedSlice.len..];
+    }
+
+    const temp_filename = "temp.s";
+    var writeFile = try std.fs.cwd().createFile(temp_filename, .{});
+    defer writeFile.close();
+
+    try writeFile.writeAll(@as([]u8, &mem));
+
+    // Step 2: Run `gcc -o test temp.s`
+    //var gcc_args = [_][]const u8{ "gcc", "-o", "test", temp_filename };
+    //var gcc_exec = std.process.Exec.make(allocator, gcc_args) catch |err| {
+    //    std.debug.print("Failed to start gcc: {}\n", .{err});
+    //    return err;
+    //};
+
+    std.log.warn("\n\x1b[33m{s}\x1b[0m", .{buf});
 }
