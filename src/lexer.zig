@@ -1,6 +1,35 @@
 const std = @import("std");
 
-pub const TokenType = enum { INT_TYPE, SEMICOLON, LPAREN, RPAREN, LBRACE, RBRACE, IDENTIFIER, INTEGER, RETURN, MINUS, TILDE, DECREMENT, PLUS, MULTIPLY, DIVIDE, MODULO, INVALID };
+pub const TokenType = enum {
+    INT_TYPE,
+    SEMICOLON,
+    LPAREN,
+    RPAREN,
+    LBRACE,
+    RBRACE,
+    IDENTIFIER,
+    INTEGER,
+    RETURN,
+    MINUS,
+    TILDE,
+    DECREMENT,
+    PLUS,
+    MULTIPLY,
+    DIVIDE,
+    MODULO,
+    LESS,
+    LESSEQ,
+    GREATER,
+    GREATEREQ,
+    ASSIGN,
+    EQUALS,
+    NOT_EQUALS,
+    BITWISE_AND,
+    BITWISE_OR,
+    LOGIC_AND,
+    LOGIC_OR,
+    INVALID,
+};
 
 pub const Token = struct {
     type: TokenType,
@@ -31,6 +60,14 @@ pub const Lexer = struct {
         }
     }
 
+    inline fn createSingleWidthToken(comptime tokenType: TokenType, allocator: std.mem.Allocator, lexer: *Lexer) LexerError!*Token {
+        var token = try allocator.create(Token);
+        token.type = tokenType;
+        token.start = lexer.current;
+        token.end = lexer.current;
+        return token;
+    }
+
     pub fn peekToken(lexer: *Lexer, allocator: std.mem.Allocator) LexerError!?*Token {
         lexer.skipWhitespace();
         if (lexer.current + 1 >= lexer.buffer.len) {
@@ -38,46 +75,31 @@ pub const Lexer = struct {
         }
         switch (lexer.buffer[lexer.current]) {
             '-' => {
-                var token = try allocator.create(Token);
-                token.type = TokenType.MINUS;
-                token.start = lexer.current;
-                token.end = lexer.current;
-                return token;
+                return (try createSingleWidthToken(TokenType.MINUS, allocator, lexer));
             },
             ';' => {
-                var token = try allocator.create(Token);
-                token.type = TokenType.SEMICOLON;
-                token.start = lexer.current;
-                token.end = lexer.current;
-                return token;
+                return (try createSingleWidthToken(TokenType.SEMICOLON, allocator, lexer));
             },
             ')' => {
-                var token = try allocator.create(Token);
-                token.type = TokenType.RPAREN;
-                token.start = lexer.current;
-                token.end = lexer.current;
-                return token;
+                return (try createSingleWidthToken(TokenType.LPAREN, allocator, lexer));
             },
             '+' => {
-                var token = try allocator.create(Token);
-                token.type = TokenType.PLUS;
-                token.start = lexer.current;
-                token.end = lexer.current;
-                return token;
+                return (try createSingleWidthToken(TokenType.RPAREN, allocator, lexer));
             },
             '*' => {
-                var token = try allocator.create(Token);
-                token.type = TokenType.MULTIPLY;
-                token.start = lexer.current;
-                token.end = lexer.current;
-                return token;
+                return (try createSingleWidthToken(TokenType.MULTIPLY, allocator, lexer));
             },
             '%' => {
-                var token = try allocator.create(Token);
-                token.type = TokenType.MODULO;
-                token.start = lexer.current;
-                token.end = lexer.current;
-                return token;
+                return (try createSingleWidthToken(TokenType.MODULO, allocator, lexer));
+            },
+            '=' => {
+                return (try createSingleWidthToken(TokenType.ASSIGN, allocator, lexer));
+            },
+            '&' => {
+                return (try createSingleWidthToken(TokenType.BITWISE_AND, allocator, lexer));
+            },
+            '|' => {
+                return (try createSingleWidthToken(TokenType.BITWISE_OR, allocator, lexer));
             },
             else => {
                 if (std.ascii.isDigit(lexer.buffer[lexer.current])) {
@@ -99,6 +121,36 @@ pub const Lexer = struct {
         return null;
     }
 
+    inline fn nextSingleWidthTokMacro(comptime tokenType: TokenType, token: *Token, lexer: *Lexer) void {
+        token.type = tokenType;
+        token.start = lexer.current;
+        token.end = lexer.current;
+        lexer.current += 1;
+    }
+
+    inline fn nextDoubleWidthTokMacro(comptime lookAheadToks: []const TokenType, comptime returnToks: []const TokenType, fallBackTok: TokenType, lexer: *Lexer, token: *Token, allocator: std.mem.Allocator) LexerError!void {
+        lexer.current += 1;
+        const peekedToken = try lexer.peekToken(allocator);
+        if (peekedToken) |nonNullPeeked| {
+            inline for (lookAheadToks, returnToks) |lookAheadTok, returnTok| {
+                if (nonNullPeeked.*.type == lookAheadTok) {
+                    token.type = returnTok;
+                    token.start = lexer.current;
+                    token.end = lexer.current + 1;
+                    lexer.current += 1;
+                    return;
+                }
+            }
+            token.type = fallBackTok;
+            token.start = lexer.current;
+            token.end = lexer.current;
+        } else {
+            token.type = fallBackTok;
+            token.start = lexer.current;
+            token.end = lexer.current;
+        }
+    }
+
     pub fn nextToken(lexer: *Lexer, allocator: std.mem.Allocator) LexerError!*Token {
         lexer.skipWhitespace();
         if (lexer.current >= lexer.buffer.len) {
@@ -107,78 +159,49 @@ pub const Lexer = struct {
         var token = try allocator.create(Token);
         switch (lexer.buffer[lexer.current]) {
             '(' => {
-                token.type = TokenType.LPAREN;
-                token.start = lexer.current;
-                token.end = lexer.current;
-                lexer.current += 1;
+                nextSingleWidthTokMacro(TokenType.LPAREN, token, lexer);
             },
             ')' => {
-                token.type = TokenType.RPAREN;
-                token.start = lexer.current;
-                token.end = lexer.current;
-                lexer.current += 1;
+                nextSingleWidthTokMacro(TokenType.RPAREN, token, lexer);
             },
             '{' => {
-                token.type = TokenType.LBRACE;
-                token.start = lexer.current;
-                token.end = lexer.current;
-                lexer.current += 1;
+                nextSingleWidthTokMacro(TokenType.LBRACE, token, lexer);
             },
             '}' => {
-                token.type = TokenType.RBRACE;
-                token.start = lexer.current;
-                token.end = lexer.current;
-                lexer.current += 1;
+                nextSingleWidthTokMacro(TokenType.RBRACE, token, lexer);
             },
             ';' => {
-                token.type = TokenType.SEMICOLON;
-                token.start = lexer.current;
-                token.end = lexer.current;
-                lexer.current += 1;
+                nextSingleWidthTokMacro(TokenType.SEMICOLON, token, lexer);
             },
             '-' => {
-                lexer.current += 1;
-                const peekedToken = try lexer.peekToken(allocator);
-                if (peekedToken) |nonNullPeeked| {
-                    if (nonNullPeeked.*.type == TokenType.MINUS) {
-                        token.type = TokenType.DECREMENT;
-                        token.start = lexer.current;
-                        token.end = lexer.current + 1;
-                        lexer.current += 1;
-                    } else {
-                        token.type = TokenType.MINUS;
-                        token.start = lexer.current;
-                        token.end = lexer.current;
-                    }
-                } else {
-                    token.type = TokenType.MINUS;
-                    token.start = lexer.current;
-                    token.end = lexer.current;
-                }
+                try nextDoubleWidthTokMacro(&[_]TokenType{TokenType.MINUS}, &[_]TokenType{TokenType.DECREMENT}, TokenType.MINUS, lexer, token, allocator);
+            },
+            '=' => {
+                try nextDoubleWidthTokMacro(&[_]TokenType{TokenType.ASSIGN}, &[_]TokenType{TokenType.EQUALS}, TokenType.ASSIGN, lexer, token, allocator);
+            },
+            '>' => {
+                try nextDoubleWidthTokMacro(&[_]TokenType{TokenType.ASSIGN}, &[_]TokenType{TokenType.GREATEREQ}, TokenType.GREATER, lexer, token, allocator);
+            },
+            '<' => {
+                try nextDoubleWidthTokMacro(&[_]TokenType{TokenType.ASSIGN}, &[_]TokenType{TokenType.LESSEQ}, TokenType.LESS, lexer, token, allocator);
+            },
+            '&' => {
+                try nextDoubleWidthTokMacro(&[_]TokenType{TokenType.BITWISE_AND}, &[_]TokenType{TokenType.LOGIC_AND}, TokenType.BITWISE_AND, lexer, token, allocator);
+            },
+            '|' => {
+                try nextDoubleWidthTokMacro(&[_]TokenType{TokenType.BITWISE_OR}, &[_]TokenType{TokenType.LOGIC_OR}, TokenType.BITWISE_OR, lexer, token, allocator);
             },
             '+' => {
-                token.type = TokenType.PLUS;
-                token.start = lexer.current;
-                token.end = lexer.current;
-                lexer.current += 1;
+                nextSingleWidthTokMacro(TokenType.PLUS, token, lexer);
             },
             '*' => {
-                token.type = TokenType.MULTIPLY;
-                token.start = lexer.current;
-                token.end = lexer.current;
-                lexer.current += 1;
+                nextSingleWidthTokMacro(TokenType.MULTIPLY, token, lexer);
             },
             '%' => {
-                token.type = TokenType.MODULO;
-                token.start = lexer.current;
-                token.end = lexer.current;
-                lexer.current += 1;
+                nextSingleWidthTokMacro(TokenType.MODULO, token, lexer);
             },
             '~' => {
-                token.type = TokenType.TILDE;
-                token.start = lexer.current;
-                token.end = lexer.current;
-                lexer.current += 1;
+                nextSingleWidthTokMacro(TokenType.TILDE, token, lexer);
             },
             else => {
                 if (std.ascii.isDigit(lexer.buffer[lexer.current])) {
@@ -332,4 +355,52 @@ test "+*%" {
     _ = try std.testing.expectEqual(plusToken.type, TokenType.PLUS);
     //const lexer2 = try Lexer.init(allocator, @as([]u8, @constCast(buffer2)));
     //const lexer3 = try Lexer.init(allocator, @as([]u8, @constCast(buffer3)));
+}
+
+test "> and >=" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const buffer = "int main(){ return (2>3)*(2>=4); }";
+    //const buffer2 = "int main(){ return ~~2; }";
+    //const buffer3 = "int main(){ return ~-2; }";
+    const lexer = try Lexer.init(allocator, @as([]u8, @constCast(buffer)));
+    _ = try lexer.nextToken(allocator); //int
+    _ = try lexer.nextToken(allocator); //main
+    _ = try lexer.nextToken(allocator); //(
+    _ = try lexer.nextToken(allocator); //)
+    _ = try lexer.nextToken(allocator); //{
+    _ = try lexer.nextToken(allocator); //return
+    _ = try lexer.nextToken(allocator); //LPAREN
+    _ = try lexer.nextToken(allocator); //2
+    const greaterThan = try lexer.nextToken(allocator); //*
+    _ = try lexer.nextToken(allocator); //3
+    _ = try lexer.nextToken(allocator); //RPAREN
+    _ = try lexer.nextToken(allocator); //multiply
+    _ = try lexer.nextToken(allocator); //LPARENj
+    _ = try lexer.nextToken(allocator); //2
+    const greaterThanEq = try lexer.nextToken(allocator); //>=
+    _ = try lexer.nextToken(allocator); //4
+    _ = try lexer.nextToken(allocator); //RPAREN
+    _ = try lexer.nextToken(allocator); //SEMICOLON
+    //std
+    _ = try std.testing.expectEqual(greaterThan.type, TokenType.GREATER);
+    _ = try std.testing.expectEqual(greaterThanEq.type, TokenType.GREATEREQ);
+}
+
+test "== <= and <" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const buffer = "== <= <";
+    //const buffer2 = "int main(){ return ~~2; }";
+    //const buffer3 = "int main(){ return ~-2; }";
+    const lexer = try Lexer.init(allocator, @as([]u8, @constCast(buffer)));
+    const equals = try lexer.nextToken(allocator); //int
+    const lessEq = try lexer.nextToken(allocator); //main
+    const less = try lexer.nextToken(allocator); //(
+    //std
+    _ = try std.testing.expectEqual(equals.type, TokenType.EQUALS);
+    _ = try std.testing.expectEqual(lessEq.type, TokenType.LESSEQ);
+    _ = try std.testing.expectEqual(less.type, TokenType.LESS);
 }

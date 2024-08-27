@@ -116,6 +116,18 @@ pub const Parser = struct {
             .PLUS, .MINUS => {
                 return 45;
             },
+            .LESS, .LESSEQ, .GREATER, .GREATEREQ => {
+                return 35;
+            },
+            .EQUALS, .NOT_EQUALS => {
+                return 30;
+            },
+            .LOGIC_AND => {
+                return 10;
+            },
+            .LOGIC_OR => {
+                return 5;
+            },
             else => {
                 return 0;
             },

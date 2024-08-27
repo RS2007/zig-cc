@@ -25,14 +25,14 @@ pub fn main() !void {
 
     // Read the entire file into a buffer
     const file_size = try file.getEndPos();
-    var buffer = try allocator.alloc(u8, file_size);
+    const buffer = try allocator.alloc(u8, file_size);
     defer allocator.free(buffer);
 
     _ = try file.readAll(buffer);
-    var l = try lexer.Lexer.init(allocator, buffer);
+    const l = try lexer.Lexer.init(allocator, buffer);
     var p = try parser.Parser.init(allocator, l);
     var program = try p.parseProgram();
-    var instructions = try program.genTAC(allocator);
+    const instructions = try program.genTAC(allocator);
     var asmInstructions = std.ArrayList(*assembly.Instruction).init(allocator);
     for (instructions.items) |inst| {
         try inst.codegen(&asmInstructions, allocator);
@@ -48,10 +48,10 @@ pub fn main() !void {
     // }
     var mem: [2048]u8 = std.mem.zeroes([2048]u8);
     var buf = @as([]u8, &mem);
-    var header = try std.fmt.bufPrint(buf, ".globl main\nmain:\npush %rbp", .{});
+    const header = try std.fmt.bufPrint(buf, ".globl main\nmain:\npush %rbp", .{});
     buf = buf[header.len..];
     for (asmInstructions.items) |asmInst| {
-        var printedSlice = try std.fmt.bufPrint(buf, "\n{s}", .{try asmInst.stringify(allocator)});
+        const printedSlice = try std.fmt.bufPrint(buf, "\n{s}", .{try asmInst.stringify(allocator)});
         buf = buf[printedSlice.len..];
     }
 
