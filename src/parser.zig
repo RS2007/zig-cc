@@ -47,7 +47,7 @@ pub const Parser = struct {
         switch ((try self.l.nextToken(self.allocator)).type) {
             .RETURN => {
                 const expr = try self.parseExpression(0);
-                var retStmt = try self.allocator.create(AST.Statement);
+                const retStmt = try self.allocator.create(AST.Statement);
                 retStmt.* = AST.Statement{
                     .Return = AST.Return{
                         .expression = expr,
@@ -82,7 +82,7 @@ pub const Parser = struct {
         const currToken = try self.l.nextToken(self.allocator);
         switch (currToken.type) {
             .INTEGER => {
-                var integerNode = try self.allocator.create(AST.Expression);
+                const integerNode = try self.allocator.create(AST.Expression);
                 integerNode.* = AST.Expression{
                     .Integer = try std.fmt.parseInt(u32, self.l.buffer[currToken.start..currToken.end], 10),
                 };
@@ -91,7 +91,7 @@ pub const Parser = struct {
             .MINUS, .TILDE => {
                 const op = try tokToUnaryOp(currToken.type);
                 const factor = try self.parseFactor();
-                var unaryNode = try self.allocator.create(AST.Expression);
+                const unaryNode = try self.allocator.create(AST.Expression);
                 unaryNode.* = AST.Expression{ .Unary = AST.Unary{
                     .unaryOp = op,
                     .exp = factor,
@@ -140,6 +140,14 @@ pub const Parser = struct {
             .MULTIPLY => AST.BinOp.MULTIPLY,
             .DIVIDE => AST.BinOp.DIVIDE,
             .MODULO => AST.BinOp.REMAINDER,
+            .LESS => AST.BinOp.LESS_THAN,
+            .LESSEQ => AST.BinOp.LESS_THAN_EQ,
+            .GREATER => AST.BinOp.GREATER_THAN,
+            .GREATEREQ => AST.BinOp.GREATER_THAN_EQ,
+            .EQUALS => AST.BinOp.EQUALS,
+            .NOT_EQUALS => AST.BinOp.NOT_EQUALS,
+            .LOGIC_AND => AST.BinOp.LOGIC_AND,
+            .LOGIC_OR => AST.BinOp.LOGIC_OR,
             else => {
                 unreachable;
             },
@@ -154,11 +162,11 @@ pub const Parser = struct {
             if (currToken.type == lexer.TokenType.SEMICOLON) {}
             const op = self.l.currentToken.?;
             const hasRhs = switch (op.type) {
-                .MINUS, .PLUS, .MULTIPLY, .DIVIDE, .MODULO => try self.parseExpression(getPrecedence(currToken.type)),
+                .MINUS, .PLUS, .MULTIPLY, .DIVIDE, .MODULO, .LESS, .LESSEQ, .GREATER, .GREATEREQ, .EQUALS, .NOT_EQUALS, .LOGIC_AND, .LOGIC_OR => try self.parseExpression(getPrecedence(currToken.type)),
                 else => null,
             };
             if (hasRhs) |rhs| {
-                var expr = try self.allocator.create(AST.Expression);
+                const expr = try self.allocator.create(AST.Expression);
                 expr.* = AST.Expression{ .Binary = AST.Binary{
                     .op = binaryOpFromTokType(op.type),
                     .lhs = lhs,
@@ -204,9 +212,9 @@ test "testing basic parser" {
     const allocator = arena.allocator();
     defer arena.deinit();
     const programStr = "int main(){ return 42; }";
-    var l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
     var p = try Parser.init(allocator, l);
-    var program = try p.parseProgram();
+    const program = try p.parseProgram();
     _ = try std.testing.expect(std.mem.eql(u8, program.function.name, "main"));
 }
 
@@ -215,9 +223,9 @@ test "parse factor" {
     const allocator = arena.allocator();
     defer arena.deinit();
     const unary = "-42";
-    var l2 = try lexer.Lexer.init(allocator, @as([]u8, @constCast(unary)));
+    const l2 = try lexer.Lexer.init(allocator, @as([]u8, @constCast(unary)));
     var p2 = try Parser.init(allocator, l2);
-    var factor2 = try p2.parseFactor();
+    const factor2 = try p2.parseFactor();
     _ = try std.testing.expectEqual(factor2.Unary.unaryOp, AST.UnaryOp.NEGATE);
     _ = try std.testing.expectEqual(factor2.Unary.exp.Integer, 42);
 }
@@ -227,9 +235,9 @@ test "parsing expression with precedence" {
     const allocator = arena.allocator();
     defer arena.deinit();
     const programStr = "int main(){ return 2-3*5; }";
-    var l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
     var p = try Parser.init(allocator, l);
-    var program = try p.parseProgram();
+    const program = try p.parseProgram();
     std.log.warn("\x1b[34m{any}\x1b[0m", .{program.function.statement.Return.expression});
     //_ = try std.testing.expectEqual(program.function.statement.Return.expression, 2);
 }
@@ -239,9 +247,23 @@ test "more complicated precedence" {
     const allocator = arena.allocator();
     defer arena.deinit();
     const programStr = "int main(){ return (2*3)%5+6; }";
-    var l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
     var p = try Parser.init(allocator, l);
-    var program = try p.parseProgram();
+    const program = try p.parseProgram();
     std.log.warn("\x1b[34m{any}\x1b[0m", .{program.function.statement.Return.expression});
     std.log.warn("\x1b[34m{any}\x1b[0m", .{program.function.statement.Return.expression.Binary.lhs});
+}
+
+test "precedence with >= and <=" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const programStr = "int main(){ return 2 >= 3 + 1 <= 5; }";
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try Parser.init(allocator, l);
+    const program = try p.parseProgram();
+    std.log.warn("\x1b[34m{any}\x1b[0m", .{program.function.statement.Return.expression});
+    std.log.warn("\x1b[34m{any}\x1b[0m", .{program.function.statement.Return.expression.Binary.lhs});
+    std.log.warn("\x1b[34m{any}\x1b[0m", .{program.function.statement.Return.expression.Binary.lhs.Binary.lhs});
+    std.log.warn("\x1b[34m{any}\x1b[0m", .{program.function.statement.Return.expression.Binary.rhs});
 }

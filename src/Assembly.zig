@@ -1,11 +1,9 @@
 const std = @import("std");
 const ast = @import("./AST.zig");
+const tac = @import("./TAC.zig");
 
-fn abs(src: i32) u32 {
-    if (src < 0) {
-        return @intCast(-src);
-    }
-    return @intCast(src);
+inline fn abs(src: i32) u32 {
+    return if (src < 0) @intCast(-src) else @intCast(src);
 }
 pub const Reg = enum {
     AX,
@@ -27,6 +25,40 @@ pub const Reg = enum {
                 return (try std.fmt.allocPrint(allocator, "%r11d", .{}));
             },
         }
+    }
+};
+
+pub const CondCode = enum {
+    E,
+    NE,
+    G,
+    GE,
+    L,
+    LE,
+
+    const Self = @This();
+
+    pub fn stringify(self: Self, allocator: std.mem.Allocator) ![]u8 {
+        return switch (self) {
+            .E => try std.fmt.allocPrint(allocator, "e", .{}),
+            .NE => try std.fmt.allocPrint(allocator, "ne", .{}),
+            .G => try std.fmt.allocPrint(allocator, "ne", .{}),
+            .GE => try std.fmt.allocPrint(allocator, "ge", .{}),
+            .L => try std.fmt.allocPrint(allocator, "l", .{}),
+            .LE => try std.fmt.allocPrint(allocator, "le", .{}),
+        };
+    }
+
+    pub fn getFromTacOp(op: tac.BinaryOp) Self {
+        return switch (op) {
+            .EQ => CondCode.E,
+            .NOT_EQ => CondCode.NE,
+            .LT => CondCode.L,
+            .LT_EQ => CondCode.LE,
+            .GT => CondCode.G,
+            .GT_EQ => CondCode.GE,
+            else => unreachable,
+        };
     }
 };
 
@@ -81,6 +113,11 @@ pub const InstructionType = enum {
     Binary,
     Idiv,
     Cdq,
+    Cmp,
+    Jmp,
+    JmpCC,
+    SetCC,
+    Label,
 };
 
 pub const MovInst = struct {
@@ -99,6 +136,20 @@ pub const BinaryInst = struct {
     rhs: Operand,
 };
 
+pub const Cmp = struct {
+    op1: Operand,
+    op2: Operand,
+};
+pub const JmpCC = struct {
+    code: CondCode,
+    label: []u8,
+};
+
+pub const SetCC = struct {
+    code: CondCode,
+    dest: Operand,
+};
+
 pub const Instruction = union(InstructionType) {
     Mov: MovInst,
     Unary: UnaryInst,
@@ -107,6 +158,11 @@ pub const Instruction = union(InstructionType) {
     Binary: BinaryInst,
     Idiv: Operand,
     Cdq: void,
+    Cmp: Cmp,
+    Jmp: []u8,
+    JmpCC: JmpCC,
+    SetCC: SetCC,
+    Label: []u8,
 
     pub fn stringify(instruction: *Instruction, allocator: std.mem.Allocator) ast.CodegenError![]u8 {
         switch (instruction.*) {
@@ -130,17 +186,36 @@ pub const Instruction = union(InstructionType) {
                 return (try std.fmt.allocPrint(allocator, "movl %eax,%edi\nmovl $0x3c,%eax\nsyscall\nleaveq\nretq", .{}));
             },
             .Binary => |binary| {
-                var lhsOperand = try @constCast(&binary.lhs).stringify(allocator);
-                var rhsOperand = try @constCast(&binary.rhs).stringify(allocator);
-                var instrString = try binary.op.stringify(allocator);
+                const lhsOperand = try @constCast(&binary.lhs).stringify(allocator);
+                const rhsOperand = try @constCast(&binary.rhs).stringify(allocator);
+                const instrString = try binary.op.stringify(allocator);
                 return (try std.fmt.allocPrint(allocator, "{s} {s},{s}", .{ instrString, rhsOperand, lhsOperand }));
             },
             .Cdq => {
                 return (try std.fmt.allocPrint(allocator, "cdq", .{}));
             },
             .Idiv => |operand| {
-                var operandStringified = try @constCast(&operand).stringify(allocator);
+                const operandStringified = try @constCast(&operand).stringify(allocator);
                 return (try std.fmt.allocPrint(allocator, "idiv {s}", .{operandStringified}));
+            },
+            .Cmp => |cmp| {
+                const op1Stringified = try @constCast(&cmp.op1).stringify(allocator);
+                const op2Stringified = try @constCast(&cmp.op2).stringify(allocator);
+                return (try std.fmt.allocPrint(allocator, "cmpl {s},{s}", .{ op1Stringified, op2Stringified }));
+            },
+            .Jmp => |jmpLabel| {
+                return (try std.fmt.allocPrint(allocator, "jmp {s}", .{jmpLabel}));
+            },
+            .JmpCC => |jmpCC| {
+                return (try std.fmt.allocPrint(allocator, "j{s} {s}", .{ (try jmpCC.code.stringify(allocator)), jmpCC.label }));
+            },
+            .SetCC => |setCC| {
+                const destStringified = try @constCast(&setCC.dest).stringify(allocator);
+                const code = try setCC.code.stringify(allocator);
+                return (try std.fmt.allocPrint(allocator, "set{s} {s}", .{ code, destStringified }));
+            },
+            .Label => |label| {
+                return (try std.fmt.allocPrint(allocator, ".L{s}", .{label}));
             },
         }
     }
@@ -166,8 +241,8 @@ pub fn replaceStackToStackMov(instructions: *std.ArrayList(*Instruction), alloca
                 }
                 if (isSrcStack and isDestStack) {
                     _ = instructions.orderedRemove(i);
-                    var movInstSrc = try allocator.create(Instruction);
-                    var movInstDest = try allocator.create(Instruction);
+                    const movInstSrc = try allocator.create(Instruction);
+                    const movInstDest = try allocator.create(Instruction);
                     movInstSrc.* = Instruction{ .Mov = MovInst{ .src = mov.src, .dest = Operand{ .Reg = Reg.R10 } } };
                     movInstDest.* = Instruction{ .Mov = MovInst{
                         .src = Operand{ .Reg = Reg.R10 },
@@ -284,7 +359,7 @@ pub fn replacePseudoRegs(instructions: *std.ArrayList(*Instruction), allocator: 
                 switch (idiv) {
                     .Reg => |reg| {
                         if (reg != Reg.R10) {
-                            var movIdivArgToR10 = try allocator.create(Instruction);
+                            const movIdivArgToR10 = try allocator.create(Instruction);
                             movIdivArgToR10.* = Instruction{ .Mov = MovInst{
                                 .src = idiv,
                                 .dest = Operand{ .Reg = Reg.R10 },
@@ -297,7 +372,7 @@ pub fn replacePseudoRegs(instructions: *std.ArrayList(*Instruction), allocator: 
                         }
                     },
                     .Pseudo => |pseudo| {
-                        var movIdivArgToR10 = try allocator.create(Instruction);
+                        const movIdivArgToR10 = try allocator.create(Instruction);
                         movIdivArgToR10.* = Instruction{ .Mov = MovInst{
                             .src = Operand{ .Pseudo = pseudo },
                             .dest = Operand{ .Reg = Reg.R10 },
@@ -309,7 +384,7 @@ pub fn replacePseudoRegs(instructions: *std.ArrayList(*Instruction), allocator: 
                         inst.Idiv = Operand{ .Reg = Reg.R10 };
                     },
                     .Imm => |imm| {
-                        var movIdivArgToR10 = try allocator.create(Instruction);
+                        const movIdivArgToR10 = try allocator.create(Instruction);
                         movIdivArgToR10.* = Instruction{ .Mov = MovInst{
                             .src = Operand{ .Imm = imm },
                             .dest = Operand{ .Reg = Reg.R10 },
@@ -326,9 +401,12 @@ pub fn replacePseudoRegs(instructions: *std.ArrayList(*Instruction), allocator: 
                 }
             },
             .Cdq, .AllocateStack, .Ret => {},
+            else => {
+                unreachable;
+            },
         }
     }
-    var allocateStackInst = try allocator.create(Instruction);
+    const allocateStackInst = try allocator.create(Instruction);
     allocateStackInst.* = Instruction{
         .AllocateStack = @as(u32, abs(topOfStack)),
     };

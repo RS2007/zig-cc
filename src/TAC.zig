@@ -17,6 +17,11 @@ pub const InstructionType = enum {
     Return,
     Unary,
     Binary,
+    Copy,
+    Jump,
+    JumpIfZero,
+    JumpIfNotZero,
+    Label,
 };
 
 pub const Return = struct {
@@ -34,6 +39,14 @@ pub const BinaryOp = enum {
     MULTIPLY,
     DIVIDE,
     REMAINDER,
+    EQ,
+    NOT_EQ,
+    LT,
+    LT_EQ,
+    GT,
+    GT_EQ,
+    OR,
+    AND,
 };
 
 pub const Unary = struct {
@@ -64,29 +77,44 @@ fn tacOpToAssemblyOp(op: BinaryOp) assembly.BinaryOp {
     }
 }
 
+pub const Copy = struct {
+    src: *Val,
+    dest: *Val,
+};
+
+pub const Jmp = struct {
+    condition: *Val,
+    target: []u8,
+};
+
 pub const Instruction = union(InstructionType) {
     Return: Return,
     Unary: Unary,
     Binary: Binary,
+    Copy: Copy,
+    Jump: []u8,
+    JumpIfZero: Jmp,
+    JumpIfNotZero: Jmp,
+    Label: []u8,
     pub fn codegen(instruction: *Instruction, instructions: *std.ArrayList(*assembly.Instruction), allocator: std.mem.Allocator) ast.CodegenError!void {
         switch (instruction.*) {
             .Return => |ret| {
-                var val = try ret.val.codegen(allocator);
-                var movInst = try allocator.create(assembly.Instruction);
+                const val = try ret.val.codegen(allocator);
+                const movInst = try allocator.create(assembly.Instruction);
                 movInst.* = assembly.Instruction{ .Mov = assembly.MovInst{
                     .src = val,
                     .dest = assembly.Operand{ .Reg = assembly.Reg.AX },
                 } };
-                var retInst = try allocator.create(assembly.Instruction);
+                const retInst = try allocator.create(assembly.Instruction);
                 retInst.* = assembly.Instruction{ .Ret = {} };
                 try instructions.append(movInst);
                 try instructions.append(retInst);
             },
             .Unary => |unary| {
-                var dest = try unary.dest.codegen(allocator);
-                var src = try unary.src.codegen(allocator);
-                var movInst = try allocator.create(assembly.Instruction);
-                var unaryInst = try allocator.create(assembly.Instruction);
+                const dest = try unary.dest.codegen(allocator);
+                const src = try unary.src.codegen(allocator);
+                const movInst = try allocator.create(assembly.Instruction);
+                const unaryInst = try allocator.create(assembly.Instruction);
                 movInst.* = assembly.Instruction{
                     .Mov = assembly.MovInst{
                         .src = src,
@@ -115,17 +143,17 @@ pub const Instruction = union(InstructionType) {
                 try instructions.append(unaryInst);
             },
             .Binary => |binary| {
-                var storeDest = try binary.dest.codegen(allocator);
-                var left = try binary.left.codegen(allocator);
-                var right = try binary.right.codegen(allocator);
+                const storeDest = try binary.dest.codegen(allocator);
+                const left = try binary.left.codegen(allocator);
+                const right = try binary.right.codegen(allocator);
                 switch (binary.op) {
                     .ADD, .SUBTRACT => {
-                        var movLeftToDest = try allocator.create(assembly.Instruction);
+                        const movLeftToDest = try allocator.create(assembly.Instruction);
                         movLeftToDest.* = assembly.Instruction{ .Mov = assembly.MovInst{
                             .src = left,
                             .dest = storeDest,
                         } };
-                        var binaryInstr = try allocator.create(assembly.Instruction);
+                        const binaryInstr = try allocator.create(assembly.Instruction);
                         binaryInstr.* = assembly.Instruction{ .Binary = assembly.BinaryInst{
                             .lhs = storeDest,
                             .rhs = right,
@@ -135,9 +163,9 @@ pub const Instruction = union(InstructionType) {
                         try instructions.append(binaryInstr);
                     },
                     .MULTIPLY => {
-                        var movLeftToR11 = try allocator.create(assembly.Instruction);
-                        var binaryInstr = try allocator.create(assembly.Instruction);
-                        var movR11ToDest = try allocator.create(assembly.Instruction);
+                        const movLeftToR11 = try allocator.create(assembly.Instruction);
+                        const binaryInstr = try allocator.create(assembly.Instruction);
+                        const movR11ToDest = try allocator.create(assembly.Instruction);
                         movLeftToR11.* = assembly.Instruction{
                             .Mov = assembly.MovInst{
                                 .src = left,
@@ -158,10 +186,10 @@ pub const Instruction = union(InstructionType) {
                         try instructions.append(movR11ToDest);
                     },
                     .DIVIDE => {
-                        var movLeftToAX = try allocator.create(assembly.Instruction);
-                        var cdqInstr = try allocator.create(assembly.Instruction);
-                        var idivWithRight = try allocator.create(assembly.Instruction);
-                        var movAXToDest = try allocator.create(assembly.Instruction);
+                        const movLeftToAX = try allocator.create(assembly.Instruction);
+                        const cdqInstr = try allocator.create(assembly.Instruction);
+                        const idivWithRight = try allocator.create(assembly.Instruction);
+                        const movAXToDest = try allocator.create(assembly.Instruction);
                         movLeftToAX.* = assembly.Instruction{ .Mov = assembly.MovInst{
                             .src = left,
                             .dest = assembly.Operand{ .Reg = assembly.Reg.AX },
@@ -182,10 +210,10 @@ pub const Instruction = union(InstructionType) {
                         try instructions.append(movAXToDest);
                     },
                     .REMAINDER => {
-                        var movLeftToDX = try allocator.create(assembly.Instruction);
-                        var cdqInstr = try allocator.create(assembly.Instruction);
-                        var idivWithRight = try allocator.create(assembly.Instruction);
-                        var movDXToDest = try allocator.create(assembly.Instruction);
+                        const movLeftToDX = try allocator.create(assembly.Instruction);
+                        const cdqInstr = try allocator.create(assembly.Instruction);
+                        const idivWithRight = try allocator.create(assembly.Instruction);
+                        const movDXToDest = try allocator.create(assembly.Instruction);
                         movLeftToDX.* = assembly.Instruction{ .Mov = assembly.MovInst{
                             .src = left,
                             .dest = assembly.Operand{ .Reg = assembly.Reg.AX },
@@ -205,8 +233,33 @@ pub const Instruction = union(InstructionType) {
                         try instructions.append(idivWithRight);
                         try instructions.append(movDXToDest);
                     },
+                    .EQ, .NOT_EQ, .LT, .LT_EQ, .GT, .GT_EQ => {
+                        const cmpInstr = try allocator.create(assembly.Instruction);
+                        cmpInstr.* = assembly.Instruction{ .Cmp = assembly.Cmp{
+                            .op1 = left,
+                            .op2 = right,
+                        } };
+                        const setCC = try allocator.create(assembly.Instruction);
+                        setCC.* = assembly.Instruction{ .SetCC = assembly.SetCC{
+                            .code = assembly.CondCode.getFromTacOp(binary.op),
+                            .dest = storeDest,
+                        } };
+                        try instructions.append(cmpInstr);
+                        try instructions.append(setCC);
+                    },
+                    .OR => {
+                        unreachable;
+                    },
+                    .AND => {
+                        unreachable;
+                    },
                 }
             },
+            .Copy => {},
+            .Jump => {},
+            .JumpIfZero => {},
+            .JumpIfNotZero => {},
+            .Label => {},
         }
     }
 };
@@ -222,14 +275,14 @@ pub const Val = union(ValType) {
     pub fn codegen(val: *Val, allocator: std.mem.Allocator) ast.CodegenError!assembly.Operand {
         switch (val.*) {
             .Constant => |constant| {
-                var operand = try allocator.create(assembly.Operand);
+                const operand = try allocator.create(assembly.Operand);
                 operand.* = assembly.Operand{
                     .Imm = constant,
                 };
                 return operand.*;
             },
             .Variable => |variable| {
-                var operand = try allocator.create(assembly.Operand);
+                const operand = try allocator.create(assembly.Operand);
                 operand.* = assembly.Operand{
                     .Pseudo = variable,
                 };
@@ -244,10 +297,10 @@ test "testing assembly generation - unary" {
     const allocator = arena.allocator();
     defer arena.deinit();
     const programStr = "int main(){ return ~(-2); }";
-    var l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
     var p = try parser.Parser.init(allocator, l);
     var program = try p.parseProgram();
-    var instructions = try program.genTAC(allocator);
+    const instructions = try program.genTAC(allocator);
     var asmInstructions = std.ArrayList(*assembly.Instruction).init(allocator);
     for (instructions.items) |inst| {
         try inst.codegen(&asmInstructions, allocator);
@@ -263,10 +316,10 @@ test "testing assembly generation - unary" {
     // }
     var mem: [2048]u8 = std.mem.zeroes([2048]u8);
     var buf = @as([]u8, &mem);
-    var header = try std.fmt.bufPrint(buf, ".globl main\nmain:\npush %rbp", .{});
+    const header = try std.fmt.bufPrint(buf, ".globl main\nmain:\npush %rbp", .{});
     buf = buf[header.len..];
     for (asmInstructions.items) |asmInst| {
-        var printedSlice = try std.fmt.bufPrint(buf, "\n{s}", .{try asmInst.stringify(allocator)});
+        const printedSlice = try std.fmt.bufPrint(buf, "\n{s}", .{try asmInst.stringify(allocator)});
         buf = buf[printedSlice.len..];
     }
 
@@ -278,10 +331,10 @@ test "testing assembly generation - binary" {
     const allocator = arena.allocator();
     defer arena.deinit();
     const programStr = "int main(){ return (2*3)%5+6; }";
-    var l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
     var p = try parser.Parser.init(allocator, l);
     var program = try p.parseProgram();
-    var instructions = try program.genTAC(allocator);
+    const instructions = try program.genTAC(allocator);
     var asmInstructions = std.ArrayList(*assembly.Instruction).init(allocator);
     for (instructions.items) |inst| {
         try inst.codegen(&asmInstructions, allocator);
@@ -297,10 +350,45 @@ test "testing assembly generation - binary" {
     // }
     var mem: [2048]u8 = std.mem.zeroes([2048]u8);
     var buf = @as([]u8, &mem);
-    var header = try std.fmt.bufPrint(buf, ".globl main\nmain:\npush %rbp", .{});
+    const header = try std.fmt.bufPrint(buf, ".globl main\nmain:\npush %rbp", .{});
     buf = buf[header.len..];
     for (asmInstructions.items) |asmInst| {
-        var printedSlice = try std.fmt.bufPrint(buf, "\n{s}", .{try asmInst.stringify(allocator)});
+        const printedSlice = try std.fmt.bufPrint(buf, "\n{s}", .{try asmInst.stringify(allocator)});
+        buf = buf[printedSlice.len..];
+    }
+
+    std.log.warn("\n\x1b[33m{s}\x1b[0m", .{mem});
+}
+
+test "testing assembly generation - >= and <=" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const programStr = "int main(){ return 2 >= 3 + 1 <= 5; }";
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    const program = try p.parseProgram();
+
+    const instructions = try program.genTAC(allocator);
+    var asmInstructions = std.ArrayList(*assembly.Instruction).init(allocator);
+    for (instructions.items) |inst| {
+        try inst.codegen(&asmInstructions, allocator);
+    }
+    for (asmInstructions.items) |asmInst| {
+        std.log.warn("\n \x1b[34m{any}\x1b[0m", .{asmInst});
+    }
+    try assembly.replacePseudoRegs(&asmInstructions, allocator);
+    try assembly.replaceStackToStackMov(&asmInstructions, allocator);
+    std.log.warn("POST PSEUDO REPLACEMENT AND STACK TO STACK MOVES", .{});
+    // for (asmInstructions.items) |asmInst| {
+    //     std.log.warn("\n \x1b[34m{any}\x1b[0m", .{asmInst});
+    // }
+    var mem: [2048]u8 = std.mem.zeroes([2048]u8);
+    var buf = @as([]u8, &mem);
+    const header = try std.fmt.bufPrint(buf, ".globl main\nmain:\npush %rbp", .{});
+    buf = buf[header.len..];
+    for (asmInstructions.items) |asmInst| {
+        const printedSlice = try std.fmt.bufPrint(buf, "\n{s}", .{try asmInst.stringify(allocator)});
         buf = buf[printedSlice.len..];
     }
 
