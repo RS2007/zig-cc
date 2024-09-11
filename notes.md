@@ -1,10 +1,12 @@
 ## TAC
-* converting current AST to three address code
-* tree rewriting
-* statement gets converted to instructions:
-   * emit inner expression instructions first
 
-* Normal AST Representation:
+- converting current AST to three address code
+- tree rewriting
+- statement gets converted to instructions:
+
+  - emit inner expression instructions first
+
+- Normal AST Representation:
 
 ```
 Return(Unary(Negate,
@@ -12,7 +14,7 @@ Return(Unary(Negate,
 		  Unary(Negate, Constant(8)))))
 ```
 
-* TACKY representation(instructions):
+- TACKY representation(instructions):
 
 ```
 [
@@ -23,3 +25,12 @@ Return(Unary(Negate,
 ]
 ```
 
+### Handling short circuiting operations
+
+- Logic is something along the lines of `if (firstOp == shortValue)` then don't evaluate the next and move firstOp to dest
+
+  - else evaluate the secondOp, compute the operation and store into register
+
+- Move the firstOp to dest, cmp and jump. if no jump, compute and secondOp,dest.
+
+- Handle this in TAC. Don't complicate assembly generation.

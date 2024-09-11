@@ -184,6 +184,34 @@ pub const Expression = union(ExpressionType) {
                 }
             },
             .Binary => |binary| {
+                if (binary.op == BinOp.LOGIC_AND or binary.op == BinOp.LOGIC_OR) {
+                    const valLeft = try binary.lhs.genTACInstructions(instructions, allocator);
+                    const storeTemp = try allocator.create(tac.Val);
+                    if (binary.op == BinOp.LOGIC_AND) {
+                        // const compareShortInstr = try allocator.create(tac.Instruction);
+                        // compareShortInstr.* = tac.Instruction{ .Binary = tac.Binary{
+                        //     .op = BinOp.EQUALS,
+                        //     .left = valLeft,
+                        //     .right = tac.Val{ .Constant = 0 },
+                        //     .dest = storeTemp,
+                        // } };
+                        // try instructions.append(compareShortInstr);
+                        const falseLabel = try allocator.create(tac.Instruction);
+                        falseLabel.* = tac.Instruction{
+                            .Label = "falseLabel", // TODO: change this later
+                        };
+                        const jmpIfZero = try allocator.create(tac.Instruction);
+                        jmpIfZero.* = tac.Instruction{ .JmpIfZero = tac.Jmp{
+                            .target = "falseLabel",
+                        } };
+                        try instructions.append(jmpIfZero);
+                        const valRight = try binary.rhs.genTACInstructions(instructions, allocator);
+                        try instructions.append(jmpIfZero);
+                    }
+                    storeTemp.* = tac.Val{ .Variable = try tempGen.genTemp(allocator) };
+
+                    return storeTemp;
+                }
                 const valLeft = try binary.lhs.genTACInstructions(instructions, allocator);
                 const valRight = try binary.rhs.genTACInstructions(instructions, allocator);
                 const storeTemp = try allocator.create(tac.Val);
