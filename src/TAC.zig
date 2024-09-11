@@ -235,15 +235,21 @@ pub const Instruction = union(InstructionType) {
                     },
                     .EQ, .NOT_EQ, .LT, .LT_EQ, .GT, .GT_EQ => {
                         const cmpInstr = try allocator.create(assembly.Instruction);
+                        const movLeftToDest = try allocator.create(assembly.Instruction);
+                        movLeftToDest.* = assembly.Instruction{ .Mov = assembly.MovInst{
+                            .src = left,
+                            .dest = storeDest,
+                        } };
                         cmpInstr.* = assembly.Instruction{ .Cmp = assembly.Cmp{
-                            .op1 = left,
-                            .op2 = right,
+                            .op1 = right,
+                            .op2 = storeDest,
                         } };
                         const setCC = try allocator.create(assembly.Instruction);
                         setCC.* = assembly.Instruction{ .SetCC = assembly.SetCC{
                             .code = assembly.CondCode.getFromTacOp(binary.op),
                             .dest = storeDest,
                         } };
+                        try instructions.append(movLeftToDest);
                         try instructions.append(cmpInstr);
                         try instructions.append(setCC);
                     },

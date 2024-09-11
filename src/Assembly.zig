@@ -401,7 +401,60 @@ pub fn replacePseudoRegs(instructions: *std.ArrayList(*Instruction), allocator: 
                 }
             },
             .Cdq, .AllocateStack, .Ret => {},
+            .Cmp => |cmp| {
+                switch (cmp.op1) {
+                    .Pseudo => |pseudo| {
+                        if (lookup.contains(pseudo)) {
+                            inst.Cmp.op1 = Operand{ .Stack = lookup.get(pseudo).? };
+                            continue;
+                        } else {
+                            topOfStack -= 4;
+                            try lookup.put(
+                                pseudo,
+                                topOfStack,
+                            );
+                            inst.Cmp.op1 = Operand{ .Stack = topOfStack };
+                        }
+                    },
+                    else => {},
+                }
+                switch (cmp.op2) {
+                    .Pseudo => |pseudo| {
+                        if (lookup.contains(pseudo)) {
+                            inst.Cmp.op2 = Operand{ .Stack = lookup.get(pseudo).? };
+                            continue;
+                        } else {
+                            topOfStack -= 4;
+                            try lookup.put(
+                                pseudo,
+                                topOfStack,
+                            );
+                            inst.Cmp.op2 = Operand{ .Stack = topOfStack };
+                        }
+                    },
+                    else => {},
+                }
+            },
+            .SetCC => |setCC| {
+                switch (setCC.dest) {
+                    .Pseudo => |pseudo| {
+                        if (lookup.contains(pseudo)) {
+                            inst.SetCC.dest = Operand{ .Stack = lookup.get(pseudo).? };
+                            continue;
+                        } else {
+                            topOfStack -= 4;
+                            try lookup.put(
+                                pseudo,
+                                topOfStack,
+                            );
+                            inst.SetCC.dest = Operand{ .Stack = topOfStack };
+                        }
+                    },
+                    else => {},
+                }
+            },
             else => {
+                std.log.warn("tag not handled: {s}\n", .{@tagName(inst.*)});
                 unreachable;
             },
         }
