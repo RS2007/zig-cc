@@ -261,11 +261,76 @@ pub const Instruction = union(InstructionType) {
                     },
                 }
             },
-            .Copy => {},
-            .Jump => {},
-            .JumpIfZero => {},
-            .JumpIfNotZero => {},
-            .Label => {},
+            .Copy => |cp| {
+                const cpInstr = try allocator.create(assembly.Instruction);
+                const src = try cp.src.codegen(allocator);
+                const dest = try cp.dest.codegen(allocator);
+                cpInstr.* = assembly.Instruction{ .Mov = assembly.MovInst{
+                    .src = src,
+                    .dest = dest,
+                } };
+                try instructions.append(cpInstr);
+            },
+            .Jump => |jmp| {
+                const jmpInstr = try allocator.create(assembly.Instruction);
+                jmpInstr.* = assembly.Instruction{
+                    .Jmp = jmp,
+                };
+                try instructions.append(jmpInstr);
+            },
+            .JumpIfZero => |jmp| {
+                const movToTemp = try allocator.create(assembly.Instruction);
+                const checkZero = try allocator.create(assembly.Instruction);
+                const val = try jmp.condition.codegen(allocator);
+                movToTemp.* = assembly.Instruction{ .Mov = assembly.MovInst{
+                    .src = val,
+                    .dest = assembly.Operand{ .Reg = assembly.Reg.R10 },
+                } };
+                checkZero.* = assembly.Instruction{ .Cmp = assembly.Cmp{
+                    .op2 = assembly.Operand{ .Reg = assembly.Reg.R10 },
+                    .op1 = assembly.Operand{
+                        .Imm = 0,
+                    },
+                } };
+                try instructions.append(movToTemp);
+                try instructions.append(checkZero);
+                const jump = try allocator.create(assembly.Instruction);
+                jump.* = assembly.Instruction{ .JmpCC = assembly.JmpCC{
+                    .code = assembly.CondCode.E,
+                    .label = jmp.target,
+                } };
+                try instructions.append(jump);
+            },
+            .JumpIfNotZero => |jmp| {
+                const movToTemp = try allocator.create(assembly.Instruction);
+                const checkZero = try allocator.create(assembly.Instruction);
+                const val = try jmp.condition.codegen(allocator);
+                movToTemp.* = assembly.Instruction{ .Mov = assembly.MovInst{
+                    .src = val,
+                    .dest = assembly.Operand{ .Reg = assembly.Reg.R10 },
+                } };
+                checkZero.* = assembly.Instruction{ .Cmp = assembly.Cmp{
+                    .op2 = assembly.Operand{ .Reg = assembly.Reg.R10 },
+                    .op1 = assembly.Operand{
+                        .Imm = 0,
+                    },
+                } };
+                try instructions.append(movToTemp);
+                try instructions.append(checkZero);
+                const jump = try allocator.create(assembly.Instruction);
+                jump.* = assembly.Instruction{ .JmpCC = assembly.JmpCC{
+                    .code = assembly.CondCode.NE,
+                    .label = jmp.target,
+                } };
+                try instructions.append(jump);
+            },
+            .Label => |labelName| {
+                const label = try allocator.create(assembly.Instruction);
+                label.* = assembly.Instruction{
+                    .Label = labelName,
+                };
+                try instructions.append(label);
+            },
         }
     }
 };
@@ -315,7 +380,7 @@ test "testing assembly generation - unary" {
         std.log.warn("\n \x1b[34m{any}\x1b[0m", .{asmInst});
     }
     try assembly.replacePseudoRegs(&asmInstructions, allocator);
-    try assembly.replaceStackToStackMov(&asmInstructions, allocator);
+    try assembly.fixupInstructions(&asmInstructions, allocator);
     std.log.warn("POST PSEUDO REPLACEMENT AND STACK TO STACK MOVES", .{});
     // for (asmInstructions.items) |asmInst| {
     //     std.log.warn("\n \x1b[34m{any}\x1b[0m", .{asmInst});
@@ -349,7 +414,7 @@ test "testing assembly generation - binary" {
         std.log.warn("\n \x1b[34m{any}\x1b[0m", .{asmInst});
     }
     try assembly.replacePseudoRegs(&asmInstructions, allocator);
-    try assembly.replaceStackToStackMov(&asmInstructions, allocator);
+    try assembly.fixupInstructions(&asmInstructions, allocator);
     std.log.warn("POST PSEUDO REPLACEMENT AND STACK TO STACK MOVES", .{});
     // for (asmInstructions.items) |asmInst| {
     //     std.log.warn("\n \x1b[34m{any}\x1b[0m", .{asmInst});
@@ -384,7 +449,42 @@ test "testing assembly generation - >= and <=" {
         std.log.warn("\n \x1b[34m{any}\x1b[0m", .{asmInst});
     }
     try assembly.replacePseudoRegs(&asmInstructions, allocator);
-    try assembly.replaceStackToStackMov(&asmInstructions, allocator);
+    try assembly.fixupInstructions(&asmInstructions, allocator);
+    std.log.warn("POST PSEUDO REPLACEMENT AND STACK TO STACK MOVES", .{});
+    // for (asmInstructions.items) |asmInst| {
+    //     std.log.warn("\n \x1b[34m{any}\x1b[0m", .{asmInst});
+    // }
+    var mem: [2048]u8 = std.mem.zeroes([2048]u8);
+    var buf = @as([]u8, &mem);
+    const header = try std.fmt.bufPrint(buf, ".globl main\nmain:\npush %rbp", .{});
+    buf = buf[header.len..];
+    for (asmInstructions.items) |asmInst| {
+        const printedSlice = try std.fmt.bufPrint(buf, "\n{s}", .{try asmInst.stringify(allocator)});
+        buf = buf[printedSlice.len..];
+    }
+
+    std.log.warn("\n\x1b[33m{s}\x1b[0m", .{mem});
+}
+
+test "testing assembly generation - short circuiting with logical AND and OR" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const programStr = "int main(){ return 2 && ( 3 || 4 ) ; }";
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    const program = try p.parseProgram();
+
+    const instructions = try program.genTAC(allocator);
+    var asmInstructions = std.ArrayList(*assembly.Instruction).init(allocator);
+    for (instructions.items) |inst| {
+        try inst.codegen(&asmInstructions, allocator);
+    }
+    for (asmInstructions.items) |asmInst| {
+        std.log.warn("\n \x1b[34m{any}\x1b[0m", .{asmInst});
+    }
+    try assembly.replacePseudoRegs(&asmInstructions, allocator);
+    try assembly.fixupInstructions(&asmInstructions, allocator);
     std.log.warn("POST PSEUDO REPLACEMENT AND STACK TO STACK MOVES", .{});
     // for (asmInstructions.items) |asmInst| {
     //     std.log.warn("\n \x1b[34m{any}\x1b[0m", .{asmInst});

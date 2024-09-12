@@ -85,6 +85,10 @@ pub const Operand = union(OperandType) {
             },
         }
     }
+
+    pub fn is(self: Operand, comptime operandType: OperandType) bool {
+        return std.meta.activeTag(self) == operandType;
+    }
 };
 
 pub const UnaryOp = enum {
@@ -204,10 +208,10 @@ pub const Instruction = union(InstructionType) {
                 return (try std.fmt.allocPrint(allocator, "cmpl {s},{s}", .{ op1Stringified, op2Stringified }));
             },
             .Jmp => |jmpLabel| {
-                return (try std.fmt.allocPrint(allocator, "jmp {s}", .{jmpLabel}));
+                return (try std.fmt.allocPrint(allocator, "jmp .L{s}", .{jmpLabel}));
             },
             .JmpCC => |jmpCC| {
-                return (try std.fmt.allocPrint(allocator, "j{s} {s}", .{ (try jmpCC.code.stringify(allocator)), jmpCC.label }));
+                return (try std.fmt.allocPrint(allocator, "j{s} .L{s}", .{ (try jmpCC.code.stringify(allocator)), jmpCC.label }));
             },
             .SetCC => |setCC| {
                 const destStringified = try @constCast(&setCC.dest).stringify(allocator);
@@ -215,13 +219,14 @@ pub const Instruction = union(InstructionType) {
                 return (try std.fmt.allocPrint(allocator, "set{s} {s}", .{ code, destStringified }));
             },
             .Label => |label| {
-                return (try std.fmt.allocPrint(allocator, ".L{s}", .{label}));
+                return (try std.fmt.allocPrint(allocator, ".L{s}:", .{label}));
             },
         }
     }
 };
 
-pub fn replaceStackToStackMov(instructions: *std.ArrayList(*Instruction), allocator: std.mem.Allocator) ast.CodegenError!void {
+// This function fixes the instructions, stack to stack moves
+pub fn fixupInstructions(instructions: *std.ArrayList(*Instruction), allocator: std.mem.Allocator) ast.CodegenError!void {
     for (instructions.items, 0..) |inst, i| {
         switch (inst.*) {
             .Mov => |mov| {
@@ -453,9 +458,8 @@ pub fn replacePseudoRegs(instructions: *std.ArrayList(*Instruction), allocator: 
                     else => {},
                 }
             },
-            else => {
-                std.log.warn("tag not handled: {s}\n", .{@tagName(inst.*)});
-                unreachable;
+            .Jmp, .Label, .JmpCC => {
+                // Jmp does not involve any operands
             },
         }
     }

@@ -20,9 +20,13 @@ const TempGenerator = struct {
 
     pub fn genTemp(self: *TempGenerator, allocator: std.mem.Allocator) CodegenError![]u8 {
         const tempPrefix = "tmp";
-        const tempVar = try std.fmt.allocPrint(allocator, "{s}{d}", .{ tempPrefix, self.state });
-        self.state += 1;
+        const tempVar = try std.fmt.allocPrint(allocator, "{s}{d}", .{ tempPrefix, self.genId() });
         return tempVar;
+    }
+
+    pub fn genId(self: *TempGenerator) u32 {
+        defer self.state += 1;
+        return self.state;
     }
 };
 
@@ -184,33 +188,97 @@ pub const Expression = union(ExpressionType) {
                 }
             },
             .Binary => |binary| {
+                const one = try allocator.create(tac.Val);
+                one.* = tac.Val{ .Constant = 1 };
+                const zero = try allocator.create(tac.Val);
+                zero.* = tac.Val{ .Constant = 0 };
                 if (binary.op == BinOp.LOGIC_AND or binary.op == BinOp.LOGIC_OR) {
                     const valLeft = try binary.lhs.genTACInstructions(instructions, allocator);
                     const storeTemp = try allocator.create(tac.Val);
-                    if (binary.op == BinOp.LOGIC_AND) {
-                        // const compareShortInstr = try allocator.create(tac.Instruction);
-                        // compareShortInstr.* = tac.Instruction{ .Binary = tac.Binary{
-                        //     .op = BinOp.EQUALS,
-                        //     .left = valLeft,
-                        //     .right = tac.Val{ .Constant = 0 },
-                        //     .dest = storeTemp,
-                        // } };
-                        // try instructions.append(compareShortInstr);
-                        const falseLabel = try allocator.create(tac.Instruction);
-                        falseLabel.* = tac.Instruction{
-                            .Label = "falseLabel", // TODO: change this later
-                        };
-                        const jmpIfZero = try allocator.create(tac.Instruction);
-                        jmpIfZero.* = tac.Instruction{ .JmpIfZero = tac.Jmp{
-                            .target = "falseLabel",
-                        } };
-                        try instructions.append(jmpIfZero);
-                        const valRight = try binary.rhs.genTACInstructions(instructions, allocator);
-                        try instructions.append(jmpIfZero);
-                    }
                     storeTemp.* = tac.Val{ .Variable = try tempGen.genTemp(allocator) };
-
-                    return storeTemp;
+                    if (binary.op == BinOp.LOGIC_AND) {
+                        const falseLabel = try std.fmt.allocPrint(allocator, "falseLabel_{d}", .{tempGen.genId()});
+                        const endLabel = try std.fmt.allocPrint(allocator, "endLabel_{d}", .{tempGen.genId()});
+                        const falseLabelInstr = try allocator.create(tac.Instruction);
+                        falseLabelInstr.* = tac.Instruction{
+                            .Label = falseLabel,
+                        };
+                        const jmpIfZeroLeft = try allocator.create(tac.Instruction);
+                        jmpIfZeroLeft.* = tac.Instruction{ .JumpIfZero = tac.Jmp{
+                            .condition = valLeft,
+                            .target = falseLabel,
+                        } };
+                        try instructions.append(jmpIfZeroLeft);
+                        const valRight = try binary.rhs.genTACInstructions(instructions, allocator);
+                        const jmpIfZeroRight = try allocator.create(tac.Instruction);
+                        jmpIfZeroRight.* = tac.Instruction{ .JumpIfZero = tac.Jmp{
+                            .condition = valRight,
+                            .target = falseLabel,
+                        } };
+                        try instructions.append(jmpIfZeroRight);
+                        const cpOneToDest = try allocator.create(tac.Instruction);
+                        cpOneToDest.* = tac.Instruction{ .Copy = tac.Copy{
+                            .src = one,
+                            .dest = storeTemp,
+                        } };
+                        try instructions.append(cpOneToDest);
+                        const jmpToEnd = try allocator.create(tac.Instruction);
+                        jmpToEnd.* = tac.Instruction{ .Jump = endLabel };
+                        try instructions.append(jmpToEnd);
+                        try instructions.append(falseLabelInstr);
+                        const cpZeroToDest = try allocator.create(tac.Instruction);
+                        cpZeroToDest.* = tac.Instruction{ .Copy = tac.Copy{
+                            .src = zero,
+                            .dest = storeTemp,
+                        } };
+                        try instructions.append(cpZeroToDest);
+                        const endLabelInst = try allocator.create(tac.Instruction);
+                        endLabelInst.* = tac.Instruction{ .Label = endLabel };
+                        try instructions.append(endLabelInst);
+                        return storeTemp;
+                    }
+                    if (binary.op == BinOp.LOGIC_OR) {
+                        const endLabel = try std.fmt.allocPrint(allocator, "endLabel_{d}", .{tempGen.genId()});
+                        const trueLabel = try std.fmt.allocPrint(allocator, "trueLabel_{d}", .{tempGen.genId()});
+                        const trueLabelInst = try allocator.create(tac.Instruction);
+                        trueLabelInst.* = tac.Instruction{
+                            .Label = trueLabel,
+                        };
+                        const jmpIfNotZero = try allocator.create(tac.Instruction);
+                        jmpIfNotZero.* = tac.Instruction{ .JumpIfNotZero = tac.Jmp{
+                            .condition = valLeft,
+                            .target = trueLabel,
+                        } };
+                        try instructions.append(jmpIfNotZero);
+                        const valRight = try binary.rhs.genTACInstructions(instructions, allocator);
+                        const jmpIfNotZeroRight = try allocator.create(tac.Instruction);
+                        jmpIfNotZeroRight.* = tac.Instruction{ .JumpIfNotZero = tac.Jmp{
+                            .condition = valRight,
+                            .target = trueLabel,
+                        } };
+                        try instructions.append(jmpIfNotZeroRight);
+                        const cpZeroToDest = try allocator.create(tac.Instruction);
+                        cpZeroToDest.* = tac.Instruction{ .Copy = tac.Copy{
+                            .src = zero,
+                            .dest = storeTemp,
+                        } };
+                        try instructions.append(cpZeroToDest);
+                        const jmpToEnd = try allocator.create(tac.Instruction);
+                        jmpToEnd.* = tac.Instruction{ .Jump = endLabel };
+                        try instructions.append(jmpToEnd);
+                        try instructions.append(trueLabelInst);
+                        const cpOneToDest = try allocator.create(tac.Instruction);
+                        cpOneToDest.* = tac.Instruction{ .Copy = tac.Copy{
+                            .src = one,
+                            .dest = storeTemp,
+                        } };
+                        try instructions.append(cpOneToDest);
+                        const endLabelInst = try allocator.create(tac.Instruction);
+                        endLabelInst.* = tac.Instruction{ .Label = endLabel };
+                        try instructions.append(endLabelInst);
+                        return storeTemp;
+                    }
+                    unreachable;
                 }
                 const valLeft = try binary.lhs.genTACInstructions(instructions, allocator);
                 const valRight = try binary.rhs.genTACInstructions(instructions, allocator);
