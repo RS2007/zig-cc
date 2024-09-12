@@ -40,8 +40,8 @@ pub fn main() !void {
     for (asmInstructions.items) |asmInst| {
         std.log.warn("\n \x1b[34m{any}\x1b[0m", .{asmInst});
     }
-    try assembly.replacePseudoRegs(&asmInstructions, allocator);
-    try assembly.replaceStackToStackMov(&asmInstructions, allocator);
+    try assembly.fixupInstructions(&asmInstructions, allocator);
+    try assembly.fixupInstructions(&asmInstructions, allocator);
     std.log.warn("POST PSEUDO REPLACEMENT AND STACK TO STACK MOVES", .{});
     // for (asmInstructions.items) |asmInst| {
     //     std.log.warn("\n \x1b[34m{any}\x1b[0m", .{asmInst});

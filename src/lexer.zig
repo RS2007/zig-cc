@@ -28,6 +28,7 @@ pub const TokenType = enum {
     BITWISE_OR,
     LOGIC_AND,
     LOGIC_OR,
+    NOT,
     INVALID,
 };
 
@@ -68,15 +69,28 @@ pub const Lexer = struct {
         return token;
     }
 
+    inline fn createDoubleWidthToken(comptime lookAheadChars: []const u8, comptime returnToks: []const TokenType, fallBackTok: TokenType, allocator: std.mem.Allocator, lexer: *Lexer) LexerError!*Token {
+        var token = try allocator.create(Token);
+        inline for (lookAheadChars, returnToks) |lookAheadChar, returnTok| {
+            if (lexer.buffer[lexer.current + 1] == lookAheadChar) {
+                token.type = returnTok;
+                token.start = lexer.current;
+                token.end = lexer.current + 1;
+                return token;
+            }
+            token.type = fallBackTok;
+            token.start = lexer.current;
+            token.end = lexer.current;
+            return token;
+        }
+    }
+
     pub fn peekToken(lexer: *Lexer, allocator: std.mem.Allocator) LexerError!?*Token {
         lexer.skipWhitespace();
         if (lexer.current + 1 >= lexer.buffer.len) {
             return null;
         }
         switch (lexer.buffer[lexer.current]) {
-            '-' => {
-                return (try createSingleWidthToken(TokenType.MINUS, allocator, lexer));
-            },
             ';' => {
                 return (try createSingleWidthToken(TokenType.SEMICOLON, allocator, lexer));
             },
@@ -92,14 +106,26 @@ pub const Lexer = struct {
             '%' => {
                 return (try createSingleWidthToken(TokenType.MODULO, allocator, lexer));
             },
+            '<' => {
+                return (try createDoubleWidthToken(&[_]u8{'='}, &[_]TokenType{TokenType.LESSEQ}, TokenType.LESS, allocator, lexer));
+            },
+            '>' => {
+                return (try createDoubleWidthToken(&[_]u8{'='}, &[_]TokenType{TokenType.GREATEREQ}, TokenType.GREATER, allocator, lexer));
+            },
+            '-' => {
+                return (try createDoubleWidthToken(&[_]u8{'-'}, &[_]TokenType{TokenType.DECREMENT}, TokenType.MINUS, allocator, lexer));
+            },
             '=' => {
-                return (try createSingleWidthToken(TokenType.ASSIGN, allocator, lexer));
+                return (try createDoubleWidthToken(&[_]u8{'='}, &[_]TokenType{TokenType.EQUALS}, TokenType.ASSIGN, allocator, lexer));
             },
             '&' => {
-                return (try createSingleWidthToken(TokenType.BITWISE_AND, allocator, lexer));
+                return (try createDoubleWidthToken(&[_]u8{'&'}, &[_]TokenType{TokenType.LOGIC_AND}, TokenType.BITWISE_AND, allocator, lexer));
             },
             '|' => {
-                return (try createSingleWidthToken(TokenType.BITWISE_OR, allocator, lexer));
+                return (try createDoubleWidthToken(&[_]u8{'|'}, &[_]TokenType{TokenType.LOGIC_OR}, TokenType.BITWISE_OR, allocator, lexer));
+            },
+            '!' => {
+                return (try createDoubleWidthToken(&[_]u8{'='}, &[_]TokenType{TokenType.NOT_EQUALS}, TokenType.NOT, allocator, lexer));
             },
             else => {
                 if (std.ascii.isDigit(lexer.buffer[lexer.current])) {
@@ -172,6 +198,9 @@ pub const Lexer = struct {
             },
             ';' => {
                 nextSingleWidthTokMacro(TokenType.SEMICOLON, token, lexer);
+            },
+            '!' => {
+                try nextDoubleWidthTokMacro(&[_]TokenType{TokenType.ASSIGN}, &[_]TokenType{TokenType.NOT_EQUALS}, TokenType.NOT, lexer, token, allocator);
             },
             '-' => {
                 try nextDoubleWidthTokMacro(&[_]TokenType{TokenType.MINUS}, &[_]TokenType{TokenType.DECREMENT}, TokenType.MINUS, lexer, token, allocator);
@@ -403,4 +432,18 @@ test "== <= and <" {
     _ = try std.testing.expectEqual(equals.type, TokenType.EQUALS);
     _ = try std.testing.expectEqual(lessEq.type, TokenType.LESSEQ);
     _ = try std.testing.expectEqual(less.type, TokenType.LESS);
+}
+test "! and !=" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const buffer = "! !=";
+    //const buffer2 = "int main(){ return ~~2; }";
+    //const buffer3 = "int main(){ return ~-2; }";
+    const lexer = try Lexer.init(allocator, @as([]u8, @constCast(buffer)));
+    const not = try lexer.nextToken(allocator); //not
+    const notEq = try lexer.nextToken(allocator); //not_eq
+    //std
+    _ = try std.testing.expectEqual(not.type, TokenType.NOT);
+    _ = try std.testing.expectEqual(notEq.type, TokenType.NOT);
 }
