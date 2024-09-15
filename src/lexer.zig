@@ -94,8 +94,11 @@ pub const Lexer = struct {
             ';' => {
                 return (try createSingleWidthToken(TokenType.SEMICOLON, allocator, lexer));
             },
-            ')' => {
+            '(' => {
                 return (try createSingleWidthToken(TokenType.LPAREN, allocator, lexer));
+            },
+            ')' => {
+                return (try createSingleWidthToken(TokenType.RPAREN, allocator, lexer));
             },
             '+' => {
                 return (try createSingleWidthToken(TokenType.RPAREN, allocator, lexer));
@@ -141,7 +144,30 @@ pub const Lexer = struct {
                     lexer.currentToken = token;
                     return token;
                 }
-                return null;
+                const initialPtr = lexer.current;
+                var offset: u32 = 0;
+                while (initialPtr + offset < lexer.buffer.len and !std.ascii.isWhitespace(lexer.buffer[initialPtr + offset]) and (std.ascii.isLower(lexer.buffer[initialPtr + offset]) or std.ascii.isUpper(lexer.buffer[initialPtr + offset]))) {
+                    offset += 1;
+                }
+                const token = try allocator.create(Token);
+                if (std.mem.eql(u8, lexer.buffer[initialPtr .. initialPtr + offset], "int")) {
+                    token.type = TokenType.INT_TYPE;
+                    token.start = initialPtr;
+                    token.end = initialPtr + offset - 1;
+                    lexer.currentToken = token;
+                    return token;
+                } else if (std.mem.eql(u8, lexer.buffer[initialPtr .. initialPtr + offset], "return")) {
+                    token.type = TokenType.RETURN;
+                    token.start = initialPtr;
+                    token.end = initialPtr + offset - 1;
+                    lexer.currentToken = token;
+                    return token;
+                }
+                token.type = TokenType.IDENTIFIER;
+                token.start = initialPtr;
+                token.end = initialPtr + offset - 1;
+                lexer.currentToken = token;
+                return token;
             },
         }
         return null;

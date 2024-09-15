@@ -2,6 +2,7 @@ const std = @import("std");
 const lexer = @import("./lexer.zig");
 const parser = @import("./parser.zig");
 const tac = @import("./TAC.zig");
+const semantic = @import("./semantic.zig");
 
 //<program> ::= <function>
 //
@@ -33,8 +34,53 @@ const TempGenerator = struct {
 pub const ASTType = enum {
     Program,
     FunctionDef,
+    BlockItem,
     Statement,
     Expression,
+};
+
+pub const BlockItemType = enum {
+    Statement,
+    Declaration,
+};
+
+pub const BlockItem = union(BlockItemType) {
+    Statement: *Statement,
+    Declaration: *Declaration,
+    const Self = @This();
+
+    pub fn genTAC(self: Self, instructions: *std.ArrayList(*tac.Instruction), allocator: std.mem.Allocator) CodegenError!void {
+        switch (self) {
+            .Statement => |stmt| {
+                try stmt.genTACInstructions(instructions, allocator);
+            },
+            .Declaration => |decl| {
+                try decl.genTACInstructions(instructions, allocator);
+            },
+        }
+    }
+};
+
+pub const Declaration = struct {
+    name: []u8,
+    expression: ?*Expression,
+
+    const Self = @This();
+    pub fn genTACInstructions(self: Self, instructions: *std.ArrayList(*tac.Instruction), allocator: std.mem.Allocator) CodegenError!void {
+        const hasExpr = self.expression;
+        if (hasExpr) |expression| {
+            const rhs = try expression.genTACInstructions(instructions, allocator);
+            const instr = try allocator.create(tac.Instruction);
+            const lhs = try allocator.create(tac.Val);
+            lhs.* = tac.Val{ .Variable = self.name };
+            instr.* = tac.Instruction{ .Copy = tac.Copy{ .src = rhs, .dest = lhs } };
+            try instructions.append(instr);
+        }
+        //const varInst = try allocator.create(tac.Instruction);
+        //const cpInstr = try allocator.create(tac.Instruction);
+        //try instructions.append();
+        //try instructions.append();
+    }
 };
 
 pub const CodegenError = error{
@@ -43,11 +89,15 @@ pub const CodegenError = error{
 
 pub const StatementType = enum {
     Return,
+    Expression,
+    Null,
 };
 pub const ExpressionType = enum {
     Integer,
     Unary,
     Binary,
+    Identifier,
+    Assignment,
 };
 
 pub const Program = struct {
@@ -64,14 +114,18 @@ pub const Return = struct {
 };
 pub const FunctionDef = struct {
     name: []u8,
-    statement: *Statement,
+    blockItems: std.ArrayList(*BlockItem),
 
     pub fn genTAC(functionDef: FunctionDef, instructions: *std.ArrayList(*tac.Instruction), allocator: std.mem.Allocator) CodegenError!void {
-        try functionDef.statement.genTACInstructions(instructions, allocator);
+        for (functionDef.blockItems.items) |blockItem| {
+            try blockItem.genTAC(instructions, allocator);
+        }
     }
 };
 pub const Statement = union(StatementType) {
     Return: Return,
+    Expression: *Expression,
+    Null: void,
 
     pub fn genTACInstructions(statement: *Statement, instructions: *std.ArrayList(*tac.Instruction), allocator: std.mem.Allocator) CodegenError!void {
         switch (statement.*) {
@@ -83,9 +137,82 @@ pub const Statement = union(StatementType) {
                 } };
                 try instructions.append(returnInst);
             },
+            .Expression => {},
+            .Null => {},
         }
     }
 };
+
+pub fn prettyPrintAST(node: Node, writer: anytype, depth: usize) !void {
+    const colors = struct {
+        const reset = "\x1b[0m";
+        const bold = "\x1b[1m";
+        const red = "\x1b[31m";
+        const green = "\x1b[32m";
+        const yellow = "\x1b[33m";
+        const blue = "\x1b[34m";
+        const magenta = "\x1b[35m";
+        const cyan = "\x1b[36m";
+    };
+
+    try writer.writeByteNTimes(' ', depth * 2);
+    try writer.print("{s}├─ ", .{colors.bold});
+
+    switch (node) {
+        .Program => |program| {
+            try writer.print("\n{s}Program{s}\n", .{ colors.red, colors.reset });
+            try prettyPrintAST(Node{ .FunctionDef = &program.function }, writer, depth + 1);
+        },
+        .FunctionDef => |func| {
+            try writer.print("{s}Function: {s}{s}\n", .{ colors.green, func.name, colors.reset });
+            for (func.blockItems.items, 0..) |item, i| {
+                const is_last = i == func.blockItems.items.len - 1;
+                try writer.writeByteNTimes(' ', (depth + 1) * 2);
+                try writer.print("{s}{s} ", .{ colors.bold, if (is_last) "└─" else "├─" });
+                switch (item.*) {
+                    .Statement => |stmt| try prettyPrintAST(Node{ .Statement = stmt }, writer, depth + 2),
+                    .Declaration => |decl| try prettyPrintAST(Node{ .Declaration = decl }, writer, depth + 2),
+                }
+            }
+        },
+        .Declaration => |decl| {
+            try writer.print("{s}Declaration: {s}{s}\n", .{ colors.yellow, decl.name, colors.reset });
+        },
+        .Statement => |stmt| {
+            switch (stmt.*) {
+                .Return => |ret| {
+                    try writer.print("{s}Return{s}\n", .{ colors.blue, colors.reset });
+                    try prettyPrintAST(Node{ .Expression = ret.expression }, writer, depth + 5);
+                },
+                .Expression => |expr| {
+                    try writer.print("{s}Expression Statement{s}\n", .{ colors.magenta, colors.reset });
+                    try prettyPrintAST(Node{ .Expression = expr }, writer, depth + 1);
+                },
+                .Null => try writer.print("{s}Null Statement{s}\n", .{ colors.cyan, colors.reset }),
+            }
+        },
+        .Expression => |expr| {
+            switch (expr.*) {
+                .Integer => |int| try writer.print("{s}Integer: {d}{s}\n", .{ colors.yellow, int, colors.reset }),
+                .Unary => |unary| {
+                    try writer.print("{s}Unary: {s}{s}\n", .{ colors.magenta, @tagName(unary.unaryOp), colors.reset });
+                    try prettyPrintAST(Node{ .Expression = unary.exp }, writer, depth + 1);
+                },
+                .Binary => |binary| {
+                    try writer.print("{s}Binary: {any}{s}\n", .{ colors.cyan, @tagName(binary.op), colors.reset });
+                    try prettyPrintAST(Node{ .Expression = binary.lhs }, writer, depth + 1);
+                    try prettyPrintAST(Node{ .Expression = binary.rhs }, writer, depth + 1);
+                },
+                .Assignment => |ass| {
+                    try writer.print("{s}Assignment: {s}\n", .{ colors.cyan, colors.reset });
+                    try prettyPrintAST(Node{ .Expression = ass.lhs }, writer, depth + 1);
+                    try prettyPrintAST(Node{ .Expression = ass.rhs }, writer, depth + 1);
+                },
+                .Identifier => |ident| try writer.print("{s}Identifier: {s}{s}\n", .{ colors.green, ident, colors.reset }),
+            }
+        },
+    }
+}
 
 pub const UnaryOp = enum {
     NEGATE,
@@ -119,7 +246,7 @@ pub const Binary = struct {
     rhs: *Expression,
 };
 
-var tempGen = TempGenerator{ .state = 0 };
+pub var tempGen = TempGenerator{ .state = 0 };
 
 pub fn tacBinOpFromASTBinOp(op: BinOp) tac.BinaryOp {
     return switch (op) {
@@ -139,10 +266,17 @@ pub fn tacBinOpFromASTBinOp(op: BinOp) tac.BinaryOp {
     };
 }
 
+pub const Assignment = struct {
+    lhs: *Expression,
+    rhs: *Expression,
+};
+
 pub const Expression = union(ExpressionType) {
     Integer: u32,
     Unary: Unary,
     Binary: Binary,
+    Identifier: []u8,
+    Assignment: Assignment,
 
     pub fn genTACInstructions(expression: *Expression, instructions: *std.ArrayList(*tac.Instruction), allocator: std.mem.Allocator) CodegenError!*tac.Val {
         switch (expression.*) {
@@ -294,15 +428,33 @@ pub const Expression = union(ExpressionType) {
                 try instructions.append(instr);
                 return storeTemp;
             },
+            .Identifier => |iden| {
+                const tacVal = try allocator.create(tac.Val);
+                tacVal.* = tac.Val{
+                    .Variable = iden,
+                };
+                return tacVal;
+            },
+            .Assignment => |assignment| {
+                const lhs = try assignment.lhs.genTACInstructions(instructions, allocator);
+                const rhs = try assignment.rhs.genTACInstructions(instructions, allocator);
+                const cpInstr = try allocator.create(tac.Instruction);
+                cpInstr.* = tac.Instruction{ .Copy = tac.Copy{
+                    .src = rhs,
+                    .dest = lhs,
+                } };
+                return lhs;
+            },
         }
     }
 };
 
 pub const Node = union(enum) {
-    Program: Program,
-    FunctionDef: FunctionDef,
-    Statement: Statement,
-    Expression: Expression,
+    Program: *Program,
+    Declaration: *Declaration,
+    FunctionDef: *FunctionDef,
+    Statement: *Statement,
+    Expression: *Expression,
 };
 
 test "Codegenerator basic" {
@@ -324,7 +476,21 @@ test "Negation and bitwise complement codegeneration" {
     const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
     var p = try parser.Parser.init(allocator, l);
     const program = try p.parseProgram();
-    std.log.warn("{}", .{program.function.statement.Return.expression.Unary.exp});
+    std.log.warn("{}", .{program.function.blockItems.items[0].Statement.Return.expression.Unary.exp});
+}
+
+test "Declarations" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const programStr = "int main(){ int x = 2; int y = -x; return ~y; }";
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    const program = try p.parseProgram();
+    try semantic.varResolutionPass(allocator, program);
+    const stdout = std.io.getStdOut().writer();
+    try prettyPrintAST(Node{ .Program = program }, stdout, 0);
+    std.log.warn("{any}", .{program.function.blockItems.items[2].Statement.Return.expression.Unary.exp});
 }
 
 test "codegen TAC" {
@@ -348,6 +514,19 @@ test "codegen TAC with logical and relational ops" {
     const allocator = arena.allocator();
     defer arena.deinit();
     const programStr = "int main(){ return 2 && ( 3 || 4 ) ; }";
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    var program = try p.parseProgram();
+    const instructions = try program.genTAC(allocator);
+    std.log.warn("\n \x1b[34m{any}\x1b[0m", .{instructions.items[0]});
+    std.log.warn("\n \x1b[34m{any}\x1b[0m", .{instructions.items[1]});
+}
+
+test "codegen TAC with declarations" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const programStr = "int main(){ int x = 2; int y = 3 || 4; return x && y; }";
     const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
     var p = try parser.Parser.init(allocator, l);
     var program = try p.parseProgram();
