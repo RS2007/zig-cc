@@ -40,8 +40,8 @@ pub fn main() !void {
     for (asmInstructions.items) |asmInst| {
         std.log.warn("\n \x1b[34m{any}\x1b[0m", .{asmInst});
     }
-    try assembly.fixupInstructions(&asmInstructions, allocator);
-    try assembly.fixupInstructions(&asmInstructions, allocator);
+    try assembly.replacePseudoRegs(&asmInstructions, allocator);
+    const fixedAsmInstructions = assembly.fixupInstructions(&asmInstructions, allocator);
     std.log.warn("POST PSEUDO REPLACEMENT AND STACK TO STACK MOVES", .{});
     // for (asmInstructions.items) |asmInst| {
     //     std.log.warn("\n \x1b[34m{any}\x1b[0m", .{asmInst});
@@ -50,7 +50,7 @@ pub fn main() !void {
     var buf = @as([]u8, &mem);
     const header = try std.fmt.bufPrint(buf, ".globl main\nmain:\npush %rbp", .{});
     buf = buf[header.len..];
-    for (asmInstructions.items) |asmInst| {
+    for (fixedAsmInstructions.items) |asmInst| {
         const printedSlice = try std.fmt.bufPrint(buf, "\n{s}", .{try asmInst.stringify(allocator)});
         buf = buf[printedSlice.len..];
     }

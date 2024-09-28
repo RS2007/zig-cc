@@ -79,7 +79,6 @@ pub const Parser = struct {
                     };
                 },
                 else => {
-                    try self.logger.info("Trying to parse statement starting with {any}\n", .{nextTok});
                     blockItem.* = AST.BlockItem{
                         .Statement = (try self.parseStatement()),
                     };
@@ -155,6 +154,21 @@ pub const Parser = struct {
                 };
                 return nullStmt;
             },
+            .IF => {
+                const ifStmt = try self.allocator.create(AST.Statement);
+                const expr = try self.parseFactor();
+                const thenStmt = try self.parseStatement();
+                ifStmt.* = AST.Statement{ .If = AST.If{
+                    .condition = expr,
+                    .thenStmt = thenStmt,
+                } };
+                if ((try self.l.nextToken(self.allocator)).type == lexer.TokenType.ELSE) {
+                    const elseStmt = try self.parseStatement();
+                    ifStmt.If.elseStmt = elseStmt;
+                }
+                return ifStmt;
+            },
+
             else => |tokType| {
                 try self.logger.info("Found an expression statement starting with {}\n", .{tokType});
                 const expression = try self.parseExpression(0);
@@ -182,9 +196,10 @@ pub const Parser = struct {
     }
 
     pub fn parseFactor(self: *Parser) ParserError!*AST.Expression {
-        const currToken = try self.l.nextToken(self.allocator);
-        switch (currToken.type) {
+        const peekToken = (try self.l.peekToken(self.allocator)).?;
+        switch (peekToken.type) {
             .INTEGER => {
+                const currToken = try self.l.nextToken(self.allocator);
                 const integerNode = try self.allocator.create(AST.Expression);
                 integerNode.* = AST.Expression{
                     .Integer = try std.fmt.parseInt(u32, self.l.buffer[currToken.start..currToken.end], 10),
@@ -192,7 +207,7 @@ pub const Parser = struct {
                 return integerNode;
             },
             .MINUS, .TILDE => {
-                const op = try tokToUnaryOp(currToken.type);
+                const op = try tokToUnaryOp((try self.l.nextToken(self.allocator)).type);
                 const factor = try self.parseFactor();
                 const unaryNode = try self.allocator.create(AST.Expression);
                 unaryNode.* = AST.Expression{ .Unary = AST.Unary{
@@ -202,10 +217,14 @@ pub const Parser = struct {
                 return unaryNode;
             },
             .LPAREN => {
+                _ = try self.l.nextToken(self.allocator);
                 const exp = try self.parseExpression(0);
+                const rparen = try self.l.nextToken(self.allocator);
+                std.debug.assert(rparen.type == lexer.TokenType.RPAREN);
                 return exp;
             },
             .IDENTIFIER => {
+                const currToken = try self.l.nextToken(self.allocator);
                 const identifier = try self.allocator.create(AST.Expression);
                 identifier.* = AST.Expression{ .Identifier = self.l.buffer[currToken.start .. currToken.end + 1] };
                 return identifier;
@@ -216,7 +235,7 @@ pub const Parser = struct {
         }
     }
 
-    fn getPrecedence(tok: lexer.TokenType) u32 {
+    fn getPrecedence(tok: lexer.TokenType) ?u32 {
         switch (tok) {
             .MULTIPLY, .DIVIDE, .MODULO => {
                 return 50;
@@ -240,7 +259,7 @@ pub const Parser = struct {
                 return 1;
             },
             else => {
-                return 0;
+                return null;
             },
         }
     }
@@ -268,13 +287,10 @@ pub const Parser = struct {
 
     pub fn parseInfix(self: *Parser, lhs: *AST.Expression) ParserError!*AST.Expression {
         if (self.l.currentToken) |currToken| {
-            if (currToken.type == lexer.TokenType.RPAREN) {
-                return lhs;
-            }
             const op = self.l.currentToken.?;
             const hasRhs = switch (op.type) {
-                .MINUS, .PLUS, .MULTIPLY, .DIVIDE, .MODULO, .LESS, .LESSEQ, .GREATER, .GREATEREQ, .EQUALS, .NOT_EQUALS, .LOGIC_AND, .LOGIC_OR => try self.parseExpression(getPrecedence(currToken.type) + 1),
-                .ASSIGN => try self.parseExpression(getPrecedence(currToken.type)),
+                .MINUS, .PLUS, .MULTIPLY, .DIVIDE, .MODULO, .LESS, .LESSEQ, .GREATER, .GREATEREQ, .EQUALS, .NOT_EQUALS, .LOGIC_AND, .LOGIC_OR => try self.parseExpression(getPrecedence(currToken.type).? + 1),
+                .ASSIGN => try self.parseExpression(getPrecedence(currToken.type).?),
                 else => null,
             };
             if (hasRhs) |rhs| {
@@ -301,24 +317,21 @@ pub const Parser = struct {
 
     pub fn parseExpression(self: *Parser, precedence: u32) ParserError!*AST.Expression {
         var lhs = try self.parseFactor();
-        const hasPeeked = try self.l.peekToken(self.allocator);
-        if (hasPeeked) |peeked| {
-            var mutablePeeked = peeked;
-            if (peeked.type == lexer.TokenType.RPAREN) {
-                _ = try self.l.nextToken(self.allocator);
-                if (try self.l.peekToken(self.allocator)) |currPeeked| {
-                    mutablePeeked = currPeeked;
+        while (true) {
+            const hasPeeked = try self.l.peekToken(self.allocator);
+            if (hasPeeked) |peeked| {
+                if (peeked.type == lexer.TokenType.SEMICOLON) {
+                    return lhs;
                 }
-            }
-            if (mutablePeeked.type == lexer.TokenType.SEMICOLON) {
-                return lhs;
-            }
-            const peekedPrecedence = getPrecedence(mutablePeeked.type);
-            while ((precedence <= peekedPrecedence)) {
-                if (self.l.currentToken) |currTok| {
-                    if (currTok.type == lexer.TokenType.SEMICOLON) {
-                        return lhs;
-                    }
+                const hasPeekedPrecedence = getPrecedence(peeked.type);
+                if (hasPeekedPrecedence == null) {
+                    std.log.warn("parseExpression: exited cause of no precdence for token and token={any}\n", .{peeked});
+                    return lhs;
+                }
+                const peekedPrecedence = hasPeekedPrecedence.?;
+                if (precedence > peekedPrecedence) {
+                    std.log.warn("parseExpression: exited cause of precedence of token being greater", .{});
+                    return lhs;
                 }
                 const hasNextToken = self.l.nextToken(self.allocator) catch null;
                 if (hasNextToken) |_| {
@@ -327,6 +340,8 @@ pub const Parser = struct {
                     // factor case in the grammar
                     return lhs;
                 }
+            } else {
+                return lhs;
             }
         }
         return lhs;
@@ -388,10 +403,11 @@ test "precedence with >= and <=" {
     const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
     var p = try Parser.init(allocator, l);
     const program = try p.parseProgram();
-    std.log.warn("\x1b[34m{any}\x1b[0m", .{program.function.blockItems.items[0].Statement.Return.expression});
-    std.log.warn("\x1b[34m{any}\x1b[0m", .{program.function.blockItems.items[0].Statement.Return.expression.Binary.lhs});
+    std.log.warn("Return exp: \x1b[34m{any}\x1b[0m", .{program.function.blockItems.items[0].Statement.Return.expression});
+    std.log.warn("Binary lhs: \x1b[34m{any}\x1b[0m", .{program.function.blockItems.items[0].Statement.Return.expression.Binary.lhs});
     std.log.warn("\x1b[34m{any}\x1b[0m", .{program.function.blockItems.items[0].Statement.Return.expression.Binary.lhs.Binary.lhs});
-    std.log.warn("\x1b[34m{any}\x1b[0m", .{program.function.blockItems.items[0].Statement.Return.expression.Binary.rhs});
+    std.log.warn("\x1b[34m{any}\x1b[0m", .{program.function.blockItems.items[0].Statement.Return.expression.Binary.lhs.Binary.rhs});
+    std.log.warn("\x1b[34m{any}\x1b[0m", .{program.function.blockItems.items[0].Statement.Return.expression.Binary.rhs.Integer});
 }
 
 test "parsing declarations and statements" {
@@ -421,4 +437,17 @@ test "parsing declarations right associativity" {
     std.log.warn("\x1b[34m{any}\x1b[0m", .{program.function.blockItems.items[1].Declaration.expression});
     std.log.warn("\x1b[34m{s}\x1b[0m", .{program.function.blockItems.items[1].Declaration.expression.?.Assignment.lhs.Identifier});
     std.log.warn("\x1b[34m{any}\x1b[0m", .{program.function.blockItems.items[1].Declaration.expression.?.Assignment.rhs});
+}
+
+test "test if statements" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const programStr = "int main(){int y; int x = y = 3;if(x == y) return x; else return y;}";
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try Parser.init(allocator, l);
+    const program = try p.parseProgram();
+    std.log.warn("Cond: \x1b[34m{any}\x1b[0m\n", .{program.function.blockItems.items[2].Statement.If.condition});
+    std.log.warn("Then: \x1b[34m{any}\x1b[0m\n", .{program.function.blockItems.items[2].Statement.If.thenStmt});
+    std.log.warn("Else: \x1b[34m{any}\x1b[0m", .{program.function.blockItems.items[2].Statement.If.elseStmt.?});
 }

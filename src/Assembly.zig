@@ -80,7 +80,8 @@ pub const Operand = union(OperandType) {
             .Stack => |stackOff| {
                 return (try std.fmt.allocPrint(allocator, "-0x{x}(%rbp)", .{abs(stackOff)}));
             },
-            else => {
+            else => |op| {
+                std.log.warn("Operand stringify: op={s}\n", .{op.Pseudo});
                 unreachable;
             },
         }
@@ -226,7 +227,8 @@ pub const Instruction = union(InstructionType) {
 };
 
 // This function fixes the instructions, stack to stack moves
-pub fn fixupInstructions(instructions: *std.ArrayList(*Instruction), allocator: std.mem.Allocator) ast.CodegenError!void {
+pub fn fixupInstructions(instructions: *std.ArrayList(*Instruction), allocator: std.mem.Allocator) ast.CodegenError!std.ArrayList(*Instruction) {
+    var fixedInstructions = try std.ArrayList(*Instruction).initCapacity(allocator, instructions.items.len);
     for (instructions.items, 0..) |inst, i| {
         switch (inst.*) {
             .Mov => |mov| {
@@ -245,7 +247,7 @@ pub fn fixupInstructions(instructions: *std.ArrayList(*Instruction), allocator: 
                     else => {},
                 }
                 if (isSrcStack and isDestStack) {
-                    _ = instructions.orderedRemove(i);
+                    //_ = instructions.orderedRemove(i);
                     const movInstSrc = try allocator.create(Instruction);
                     const movInstDest = try allocator.create(Instruction);
                     movInstSrc.* = Instruction{ .Mov = MovInst{ .src = mov.src, .dest = Operand{ .Reg = Reg.R10 } } };
@@ -253,19 +255,43 @@ pub fn fixupInstructions(instructions: *std.ArrayList(*Instruction), allocator: 
                         .src = Operand{ .Reg = Reg.R10 },
                         .dest = mov.dest,
                     } };
-                    try instructions.insert(
-                        i,
+                    try fixedInstructions.append(
                         movInstSrc,
                     );
-                    try instructions.insert(
-                        i + 1,
+                    try fixedInstructions.append(
                         movInstDest,
                     );
+                    continue;
+                } else {
+                    try fixedInstructions.append(inst);
+                    continue;
                 }
             },
-            else => {},
+            .Cmp => |cmp| {
+                std.log.warn("op1 tagName: {s} and op2 tagName: {s}\n", .{ @tagName(cmp.op1), @tagName(cmp.op2) });
+                if (std.mem.eql(u8, @tagName(cmp.op1), "Stack") and std.mem.eql(u8, @tagName(cmp.op2), "Stack")) {
+                    const movInst = try allocator.create(Instruction);
+                    movInst.* = Instruction{
+                        .Mov = MovInst{ .src = cmp.op1, .dest = Operand{ .Reg = Reg.R10 } },
+                    };
+                    inst.Cmp.op1 = Operand{ .Reg = Reg.R10 };
+                    try fixedInstructions.insert(i, movInst);
+                    try fixedInstructions.append(inst);
+                    continue;
+                } else {
+                    try fixedInstructions.append(inst);
+                    continue;
+                }
+            },
+            else => {
+                try fixedInstructions.append(inst);
+            },
         }
     }
+    instructions.deinit(); // T
+    // TODO:(less priority) doing this in place is a possible enhancement, also the stack allocation is problematic
+    // TODO:(high priority) fix the stack allocation issue by passing a fixedInstructions array list pointer to this function.
+    return fixedInstructions;
 }
 
 pub fn replacePseudoRegs(instructions: *std.ArrayList(*Instruction), allocator: std.mem.Allocator) ast.CodegenError!void {
@@ -407,11 +433,11 @@ pub fn replacePseudoRegs(instructions: *std.ArrayList(*Instruction), allocator: 
             },
             .Cdq, .AllocateStack, .Ret => {},
             .Cmp => |cmp| {
+                std.log.warn("Old inst: {any}\n", .{inst.Cmp});
                 switch (cmp.op1) {
                     .Pseudo => |pseudo| {
                         if (lookup.contains(pseudo)) {
                             inst.Cmp.op1 = Operand{ .Stack = lookup.get(pseudo).? };
-                            continue;
                         } else {
                             topOfStack -= 4;
                             try lookup.put(
@@ -439,6 +465,7 @@ pub fn replacePseudoRegs(instructions: *std.ArrayList(*Instruction), allocator: 
                     },
                     else => {},
                 }
+                std.log.warn("New inst: {any}\n", .{inst.Cmp});
             },
             .SetCC => |setCC| {
                 switch (setCC.dest) {

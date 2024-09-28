@@ -44,6 +44,12 @@ pub const BlockItemType = enum {
     Declaration,
 };
 
+pub const If = struct {
+    condition: *Expression,
+    thenStmt: *Statement,
+    elseStmt: ?*Statement = null,
+};
+
 pub const BlockItem = union(BlockItemType) {
     Statement: *Statement,
     Declaration: *Declaration,
@@ -89,6 +95,7 @@ pub const CodegenError = error{
 
 pub const StatementType = enum {
     Return,
+    If,
     Expression,
     Null,
 };
@@ -124,6 +131,7 @@ pub const FunctionDef = struct {
 };
 pub const Statement = union(StatementType) {
     Return: Return,
+    If: If,
     Expression: *Expression,
     Null: void,
 
@@ -139,6 +147,34 @@ pub const Statement = union(StatementType) {
             },
             .Expression => {},
             .Null => {},
+            .If => |ifStmt| {
+                const jmpIfZero = try allocator.create(tac.Instruction);
+                const condVal = try ifStmt.condition.genTACInstructions(instructions, allocator);
+                const falseLabel = try allocator.create(tac.Instruction);
+                const falseLabelName = try std.fmt.allocPrint(allocator, "falseLabel_{d}", .{tempGen.genId()});
+                const exitLabelName = try std.fmt.allocPrint(allocator, "exitLabel_{d}", .{tempGen.genId()});
+                const exitLabel = try allocator.create(tac.Instruction);
+                exitLabel.* = tac.Instruction{
+                    .Label = exitLabelName,
+                };
+                const unCondJmpFromTrue = try allocator.create(tac.Instruction);
+                unCondJmpFromTrue.* = tac.Instruction{ .Jump = exitLabelName };
+                falseLabel.* = tac.Instruction{
+                    .Label = falseLabelName,
+                };
+                jmpIfZero.* = tac.Instruction{ .JumpIfZero = tac.Jmp{
+                    .condition = condVal,
+                    .target = falseLabelName,
+                } };
+                try instructions.append(jmpIfZero);
+                try ifStmt.thenStmt.genTACInstructions(instructions, allocator);
+                try instructions.append(unCondJmpFromTrue);
+                try instructions.append(falseLabel);
+                if (ifStmt.elseStmt) |elseStmt| {
+                    try elseStmt.genTACInstructions(instructions, allocator);
+                }
+                try instructions.append(exitLabel);
+            },
         }
     }
 };
@@ -189,6 +225,8 @@ pub fn prettyPrintAST(node: Node, writer: anytype, depth: usize) !void {
                     try prettyPrintAST(Node{ .Expression = expr }, writer, depth + 1);
                 },
                 .Null => try writer.print("{s}Null Statement{s}\n", .{ colors.cyan, colors.reset }),
+                //TODO: implement if pretty printer properly
+                .If => try writer.print("{s} If {s}\n", .{ colors.cyan, colors.reset }),
             }
         },
         .Expression => |expr| {
@@ -443,6 +481,7 @@ pub const Expression = union(ExpressionType) {
                     .src = rhs,
                     .dest = lhs,
                 } };
+                try instructions.append(cpInstr);
                 return lhs;
             },
         }

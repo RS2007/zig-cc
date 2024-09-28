@@ -30,6 +30,10 @@ pub const TokenType = enum {
     LOGIC_OR,
     NOT,
     INVALID,
+    IF,
+    ELSE,
+    TERNARY,
+    COLON,
 };
 
 pub const Token = struct {
@@ -100,14 +104,23 @@ pub const Lexer = struct {
             ')' => {
                 return (try createSingleWidthToken(TokenType.RPAREN, allocator, lexer));
             },
+            '?' => {
+                return (try createSingleWidthToken(TokenType.TERNARY, allocator, lexer));
+            },
+            ':' => {
+                return (try createSingleWidthToken(TokenType.COLON, allocator, lexer));
+            },
             '+' => {
-                return (try createSingleWidthToken(TokenType.RPAREN, allocator, lexer));
+                return (try createSingleWidthToken(TokenType.PLUS, allocator, lexer));
             },
             '*' => {
                 return (try createSingleWidthToken(TokenType.MULTIPLY, allocator, lexer));
             },
             '%' => {
                 return (try createSingleWidthToken(TokenType.MODULO, allocator, lexer));
+            },
+            '~' => {
+                return (try createSingleWidthToken(TokenType.TILDE, allocator, lexer));
             },
             '<' => {
                 return (try createDoubleWidthToken(&[_]u8{'='}, &[_]TokenType{TokenType.LESSEQ}, TokenType.LESS, allocator, lexer));
@@ -162,7 +175,20 @@ pub const Lexer = struct {
                     token.end = initialPtr + offset - 1;
                     lexer.currentToken = token;
                     return token;
+                } else if (std.mem.eql(u8, lexer.buffer[initialPtr .. initialPtr + offset], "if")) {
+                    token.type = TokenType.IF;
+                    token.start = initialPtr;
+                    token.end = initialPtr + offset - 1;
+                    lexer.currentToken = token;
+                    return token;
+                } else if (std.mem.eql(u8, lexer.buffer[initialPtr .. initialPtr + offset], "else")) {
+                    token.type = TokenType.ELSE;
+                    token.start = initialPtr;
+                    token.end = initialPtr + offset - 1;
+                    lexer.currentToken = token;
+                    return token;
                 }
+
                 token.type = TokenType.IDENTIFIER;
                 token.start = initialPtr;
                 token.end = initialPtr + offset - 1;
@@ -215,6 +241,12 @@ pub const Lexer = struct {
             },
             ')' => {
                 nextSingleWidthTokMacro(TokenType.RPAREN, token, lexer);
+            },
+            '?' => {
+                nextSingleWidthTokMacro(TokenType.TERNARY, token, lexer);
+            },
+            ':' => {
+                nextSingleWidthTokMacro(TokenType.COLON, token, lexer);
             },
             '{' => {
                 nextSingleWidthTokMacro(TokenType.LBRACE, token, lexer);
@@ -286,7 +318,20 @@ pub const Lexer = struct {
                     token.end = lexer.current - 1;
                     lexer.currentToken = token;
                     return token;
+                } else if (std.mem.eql(u8, lexer.buffer[initialPtr..lexer.current], "if")) {
+                    token.type = TokenType.IF;
+                    token.start = initialPtr;
+                    token.end = lexer.current - 1;
+                    lexer.currentToken = token;
+                    return token;
+                } else if (std.mem.eql(u8, lexer.buffer[initialPtr..lexer.current], "else")) {
+                    token.type = TokenType.ELSE;
+                    token.start = initialPtr;
+                    token.end = lexer.current - 1;
+                    lexer.currentToken = token;
+                    return token;
                 }
+
                 token.type = TokenType.IDENTIFIER;
                 token.start = initialPtr;
                 token.end = lexer.current - 1;
@@ -472,4 +517,22 @@ test "! and !=" {
     //std
     _ = try std.testing.expectEqual(not.type, TokenType.NOT);
     _ = try std.testing.expectEqual(notEq.type, TokenType.NOT);
+}
+
+test "Ternary and if else" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const buffer = "? : if else";
+    //const buffer2 = "int main(){ return ~~2; }";
+    //const buffer3 = "int main(){ return ~-2; }";
+    const lexer = try Lexer.init(allocator, @as([]u8, @constCast(buffer)));
+    const ternary = try lexer.nextToken(allocator); //ternary
+    const colon = try lexer.nextToken(allocator); //colon
+    const ifTok = try lexer.nextToken(allocator); //if
+    const elseTok = try lexer.nextToken(allocator); //if
+    _ = try std.testing.expectEqual(ternary.type, TokenType.TERNARY);
+    _ = try std.testing.expectEqual(colon.type, TokenType.COLON);
+    _ = try std.testing.expectEqual(ifTok.type, TokenType.IF);
+    _ = try std.testing.expectEqual(elseTok.type, TokenType.ELSE);
 }

@@ -376,11 +376,8 @@ test "testing assembly generation - unary" {
     for (instructions.items) |inst| {
         try inst.codegen(&asmInstructions, allocator);
     }
-    for (asmInstructions.items) |asmInst| {
-        std.log.warn("\n \x1b[34m{any}\x1b[0m", .{asmInst});
-    }
     try assembly.replacePseudoRegs(&asmInstructions, allocator);
-    try assembly.fixupInstructions(&asmInstructions, allocator);
+    const fixedAsmInstructions = try assembly.fixupInstructions(&asmInstructions, allocator);
     std.log.warn("POST PSEUDO REPLACEMENT AND STACK TO STACK MOVES", .{});
     // for (asmInstructions.items) |asmInst| {
     //     std.log.warn("\n \x1b[34m{any}\x1b[0m", .{asmInst});
@@ -389,7 +386,7 @@ test "testing assembly generation - unary" {
     var buf = @as([]u8, &mem);
     const header = try std.fmt.bufPrint(buf, ".globl main\nmain:\npush %rbp", .{});
     buf = buf[header.len..];
-    for (asmInstructions.items) |asmInst| {
+    for (fixedAsmInstructions.items) |asmInst| {
         const printedSlice = try std.fmt.bufPrint(buf, "\n{s}", .{try asmInst.stringify(allocator)});
         buf = buf[printedSlice.len..];
     }
@@ -410,11 +407,8 @@ test "testing assembly generation - binary" {
     for (instructions.items) |inst| {
         try inst.codegen(&asmInstructions, allocator);
     }
-    for (asmInstructions.items) |asmInst| {
-        std.log.warn("\n \x1b[34m{any}\x1b[0m", .{asmInst});
-    }
     try assembly.replacePseudoRegs(&asmInstructions, allocator);
-    try assembly.fixupInstructions(&asmInstructions, allocator);
+    const fixedAsmInstructions = try assembly.fixupInstructions(&asmInstructions, allocator);
     std.log.warn("POST PSEUDO REPLACEMENT AND STACK TO STACK MOVES", .{});
     // for (asmInstructions.items) |asmInst| {
     //     std.log.warn("\n \x1b[34m{any}\x1b[0m", .{asmInst});
@@ -423,7 +417,7 @@ test "testing assembly generation - binary" {
     var buf = @as([]u8, &mem);
     const header = try std.fmt.bufPrint(buf, ".globl main\nmain:\npush %rbp", .{});
     buf = buf[header.len..];
-    for (asmInstructions.items) |asmInst| {
+    for (fixedAsmInstructions.items) |asmInst| {
         const printedSlice = try std.fmt.bufPrint(buf, "\n{s}", .{try asmInst.stringify(allocator)});
         buf = buf[printedSlice.len..];
     }
@@ -445,11 +439,8 @@ test "testing assembly generation - >= and <=" {
     for (instructions.items) |inst| {
         try inst.codegen(&asmInstructions, allocator);
     }
-    for (asmInstructions.items) |asmInst| {
-        std.log.warn("\n \x1b[34m{any}\x1b[0m", .{asmInst});
-    }
     try assembly.replacePseudoRegs(&asmInstructions, allocator);
-    try assembly.fixupInstructions(&asmInstructions, allocator);
+    const fixedAsmInstructions = try assembly.fixupInstructions(&asmInstructions, allocator);
     std.log.warn("POST PSEUDO REPLACEMENT AND STACK TO STACK MOVES", .{});
     // for (asmInstructions.items) |asmInst| {
     //     std.log.warn("\n \x1b[34m{any}\x1b[0m", .{asmInst});
@@ -458,7 +449,7 @@ test "testing assembly generation - >= and <=" {
     var buf = @as([]u8, &mem);
     const header = try std.fmt.bufPrint(buf, ".globl main\nmain:\npush %rbp", .{});
     buf = buf[header.len..];
-    for (asmInstructions.items) |asmInst| {
+    for (fixedAsmInstructions.items) |asmInst| {
         const printedSlice = try std.fmt.bufPrint(buf, "\n{s}", .{try asmInst.stringify(allocator)});
         buf = buf[printedSlice.len..];
     }
@@ -480,11 +471,8 @@ test "testing assembly generation - short circuiting with logical AND and OR" {
     for (instructions.items) |inst| {
         try inst.codegen(&asmInstructions, allocator);
     }
-    for (asmInstructions.items) |asmInst| {
-        std.log.warn("\n \x1b[34m{any}\x1b[0m", .{asmInst});
-    }
     try assembly.replacePseudoRegs(&asmInstructions, allocator);
-    try assembly.fixupInstructions(&asmInstructions, allocator);
+    const fixedAsmInstructions = try assembly.fixupInstructions(&asmInstructions, allocator);
     std.log.warn("POST PSEUDO REPLACEMENT AND STACK TO STACK MOVES", .{});
     // for (asmInstructions.items) |asmInst| {
     //     std.log.warn("\n \x1b[34m{any}\x1b[0m", .{asmInst});
@@ -493,7 +481,7 @@ test "testing assembly generation - short circuiting with logical AND and OR" {
     var buf = @as([]u8, &mem);
     const header = try std.fmt.bufPrint(buf, ".globl main\nmain:\npush %rbp", .{});
     buf = buf[header.len..];
-    for (asmInstructions.items) |asmInst| {
+    for (fixedAsmInstructions.items) |asmInst| {
         const printedSlice = try std.fmt.bufPrint(buf, "\n{s}", .{try asmInst.stringify(allocator)});
         buf = buf[printedSlice.len..];
     }
@@ -514,11 +502,8 @@ test "testing assembly generation - declarations" {
     for (instructions.items) |inst| {
         try inst.codegen(&asmInstructions, allocator);
     }
-    for (asmInstructions.items) |asmInst| {
-        std.log.warn("\n \x1b[34m{any}\x1b[0m", .{asmInst});
-    }
     try assembly.replacePseudoRegs(&asmInstructions, allocator);
-    try assembly.fixupInstructions(&asmInstructions, allocator);
+    const fixedAsmInstructions = try assembly.fixupInstructions(&asmInstructions, allocator);
     std.log.warn("POST PSEUDO REPLACEMENT AND STACK TO STACK MOVES", .{});
     // for (asmInstructions.items) |asmInst| {
     //     std.log.warn("\n \x1b[34m{any}\x1b[0m", .{asmInst});
@@ -527,7 +512,71 @@ test "testing assembly generation - declarations" {
     var buf = @as([]u8, &mem);
     const header = try std.fmt.bufPrint(buf, ".globl main\nmain:\npush %rbp", .{});
     buf = buf[header.len..];
-    for (asmInstructions.items) |asmInst| {
+    for (fixedAsmInstructions.items) |asmInst| {
+        const printedSlice = try std.fmt.bufPrint(buf, "\n{s}", .{try asmInst.stringify(allocator)});
+        buf = buf[printedSlice.len..];
+    }
+
+    std.log.warn("\n\x1b[33m{s}\x1b[0m", .{mem});
+}
+
+test "tac generation - if" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const programStr = "int main(){int y; int x = y = 3;if(x == y) return x; else return y;}";
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    const program = try p.parseProgram();
+    const instructions = try program.genTAC(allocator);
+    var asmInstructions = std.ArrayList(*assembly.Instruction).init(allocator);
+    std.log.warn("second declaration: {any}\n", .{program.function.blockItems.items[1].Declaration});
+    std.log.warn("second declaration more info: {any} \n", .{program.function.blockItems.items[1].Declaration.expression.?.Assignment});
+
+    for (instructions.items) |inst| {
+        std.log.warn("inst: {any}\n", .{inst});
+        try inst.codegen(&asmInstructions, allocator);
+    }
+    try assembly.replacePseudoRegs(&asmInstructions, allocator);
+    const fixedAsmInstructions = try assembly.fixupInstructions(&asmInstructions, allocator);
+    std.log.warn("POST PSEUDO REPLACEMENT AND STACK TO STACK MOVES", .{});
+    var mem: [2048]u8 = std.mem.zeroes([2048]u8);
+    var buf = @as([]u8, &mem);
+    const header = try std.fmt.bufPrint(buf, ".globl main\nmain:\npush %rbp", .{});
+    buf = buf[header.len..];
+    for (fixedAsmInstructions.items) |asmInst| {
+        const printedSlice = try std.fmt.bufPrint(buf, "\n{s}", .{try asmInst.stringify(allocator)});
+        buf = buf[printedSlice.len..];
+    }
+
+    std.log.warn("\n\x1b[33m{s}\x1b[0m", .{mem});
+}
+
+test "tac generation - if nested" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const programStr = "int main(){int y; int x = y = 3;if(x == y) if(x > 3) return x;else; else return y; return 1;}";
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    const program = try p.parseProgram();
+    const instructions = try program.genTAC(allocator);
+    var asmInstructions = std.ArrayList(*assembly.Instruction).init(allocator);
+    std.log.warn("second declaration: {any}\n", .{program.function.blockItems.items[1].Declaration});
+    std.log.warn("second declaration more info: {any} \n", .{program.function.blockItems.items[1].Declaration.expression.?.Assignment});
+
+    for (instructions.items) |inst| {
+        std.log.warn("inst: {any}\n", .{inst});
+        try inst.codegen(&asmInstructions, allocator);
+    }
+    try assembly.replacePseudoRegs(&asmInstructions, allocator);
+    const fixedAsmInstructions = try assembly.fixupInstructions(&asmInstructions, allocator);
+    std.log.warn("POST PSEUDO REPLACEMENT AND STACK TO STACK MOVES", .{});
+    var mem: [2048]u8 = std.mem.zeroes([2048]u8);
+    var buf = @as([]u8, &mem);
+    const header = try std.fmt.bufPrint(buf, ".globl main\nmain:\npush %rbp", .{});
+    buf = buf[header.len..];
+    for (fixedAsmInstructions.items) |asmInst| {
         const printedSlice = try std.fmt.bufPrint(buf, "\n{s}", .{try asmInst.stringify(allocator)});
         buf = buf[printedSlice.len..];
     }

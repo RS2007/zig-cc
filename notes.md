@@ -1,3 +1,6 @@
+## Parser
+
+
 ## TAC
 
 - converting current AST to three address code
@@ -34,3 +37,34 @@ Return(Unary(Negate,
 - Move the firstOp to dest, cmp and jump. if no jump, compute and secondOp,dest.
 
 - Handle this in TAC. Don't complicate assembly generation.
+
+## If conditions in assemby
+
+* Example of if(x==y) return x; else return y;
+* compare x and y, if true dont jump, if false jump
+* jumpIfNotZero to false
+* insert end label after false
+* jump to false label unconditionally after execution of then statement instructions
+
+
+
+## TODO:
+
+- [ ] Compound statements 
+- [ ] Loops
+- [ ] Functions
+- [ ] Storage specifiers
+- [ ] long
+- [ ] uint
+- [ ] floating point
+- [ ] pointers
+- [ ] arrays + pointer arithmetic
+- [ ] chars and strings
+- [ ] dynamic memory allocation (can we support garbage collection?)
+
+### Can we support garbage collection?
+
+- A two fold approach
+- Using escape analysis to figure out whether the allocation can be on the stack    
+- If not use an internal malloc and keep track
+- Use mark and sweep
