@@ -103,6 +103,7 @@ pub const ExpressionType = enum {
     Integer,
     Unary,
     Binary,
+    Ternary,
     Identifier,
     Assignment,
 };
@@ -247,6 +248,12 @@ pub fn prettyPrintAST(node: Node, writer: anytype, depth: usize) !void {
                     try prettyPrintAST(Node{ .Expression = ass.rhs }, writer, depth + 1);
                 },
                 .Identifier => |ident| try writer.print("{s}Identifier: {s}{s}\n", .{ colors.green, ident, colors.reset }),
+                .Ternary => |tern| {
+                    try writer.print("{s}Ternary{s}\n", .{ colors.cyan, colors.reset });
+                    try prettyPrintAST(Node{ .Expression = tern.condition }, writer, depth + 1);
+                    try prettyPrintAST(Node{ .Expression = tern.lhs }, writer, depth + 1);
+                    try prettyPrintAST(Node{ .Expression = tern.rhs }, writer, depth + 1);
+                },
             }
         },
     }
@@ -284,6 +291,12 @@ pub const Binary = struct {
     rhs: *Expression,
 };
 
+pub const Ternary = struct {
+    condition: *Expression,
+    lhs: *Expression,
+    rhs: *Expression,
+};
+
 pub var tempGen = TempGenerator{ .state = 0 };
 
 pub fn tacBinOpFromASTBinOp(op: BinOp) tac.BinaryOp {
@@ -313,6 +326,7 @@ pub const Expression = union(ExpressionType) {
     Integer: u32,
     Unary: Unary,
     Binary: Binary,
+    Ternary: Ternary,
     Identifier: []u8,
     Assignment: Assignment,
 
@@ -483,6 +497,10 @@ pub const Expression = union(ExpressionType) {
                 } };
                 try instructions.append(cpInstr);
                 return lhs;
+            },
+            .Ternary => {
+                // TODO: implement
+                unreachable;
             },
         }
     }

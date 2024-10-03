@@ -38,7 +38,7 @@ Return(Unary(Negate,
 
 - Handle this in TAC. Don't complicate assembly generation.
 
-## If conditions in assemby
+## If conditions in assembly
 
 * Example of if(x==y) return x; else return y;
 * compare x and y, if true dont jump, if false jump

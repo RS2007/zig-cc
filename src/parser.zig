@@ -255,6 +255,9 @@ pub const Parser = struct {
             .LOGIC_OR => {
                 return 5;
             },
+            .TERNARY => {
+                return 3;
+            },
             .ASSIGN => {
                 return 1;
             },
@@ -285,29 +288,50 @@ pub const Parser = struct {
         };
     }
 
+    pub fn parseTernaryMiddle(self: *Parser) ParserError!*AST.Expression {
+        const expr = self.parseExpression(0);
+        const colon = try self.l.nextToken(self.allocator);
+        std.debug.assert(colon.type == lexer.TokenType.COLON);
+        return expr;
+    }
+
     pub fn parseInfix(self: *Parser, lhs: *AST.Expression) ParserError!*AST.Expression {
         if (self.l.currentToken) |currToken| {
             const op = self.l.currentToken.?;
-            const hasRhs = switch (op.type) {
-                .MINUS, .PLUS, .MULTIPLY, .DIVIDE, .MODULO, .LESS, .LESSEQ, .GREATER, .GREATEREQ, .EQUALS, .NOT_EQUALS, .LOGIC_AND, .LOGIC_OR => try self.parseExpression(getPrecedence(currToken.type).? + 1),
-                .ASSIGN => try self.parseExpression(getPrecedence(currToken.type).?),
-                else => null,
-            };
-            if (hasRhs) |rhs| {
-                const expr = try self.allocator.create(AST.Expression);
-                if (currToken.type == lexer.TokenType.ASSIGN) {
+            switch (op.type) {
+                .MINUS, .PLUS, .MULTIPLY, .DIVIDE, .MODULO, .LESS, .LESSEQ, .GREATER, .GREATEREQ, .EQUALS, .NOT_EQUALS, .LOGIC_AND, .LOGIC_OR => {
+                    const expr = try self.allocator.create(AST.Expression);
+                    const rhs = try self.parseExpression(getPrecedence(currToken.type).? + 1);
+                    expr.* = AST.Expression{ .Binary = AST.Binary{
+                        .op = binaryOpFromTokType(op.type),
+                        .lhs = lhs,
+                        .rhs = rhs,
+                    } };
+                    return expr;
+                },
+                .ASSIGN => {
+                    const expr = try self.allocator.create(AST.Expression);
+                    const rhs = try self.parseExpression(getPrecedence(currToken.type).?);
                     expr.* = AST.Expression{ .Assignment = AST.Assignment{
                         .lhs = lhs,
                         .rhs = rhs,
                     } };
                     return expr;
-                }
-                expr.* = AST.Expression{ .Binary = AST.Binary{
-                    .op = binaryOpFromTokType(op.type),
-                    .lhs = lhs,
-                    .rhs = rhs,
-                } };
-                return expr;
+                },
+                .TERNARY => {
+                    const expr = try self.allocator.create(AST.Expression);
+                    const middle = try self.parseTernaryMiddle();
+                    const end = try self.parseExpression(0);
+                    expr.* = AST.Expression{ .Ternary = .{
+                        .lhs = middle,
+                        .rhs = end,
+                        .condition = lhs,
+                    } };
+                    return expr;
+                },
+                else => {
+                    return lhs;
+                },
             }
         } else {
             unreachable;
@@ -317,6 +341,7 @@ pub const Parser = struct {
 
     pub fn parseExpression(self: *Parser, precedence: u32) ParserError!*AST.Expression {
         var lhs = try self.parseFactor();
+        std.log.warn("LHS Obtained: {any}\n", .{lhs});
         while (true) {
             const hasPeeked = try self.l.peekToken(self.allocator);
             if (hasPeeked) |peeked| {
@@ -450,4 +475,17 @@ test "test if statements" {
     std.log.warn("Cond: \x1b[34m{any}\x1b[0m\n", .{program.function.blockItems.items[2].Statement.If.condition});
     std.log.warn("Then: \x1b[34m{any}\x1b[0m\n", .{program.function.blockItems.items[2].Statement.If.thenStmt});
     std.log.warn("Else: \x1b[34m{any}\x1b[0m", .{program.function.blockItems.items[2].Statement.If.elseStmt.?});
+}
+
+test "test ternary statements" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const programStr = "int main(){int y = 4; int x = 3;return x == 3?x:y}";
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try Parser.init(allocator, l);
+    const program = try p.parseProgram();
+    std.log.warn("lhs: {any}\n", .{program.function.blockItems.items[2].Statement.Return.expression.Ternary.lhs});
+    std.log.warn("rhs: {any}\n", .{program.function.blockItems.items[2].Statement.Return.expression.Ternary.rhs});
+    std.log.warn("condition: {any}\n", .{program.function.blockItems.items[2].Statement.Return.expression.Ternary.condition});
 }
