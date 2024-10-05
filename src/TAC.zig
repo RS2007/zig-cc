@@ -147,7 +147,7 @@ pub const Instruction = union(InstructionType) {
                 const left = try binary.left.codegen(allocator);
                 const right = try binary.right.codegen(allocator);
                 switch (binary.op) {
-                    .ADD, .SUBTRACT => {
+                    .ADD, .SUBTRACT,.MULTIPLY => {
                         const movLeftToDest = try allocator.create(assembly.Instruction);
                         movLeftToDest.* = assembly.Instruction{ .Mov = assembly.MovInst{
                             .src = left,
@@ -161,29 +161,6 @@ pub const Instruction = union(InstructionType) {
                         } };
                         try instructions.append(movLeftToDest);
                         try instructions.append(binaryInstr);
-                    },
-                    .MULTIPLY => {
-                        const movLeftToR11 = try allocator.create(assembly.Instruction);
-                        const binaryInstr = try allocator.create(assembly.Instruction);
-                        const movR11ToDest = try allocator.create(assembly.Instruction);
-                        movLeftToR11.* = assembly.Instruction{
-                            .Mov = assembly.MovInst{
-                                .src = left,
-                                .dest = assembly.Operand{ .Reg = assembly.Reg.R11 },
-                            },
-                        };
-                        binaryInstr.* = assembly.Instruction{ .Binary = assembly.BinaryInst{
-                            .op = assembly.BinaryOp.Multiply,
-                            .lhs = assembly.Operand{ .Reg = assembly.Reg.R11 },
-                            .rhs = right,
-                        } };
-                        movR11ToDest.* = assembly.Instruction{ .Mov = assembly.MovInst{
-                            .src = assembly.Operand{ .Reg = assembly.Reg.R11 },
-                            .dest = storeDest,
-                        } };
-                        try instructions.append(movLeftToR11);
-                        try instructions.append(binaryInstr);
-                        try instructions.append(movR11ToDest);
                     },
                     .DIVIDE => {
                         const movLeftToAX = try allocator.create(assembly.Instruction);
@@ -567,6 +544,63 @@ test "tac generation - if nested" {
 
     for (instructions.items) |inst| {
         std.log.warn("inst: {any}\n", .{inst});
+        try inst.codegen(&asmInstructions, allocator);
+    }
+    try assembly.replacePseudoRegs(&asmInstructions, allocator);
+    const fixedAsmInstructions = try assembly.fixupInstructions(&asmInstructions, allocator);
+    std.log.warn("POST PSEUDO REPLACEMENT AND STACK TO STACK MOVES", .{});
+    var mem: [2048]u8 = std.mem.zeroes([2048]u8);
+    var buf = @as([]u8, &mem);
+    const header = try std.fmt.bufPrint(buf, ".globl main\nmain:\npush %rbp", .{});
+    buf = buf[header.len..];
+    for (fixedAsmInstructions.items) |asmInst| {
+        const printedSlice = try std.fmt.bufPrint(buf, "\n{s}", .{try asmInst.stringify(allocator)});
+        buf = buf[printedSlice.len..];
+    }
+
+    std.log.warn("\n\x1b[33m{s}\x1b[0m", .{mem});
+}
+
+
+test "assembly generation with ternary" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const programStr = "int main(){int y = 4; int x = 3; return x == 3?x:y}";
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    const program = try p.parseProgram();
+    const instructions = try program.genTAC(allocator);
+    var asmInstructions = std.ArrayList(*assembly.Instruction).init(allocator);
+    for (instructions.items) |inst| {
+        try inst.codegen(&asmInstructions, allocator);
+    }
+    try assembly.replacePseudoRegs(&asmInstructions, allocator);
+    const fixedAsmInstructions = try assembly.fixupInstructions(&asmInstructions, allocator);
+    std.log.warn("POST PSEUDO REPLACEMENT AND STACK TO STACK MOVES", .{});
+    var mem: [2048]u8 = std.mem.zeroes([2048]u8);
+    var buf = @as([]u8, &mem);
+    const header = try std.fmt.bufPrint(buf, ".globl main\nmain:\npush %rbp", .{});
+    buf = buf[header.len..];
+    for (fixedAsmInstructions.items) |asmInst| {
+        const printedSlice = try std.fmt.bufPrint(buf, "\n{s}", .{try asmInst.stringify(allocator)});
+        buf = buf[printedSlice.len..];
+    }
+
+    std.log.warn("\n\x1b[33m{s}\x1b[0m", .{mem});
+}
+
+test "assembly generation with nested ternary" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const programStr = "int main(){int y = 4; int x = 3; return x == 3?y == 4?x+y:x-y:0;}";
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    const program = try p.parseProgram();
+    const instructions = try program.genTAC(allocator);
+    var asmInstructions = std.ArrayList(*assembly.Instruction).init(allocator);
+    for (instructions.items) |inst| {
         try inst.codegen(&asmInstructions, allocator);
     }
     try assembly.replacePseudoRegs(&asmInstructions, allocator);

@@ -498,9 +498,56 @@ pub const Expression = union(ExpressionType) {
                 try instructions.append(cpInstr);
                 return lhs;
             },
-            .Ternary => {
-                // TODO: implement
-                unreachable;
+            .Ternary => |ternary| {
+                const comparision = try ternary.condition.genTACInstructions(instructions, allocator);
+                const storeTemp = try allocator.create(tac.Val);
+                storeTemp.* = tac.Val {
+                    .Variable = try tempGen.genTemp(allocator),
+                };
+                const jmpIfZeroInst = try allocator.create(tac.Instruction);
+                const endLabel = try allocator.create(tac.Instruction);
+                const falseLabel = try allocator.create(tac.Instruction);
+                const falseLabelName = try std.fmt.allocPrint(allocator, "falseLabel_{d}", .{tempGen.genId()});
+                const endLabelName = try std.fmt.allocPrint(allocator, "endLabel_{d}", .{tempGen.genId()});
+                falseLabel.* = tac.Instruction{
+                    .Label = falseLabelName,
+                };
+                endLabel.* = tac.Instruction{
+                    .Label = endLabelName,
+                };
+                jmpIfZeroInst.* = tac.Instruction {
+                    .JumpIfZero = .{
+                        .condition = comparision,
+                        .target = falseLabelName,
+                    },
+                };
+                try instructions.append(jmpIfZeroInst);
+                const middle = try ternary.lhs.genTACInstructions(instructions,allocator);
+                const cpMiddleToDest = try allocator.create(tac.Instruction);
+                cpMiddleToDest.* = tac.Instruction {
+                    .Copy = .{
+                        .dest = storeTemp,
+                        .src = middle,
+                    },
+                };
+                try instructions.append(cpMiddleToDest);
+                const uncondJumpFromTrue = try allocator.create(tac.Instruction);
+                uncondJumpFromTrue.* = tac.Instruction {
+                    .Jump = endLabelName,
+                };
+                try instructions.append(uncondJumpFromTrue);
+                try instructions.append(falseLabel);
+                const end = try ternary.rhs.genTACInstructions(instructions, allocator);
+                const cpEndToDest = try allocator.create(tac.Instruction);
+                cpEndToDest.* = tac.Instruction {
+                    .Copy = .{
+                        .src = end,
+                        .dest = storeTemp,
+                    },
+                };
+                try instructions.append(cpEndToDest);
+                try instructions.append(endLabel);
+                return storeTemp;
             },
         }
     }
@@ -590,4 +637,19 @@ test "codegen TAC with declarations" {
     const instructions = try program.genTAC(allocator);
     std.log.warn("\n \x1b[34m{any}\x1b[0m", .{instructions.items[0]});
     std.log.warn("\n \x1b[34m{any}\x1b[0m", .{instructions.items[1]});
+}
+
+
+test "test tac generation for ternary" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const programStr = "int main(){int y = 4; int x = 3;return x == 3?x:y}";
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    const program = try p.parseProgram();
+    _ = try program.genTAC(allocator);
+    //for(instructions.items,0..) |inst,i| {
+    //    std.log.warn("Inst at {}: {any}\n",.{i,inst});
+    //}
 }

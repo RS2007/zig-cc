@@ -267,6 +267,47 @@ pub fn fixupInstructions(instructions: *std.ArrayList(*Instruction), allocator: 
                     continue;
                 }
             },
+            .Binary => |binary| {
+                if (binary.op == BinaryOp.Multiply) {
+                    if(std.mem.eql(u8,@tagName(binary.lhs),"Stack")){
+                        const movLeftToR11 = try allocator.create(Instruction);
+                        movLeftToR11.* = Instruction{
+                            .Mov = MovInst{
+                                .dest = Operand{ .Reg = Reg.R11 },
+                                .src = inst.Binary.lhs,
+                            },
+                        };
+                        const movR11ToLeft = try allocator.create(Instruction);
+                        movR11ToLeft.* = Instruction{ .Mov = MovInst{
+                            .dest = inst.Binary.lhs,
+                            .src = Operand{ .Reg = Reg.R11 },
+                        } };
+                        inst.Binary.lhs = Operand{.Reg = Reg.R11};
+                        try fixedInstructions.append(movLeftToR11);
+                        try fixedInstructions.append(inst);
+                        try fixedInstructions.append(movR11ToLeft);
+                    }else{
+                        try fixedInstructions.append(inst);
+                    }
+                    continue;
+                }
+                if (std.mem.eql(u8, @tagName(binary.lhs), "Stack") and std.mem.eql(u8, @tagName(binary.rhs), "Stack")) {
+                    const cpInstruction = try allocator.create(Instruction);
+                    cpInstruction.* = Instruction{
+                        .Mov = .{
+                            .dest = Operand{ .Reg = Reg.R10 },
+                            .src = binary.rhs,
+                        },
+                    };
+                    inst.Binary.rhs = Operand{ .Reg = Reg.R10 };
+                    try fixedInstructions.append(cpInstruction);
+                    try fixedInstructions.append(inst);
+                    continue;
+                } else {
+                    try fixedInstructions.append(inst);
+                    continue;
+                }
+            },
             .Cmp => |cmp| {
                 std.log.warn("op1 tagName: {s} and op2 tagName: {s}\n", .{ @tagName(cmp.op1), @tagName(cmp.op2) });
                 if (std.mem.eql(u8, @tagName(cmp.op1), "Stack") and std.mem.eql(u8, @tagName(cmp.op2), "Stack")) {
@@ -357,7 +398,6 @@ pub fn replacePseudoRegs(instructions: *std.ArrayList(*Instruction), allocator: 
                     .Pseudo => |pseudo| {
                         if (lookup.contains(pseudo)) {
                             inst.Binary.lhs = Operand{ .Stack = lookup.get(pseudo).? };
-                            continue;
                         } else {
                             topOfStack -= 4;
                             try lookup.put(
@@ -373,7 +413,6 @@ pub fn replacePseudoRegs(instructions: *std.ArrayList(*Instruction), allocator: 
                     .Pseudo => |pseudo| {
                         if (lookup.contains(pseudo)) {
                             inst.Binary.rhs = Operand{ .Stack = lookup.get(pseudo).? };
-                            continue;
                         } else {
                             topOfStack -= 4;
                             try lookup.put(
@@ -385,6 +424,7 @@ pub fn replacePseudoRegs(instructions: *std.ArrayList(*Instruction), allocator: 
                     },
                     else => {},
                 }
+                continue;
             },
             .Idiv => |idiv| {
                 switch (idiv) {
@@ -433,7 +473,6 @@ pub fn replacePseudoRegs(instructions: *std.ArrayList(*Instruction), allocator: 
             },
             .Cdq, .AllocateStack, .Ret => {},
             .Cmp => |cmp| {
-                std.log.warn("Old inst: {any}\n", .{inst.Cmp});
                 switch (cmp.op1) {
                     .Pseudo => |pseudo| {
                         if (lookup.contains(pseudo)) {
