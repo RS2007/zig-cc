@@ -4,3 +4,4 @@ zig-cache/
 test
 *.log
 TODO.md
+temp*

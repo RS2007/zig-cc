@@ -5,6 +5,7 @@ const AST = @import("./AST.zig");
 const SemanticError = error{
     VarNotDeclared,
     OutOfMemory,
+    UnknownLabel,
 };
 
 pub fn resolveDeclaration(declaration: *AST.Declaration, varMap: *std.StringHashMap([]u8)) SemanticError!void {
@@ -65,6 +66,8 @@ pub fn resolveStatement(statement: *AST.Statement, varMap: *std.StringHashMap([]
                 try resolveStatement(elseStmt, varMap);
             }
         },
+        .Label => {},
+        .Goto => {},
     }
 }
 
@@ -84,4 +87,47 @@ pub fn varResolutionPass(allocator: std.mem.Allocator, node: *AST.Program) Seman
             },
         }
     }
+}
+
+pub fn resolveLocals(allocator: std.mem.Allocator, program: *AST.Program) SemanticError!void{
+    // Collect locals
+    const localsSet = std.BufSet.init(allocator);
+    for(program.function.blockItems.items) |blockItem| {
+        switch (blockItem.*){
+            .Statement => |statement| {
+                switch(statement.*){
+                    .Label => |label| {
+                        try localsSet.insert(label);
+                    }
+                }
+            }
+        }
+    }
+    // Check gotos
+    for(program.function.blockItems.items) |blockItem| {
+        switch (blockItem.*){
+            .Statement => |statement| {
+                switch(statement.*){
+                    .Goto => |goto| {
+                        if(!localsSet.contains(goto)) return SemanticError.UnknownLabel;
+                    }
+                }
+            }
+        }
+    }
+
+    localsSet.insert();
+}
+
+pub fn gotoResolutionPass(allocator: std.mem.Allocator, node: *AST.Program) SemanticError!void {
+    _ = allocator;
+    _ = node;
+    //for(node.function.blockItems.items) |blockItem| {
+    //    switch(blockItem.*){
+    //      .Statement  => |statement| {
+    //          switch(statement.*){
+    //          }
+    //      },
+    //    }
+    //  }
 }

@@ -34,6 +34,7 @@ pub const TokenType = enum {
     ELSE,
     TERNARY,
     COLON,
+    GOTO,
 };
 
 pub const Token = struct {
@@ -87,6 +88,22 @@ pub const Lexer = struct {
             token.end = lexer.current;
             return token;
         }
+    }
+
+    pub fn peekTwoTokens(lexer: *Lexer, allocator: std.mem.Allocator) LexerError![]?*Token {
+        lexer.skipWhitespace();
+        const resetIndx = lexer.current;
+        const resetToken = lexer.currentToken;
+        std.log.warn("Rest index is {} and reset token is {any}\n",.{resetIndx,resetToken});
+        const first = try lexer.nextToken(allocator);
+        const second = try lexer.peekToken(allocator);
+        lexer.current = resetIndx;
+        lexer.currentToken = resetToken;
+        std.log.warn("lexer index is {} and lexer current token is {any}\n",.{lexer.current,lexer.currentToken});
+        var tokenList = try std.ArrayList(?*Token).initCapacity(allocator, 2);
+        try tokenList.append(first);
+        try tokenList.append(second);
+        return (try tokenList.toOwnedSlice());
     }
 
     pub fn peekToken(lexer: *Lexer, allocator: std.mem.Allocator) LexerError!?*Token {
@@ -183,6 +200,12 @@ pub const Lexer = struct {
                     return token;
                 } else if (std.mem.eql(u8, lexer.buffer[initialPtr .. initialPtr + offset], "else")) {
                     token.type = TokenType.ELSE;
+                    token.start = initialPtr;
+                    token.end = initialPtr + offset - 1;
+                    lexer.currentToken = token;
+                    return token;
+                } else if (std.mem.eql(u8, lexer.buffer[initialPtr .. initialPtr + offset], "goto")) {
+                    token.type = TokenType.GOTO;
                     token.start = initialPtr;
                     token.end = initialPtr + offset - 1;
                     lexer.currentToken = token;
@@ -326,6 +349,12 @@ pub const Lexer = struct {
                     return token;
                 } else if (std.mem.eql(u8, lexer.buffer[initialPtr..lexer.current], "else")) {
                     token.type = TokenType.ELSE;
+                    token.start = initialPtr;
+                    token.end = lexer.current - 1;
+                    lexer.currentToken = token;
+                    return token;
+                } else if (std.mem.eql(u8, lexer.buffer[initialPtr..lexer.current], "goto")) {
+                    token.type = TokenType.GOTO;
                     token.start = initialPtr;
                     token.end = lexer.current - 1;
                     lexer.currentToken = token;

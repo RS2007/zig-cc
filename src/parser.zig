@@ -129,8 +129,9 @@ pub const Parser = struct {
     }
 
     pub fn parseStatement(self: *Parser) ParserError!*AST.Statement {
-        switch ((try self.l.nextToken(self.allocator)).type) {
+        switch ((try self.l.peekToken(self.allocator)).?.type) {
             .RETURN => {
+                _ = try self.l.nextToken(self.allocator);
                 const expr = try self.parseExpression(0);
                 try self.logger.info("Expr obtained from return: {any} and {any}\n", .{ expr, if (std.meta.activeTag(expr.*) == AST.ExpressionType.Unary) expr.Unary.exp else null });
                 const retStmt = try self.allocator.create(AST.Statement);
@@ -147,6 +148,7 @@ pub const Parser = struct {
                 return retStmt;
             },
             .SEMICOLON => {
+                _ = try self.l.nextToken(self.allocator);
                 try self.logger.info("Found a null stmt\n", .{});
                 const nullStmt = try self.allocator.create(AST.Statement);
                 nullStmt.* = AST.Statement{
@@ -155,6 +157,7 @@ pub const Parser = struct {
                 return nullStmt;
             },
             .IF => {
+                _ = try self.l.nextToken(self.allocator);
                 const ifStmt = try self.allocator.create(AST.Statement);
                 const expr = try self.parseFactor();
                 const thenStmt = try self.parseStatement();
@@ -168,9 +171,33 @@ pub const Parser = struct {
                 }
                 return ifStmt;
             },
-
-            else => |tokType| {
-                try self.logger.info("Found an expression statement starting with {}\n", .{tokType});
+            .GOTO => {
+                _ = try self.l.nextToken(self.allocator);
+                const jumpLabel = try self.l.nextToken(self.allocator);
+                const gotoStatement = try self.allocator.create(AST.Statement);
+                gotoStatement.* = AST.Statement{
+                    .Goto = self.l.buffer[jumpLabel.start..jumpLabel.end+1],
+                };
+                const semicolon = try self.l.nextToken(self.allocator);
+                std.debug.assert(semicolon.type == lexer.TokenType.SEMICOLON);
+                return gotoStatement;
+            },
+            else => {
+                const twoToks = try self.l.peekTwoTokens(self.allocator);
+                if (twoToks[1]) |secondTok| {
+                    std.log.warn("Second tok: {any}\n",.{secondTok});
+                    if (secondTok.type == lexer.TokenType.COLON) {
+                        const identifier = try self.l.nextToken(self.allocator);
+                        const colon = try self.l.nextToken(self.allocator);
+                        std.debug.assert(colon.type == lexer.TokenType.COLON);
+                        const labelStmt = try self.allocator.create(AST.Statement);
+                        std.log.warn("Found label: {s}\n",.{self.l.buffer[identifier.start .. identifier.end + 1]});
+                        labelStmt.* = AST.Statement{
+                            .Label = self.l.buffer[identifier.start .. identifier.end + 1],
+                        };
+                        return labelStmt;
+                    }
+                }
                 const expression = try self.parseExpression(0);
                 const expressionStmt = try self.allocator.create(AST.Statement);
                 expressionStmt.* = AST.Statement{
@@ -229,7 +256,8 @@ pub const Parser = struct {
                 identifier.* = AST.Expression{ .Identifier = self.l.buffer[currToken.start .. currToken.end + 1] };
                 return identifier;
             },
-            else => {
+            else => |tokType| {
+                std.log.warn("Parse factor unknown type: {any}\n", .{tokType});
                 unreachable;
             },
         }
@@ -488,4 +516,16 @@ test "test ternary statements" {
     std.log.warn("lhs: {any}\n", .{program.function.blockItems.items[2].Statement.Return.expression.Ternary.lhs});
     std.log.warn("rhs: {any}\n", .{program.function.blockItems.items[2].Statement.Return.expression.Ternary.rhs});
     std.log.warn("condition: {any}\n", .{program.function.blockItems.items[2].Statement.Return.expression.Ternary.condition});
+}
+
+test "test label" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const programStr = "int main(){int y = 4; int x = 3;goto sup;sup:return x == 3?x:y}";
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try Parser.init(allocator, l);
+    const program = try p.parseProgram();
+    std.log.warn("Goto: {s}\n", .{program.function.blockItems.items[2].Statement.Goto});
+    std.log.warn("Label: {s}\n", .{program.function.blockItems.items[3].Statement.Label});
 }

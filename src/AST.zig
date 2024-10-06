@@ -98,6 +98,8 @@ pub const StatementType = enum {
     If,
     Expression,
     Null,
+    Goto,
+    Label,
 };
 pub const ExpressionType = enum {
     Integer,
@@ -135,6 +137,8 @@ pub const Statement = union(StatementType) {
     If: If,
     Expression: *Expression,
     Null: void,
+    Goto: []u8,
+    Label: []u8,
 
     pub fn genTACInstructions(statement: *Statement, instructions: *std.ArrayList(*tac.Instruction), allocator: std.mem.Allocator) CodegenError!void {
         switch (statement.*) {
@@ -146,7 +150,9 @@ pub const Statement = union(StatementType) {
                 } };
                 try instructions.append(returnInst);
             },
-            .Expression => {},
+            .Expression => |expr| {
+                _ = try expr.genTACInstructions(instructions,allocator);
+            },
             .Null => {},
             .If => |ifStmt| {
                 const jmpIfZero = try allocator.create(tac.Instruction);
@@ -176,6 +182,20 @@ pub const Statement = union(StatementType) {
                 }
                 try instructions.append(exitLabel);
             },
+            .Label => |label| {
+                const tacLabel = try allocator.create(tac.Instruction);
+                tacLabel.* = tac.Instruction {
+                    .Label =  label,
+                };
+                try instructions.append(tacLabel);
+            },
+            .Goto => |goto| {
+                const tacUncondJump = try allocator.create(tac.Instruction);
+                tacUncondJump.* = tac.Instruction {
+                    .Jump = goto,
+                };
+                try instructions.append(tacUncondJump);
+            }
         }
     }
 };
@@ -228,6 +248,8 @@ pub fn prettyPrintAST(node: Node, writer: anytype, depth: usize) !void {
                 .Null => try writer.print("{s}Null Statement{s}\n", .{ colors.cyan, colors.reset }),
                 //TODO: implement if pretty printer properly
                 .If => try writer.print("{s} If {s}\n", .{ colors.cyan, colors.reset }),
+                .Label =>|label| try writer.print("{s} Label: {s}{s}",.{colors.cyan,label,colors.reset}),
+                .Goto =>|goto| try writer.print("{s} Goto: {s}{s}",.{colors.cyan,goto,colors.reset}),
             }
         },
         .Expression => |expr| {
