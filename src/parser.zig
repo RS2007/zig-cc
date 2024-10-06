@@ -171,12 +171,31 @@ pub const Parser = struct {
                 }
                 return ifStmt;
             },
+            .LBRACE => {
+                std.log.warn("LBrace Found", .{});
+                _ = try self.l.nextToken(self.allocator);
+                const blockItemsList = std.ArrayList(*AST.BlockItem).init(self.allocator);
+                const compoundStatement = try self.allocator.create(AST.Statement);
+                compoundStatement.* = AST.Statement{
+                    .Compound = blockItemsList,
+                };
+                while (true) {
+                    const hasPeeked = try self.l.peekToken(self.allocator);
+                    if (hasPeeked == null) break;
+                    if (hasPeeked.?.type == lexer.TokenType.RBRACE) break;
+                    const blockItem = try self.parseBlockItem();
+                    try compoundStatement.Compound.append(blockItem);
+                }
+                const rbrace = try self.l.nextToken(self.allocator);
+                std.debug.assert(rbrace.type == lexer.TokenType.RBRACE);
+                return compoundStatement;
+            },
             .GOTO => {
                 _ = try self.l.nextToken(self.allocator);
                 const jumpLabel = try self.l.nextToken(self.allocator);
                 const gotoStatement = try self.allocator.create(AST.Statement);
                 gotoStatement.* = AST.Statement{
-                    .Goto = self.l.buffer[jumpLabel.start..jumpLabel.end+1],
+                    .Goto = self.l.buffer[jumpLabel.start .. jumpLabel.end + 1],
                 };
                 const semicolon = try self.l.nextToken(self.allocator);
                 std.debug.assert(semicolon.type == lexer.TokenType.SEMICOLON);
@@ -185,13 +204,13 @@ pub const Parser = struct {
             else => {
                 const twoToks = try self.l.peekTwoTokens(self.allocator);
                 if (twoToks[1]) |secondTok| {
-                    std.log.warn("Second tok: {any}\n",.{secondTok});
+                    std.log.warn("Second tok: {any}\n", .{secondTok});
                     if (secondTok.type == lexer.TokenType.COLON) {
                         const identifier = try self.l.nextToken(self.allocator);
                         const colon = try self.l.nextToken(self.allocator);
                         std.debug.assert(colon.type == lexer.TokenType.COLON);
                         const labelStmt = try self.allocator.create(AST.Statement);
-                        std.log.warn("Found label: {s}\n",.{self.l.buffer[identifier.start .. identifier.end + 1]});
+                        std.log.warn("Found label: {s}\n", .{self.l.buffer[identifier.start .. identifier.end + 1]});
                         labelStmt.* = AST.Statement{
                             .Label = self.l.buffer[identifier.start .. identifier.end + 1],
                         };
@@ -369,7 +388,7 @@ pub const Parser = struct {
 
     pub fn parseExpression(self: *Parser, precedence: u32) ParserError!*AST.Expression {
         var lhs = try self.parseFactor();
-        std.log.warn("LHS Obtained: {any}\n", .{lhs});
+        std.log.warn("LHS Obtained: {}\n", .{lhs});
         while (true) {
             const hasPeeked = try self.l.peekToken(self.allocator);
             if (hasPeeked) |peeked| {
@@ -528,4 +547,18 @@ test "test label" {
     const program = try p.parseProgram();
     std.log.warn("Goto: {s}\n", .{program.function.blockItems.items[2].Statement.Goto});
     std.log.warn("Label: {s}\n", .{program.function.blockItems.items[3].Statement.Label});
+}
+
+test "test compound statement parsing" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const programStr = "int main(){int y = 4; int x = 2; {int x = 3;} return x+y;";
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try Parser.init(allocator, l);
+    const program = try p.parseProgram();
+    try AST.scopeVariableResolutionPass(program, allocator);
+    std.log.warn("Compound statement: first statement: {any}\n", .{program.function.blockItems.items[2].Statement.Compound.items[0]});
+    std.log.warn("Declaration: of x: {s}\n", .{program.function.blockItems.items[1].Declaration.name});
+    std.log.warn("Compound statement: first statement decl varName: {s}\n", .{program.function.blockItems.items[2].Statement.Compound.items[0].Declaration.name});
 }

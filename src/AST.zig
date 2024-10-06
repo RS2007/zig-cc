@@ -16,6 +16,10 @@ const semantic = @import("./semantic.zig");
 //
 //<int> ::= ? A constant token ?
 
+pub const MemoryError = error{
+    OutOfMemory,
+};
+
 const TempGenerator = struct {
     state: u32,
 
@@ -100,6 +104,7 @@ pub const StatementType = enum {
     Null,
     Goto,
     Label,
+    Compound,
 };
 pub const ExpressionType = enum {
     Integer,
@@ -132,6 +137,7 @@ pub const FunctionDef = struct {
         }
     }
 };
+
 pub const Statement = union(StatementType) {
     Return: Return,
     If: If,
@@ -139,6 +145,7 @@ pub const Statement = union(StatementType) {
     Null: void,
     Goto: []u8,
     Label: []u8,
+    Compound: std.ArrayList(*BlockItem),
 
     pub fn genTACInstructions(statement: *Statement, instructions: *std.ArrayList(*tac.Instruction), allocator: std.mem.Allocator) CodegenError!void {
         switch (statement.*) {
@@ -151,7 +158,7 @@ pub const Statement = union(StatementType) {
                 try instructions.append(returnInst);
             },
             .Expression => |expr| {
-                _ = try expr.genTACInstructions(instructions,allocator);
+                _ = try expr.genTACInstructions(instructions, allocator);
             },
             .Null => {},
             .If => |ifStmt| {
@@ -184,18 +191,23 @@ pub const Statement = union(StatementType) {
             },
             .Label => |label| {
                 const tacLabel = try allocator.create(tac.Instruction);
-                tacLabel.* = tac.Instruction {
-                    .Label =  label,
+                tacLabel.* = tac.Instruction{
+                    .Label = label,
                 };
                 try instructions.append(tacLabel);
             },
             .Goto => |goto| {
                 const tacUncondJump = try allocator.create(tac.Instruction);
-                tacUncondJump.* = tac.Instruction {
+                tacUncondJump.* = tac.Instruction{
                     .Jump = goto,
                 };
                 try instructions.append(tacUncondJump);
-            }
+            },
+            .Compound => |compound| {
+                for (compound.items) |compoundStatement| {
+                    try compoundStatement.genTAC(instructions, allocator);
+                }
+            },
         }
     }
 };
@@ -248,8 +260,9 @@ pub fn prettyPrintAST(node: Node, writer: anytype, depth: usize) !void {
                 .Null => try writer.print("{s}Null Statement{s}\n", .{ colors.cyan, colors.reset }),
                 //TODO: implement if pretty printer properly
                 .If => try writer.print("{s} If {s}\n", .{ colors.cyan, colors.reset }),
-                .Label =>|label| try writer.print("{s} Label: {s}{s}",.{colors.cyan,label,colors.reset}),
-                .Goto =>|goto| try writer.print("{s} Goto: {s}{s}",.{colors.cyan,goto,colors.reset}),
+                .Label => |label| try writer.print("{s} Label: {s}{s}", .{ colors.cyan, label, colors.reset }),
+                .Goto => |goto| try writer.print("{s} Goto: {s}{s}", .{ colors.cyan, goto, colors.reset }),
+                .Compound => try writer.print("{s} Compound: TODO{s}", .{ colors.cyan, colors.reset }),
             }
         },
         .Expression => |expr| {
@@ -523,7 +536,7 @@ pub const Expression = union(ExpressionType) {
             .Ternary => |ternary| {
                 const comparision = try ternary.condition.genTACInstructions(instructions, allocator);
                 const storeTemp = try allocator.create(tac.Val);
-                storeTemp.* = tac.Val {
+                storeTemp.* = tac.Val{
                     .Variable = try tempGen.genTemp(allocator),
                 };
                 const jmpIfZeroInst = try allocator.create(tac.Instruction);
@@ -537,16 +550,16 @@ pub const Expression = union(ExpressionType) {
                 endLabel.* = tac.Instruction{
                     .Label = endLabelName,
                 };
-                jmpIfZeroInst.* = tac.Instruction {
+                jmpIfZeroInst.* = tac.Instruction{
                     .JumpIfZero = .{
                         .condition = comparision,
                         .target = falseLabelName,
                     },
                 };
                 try instructions.append(jmpIfZeroInst);
-                const middle = try ternary.lhs.genTACInstructions(instructions,allocator);
+                const middle = try ternary.lhs.genTACInstructions(instructions, allocator);
                 const cpMiddleToDest = try allocator.create(tac.Instruction);
-                cpMiddleToDest.* = tac.Instruction {
+                cpMiddleToDest.* = tac.Instruction{
                     .Copy = .{
                         .dest = storeTemp,
                         .src = middle,
@@ -554,14 +567,14 @@ pub const Expression = union(ExpressionType) {
                 };
                 try instructions.append(cpMiddleToDest);
                 const uncondJumpFromTrue = try allocator.create(tac.Instruction);
-                uncondJumpFromTrue.* = tac.Instruction {
+                uncondJumpFromTrue.* = tac.Instruction{
                     .Jump = endLabelName,
                 };
                 try instructions.append(uncondJumpFromTrue);
                 try instructions.append(falseLabel);
                 const end = try ternary.rhs.genTACInstructions(instructions, allocator);
                 const cpEndToDest = try allocator.create(tac.Instruction);
-                cpEndToDest.* = tac.Instruction {
+                cpEndToDest.* = tac.Instruction{
                     .Copy = .{
                         .src = end,
                         .dest = storeTemp,
@@ -574,6 +587,72 @@ pub const Expression = union(ExpressionType) {
         }
     }
 };
+
+pub fn expressionScopeVariableResolve(expression: *Expression, currentScope: u32, allocator: std.mem.Allocator) MemoryError!void {
+    switch (expression.*) {
+        .Integer => {},
+        .Identifier => |identifier| {
+            expression.Identifier =
+                try std.fmt.allocPrint(allocator, "{s}{d}", .{ identifier, currentScope });
+        },
+        .Assignment => |assignment| {
+            try expressionScopeVariableResolve(assignment.lhs, currentScope, allocator);
+            try expressionScopeVariableResolve(assignment.rhs, currentScope, allocator);
+        },
+        .Ternary => |ternary| {
+            try expressionScopeVariableResolve(ternary.condition, currentScope, allocator);
+            try expressionScopeVariableResolve(ternary.lhs, currentScope, allocator);
+            try expressionScopeVariableResolve(ternary.rhs, currentScope, allocator);
+        },
+        .Unary => |unary| {
+            try expressionScopeVariableResolve(unary.exp, currentScope, allocator);
+        },
+        .Binary => |binary| {
+            try expressionScopeVariableResolve(binary.lhs, currentScope, allocator);
+            try expressionScopeVariableResolve(binary.rhs, currentScope, allocator);
+        },
+    }
+}
+
+pub fn blockStatementScopeVariableResolve(blockItem: *BlockItem, currentScope: u32, allocator: std.mem.Allocator) MemoryError!void {
+    switch (blockItem.*) {
+        .Statement => |statement| {
+            try statementScopeVariableResolve(statement, currentScope, allocator);
+        },
+        .Declaration => |decl| {
+            blockItem.Declaration.name = try std.fmt.allocPrint(allocator, "{s}{d}", .{ decl.name, currentScope });
+        },
+    }
+}
+pub fn statementScopeVariableResolve(statement: *Statement, currentScope: u32, allocator: std.mem.Allocator) MemoryError!void {
+    switch (statement.*) {
+        .Compound => |compound| {
+            for (compound.items) |blockItemCompound| {
+                try blockStatementScopeVariableResolve(blockItemCompound, currentScope + 1, allocator);
+            }
+        },
+        .Null, .Label, .Goto => {},
+        .If => |ifStmt| {
+            try expressionScopeVariableResolve(ifStmt.condition, currentScope, allocator);
+            try statementScopeVariableResolve(ifStmt.thenStmt, currentScope, allocator);
+            if (ifStmt.elseStmt) |elseStmt| {
+                try statementScopeVariableResolve(elseStmt, currentScope, allocator);
+            }
+        },
+        .Return => |ret| {
+            try expressionScopeVariableResolve(ret.expression, currentScope, allocator);
+        },
+        .Expression => |expression| {
+            try expressionScopeVariableResolve(expression, currentScope, allocator);
+        },
+    }
+}
+
+pub fn scopeVariableResolutionPass(program: *Program, allocator: std.mem.Allocator) MemoryError!void {
+    for (program.function.blockItems.items) |blockItem| {
+        try blockStatementScopeVariableResolve(blockItem, 0, allocator);
+    }
+}
 
 pub const Node = union(enum) {
     Program: *Program,
@@ -660,7 +739,6 @@ test "codegen TAC with declarations" {
     std.log.warn("\n \x1b[34m{any}\x1b[0m", .{instructions.items[0]});
     std.log.warn("\n \x1b[34m{any}\x1b[0m", .{instructions.items[1]});
 }
-
 
 test "test tac generation for ternary" {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);

@@ -59,6 +59,7 @@ Return(Unary(Negate,
 
 ## TODO:
 
+- [x] Gotos and labelled
 - [ ] Compound statements 
 - [ ] Loops
 - [ ] Functions
