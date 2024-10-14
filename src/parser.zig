@@ -201,6 +201,38 @@ pub const Parser = struct {
                 std.debug.assert(semicolon.type == lexer.TokenType.SEMICOLON);
                 return gotoStatement;
             },
+            .DO => {
+                _ = try self.l.nextToken(self.allocator);
+                const body = try self.parseStatement();
+                const whileTok = try self.l.nextToken(self.allocator);
+                std.debug.assert(whileTok.type == lexer.TokenType.WHILE);
+                const lparen = try self.l.nextToken(self.allocator);
+                std.debug.assert(lparen.type == lexer.TokenType.LPAREN);
+                const condition = try self.parseExpression(0);
+                const rparen = try self.l.nextToken(self.allocator);
+                std.debug.assert(rparen.type == lexer.TokenType.RPAREN);
+                const doWhileStatement = try self.allocator.create(AST.Statement);
+                doWhileStatement.* = AST.Statement{ .DoWhile = .{
+                    .body = body,
+                    .condition = condition,
+                } };
+                return doWhileStatement;
+            },
+            .WHILE => {
+                _ = try self.l.nextToken(self.allocator);
+                const lparen = try self.l.nextToken(self.allocator);
+                std.debug.assert(lparen.type == lexer.TokenType.LPAREN);
+                const condition = try self.parseExpression(0);
+                const rparen = try self.l.nextToken(self.allocator);
+                std.debug.assert(rparen.type == lexer.TokenType.RPAREN);
+                const body = try self.parseStatement();
+                const whileStatement = try self.allocator.create(AST.Statement);
+                whileStatement.* = AST.Statement{ .While = .{
+                    .body = body,
+                    .condition = condition,
+                } };
+                return whileStatement;
+            },
             else => {
                 const twoToks = try self.l.peekTwoTokens(self.allocator);
                 if (twoToks[1]) |secondTok| {

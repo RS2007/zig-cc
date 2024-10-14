@@ -105,6 +105,11 @@ pub const StatementType = enum {
     Goto,
     Label,
     Compound,
+    Break,
+    Continue,
+    DoWhile,
+    While,
+    For,
 };
 pub const ExpressionType = enum {
     Integer,
@@ -137,6 +142,11 @@ pub const FunctionDef = struct {
         }
     }
 };
+pub const While = struct {
+    condition: *Expression,
+    body: *Statement,
+};
+pub const For = struct {};
 
 pub const Statement = union(StatementType) {
     Return: Return,
@@ -146,6 +156,11 @@ pub const Statement = union(StatementType) {
     Goto: []u8,
     Label: []u8,
     Compound: std.ArrayList(*BlockItem),
+    Break: void,
+    Continue: void,
+    DoWhile: While,
+    While: While,
+    For: For,
 
     pub fn genTACInstructions(statement: *Statement, instructions: *std.ArrayList(*tac.Instruction), allocator: std.mem.Allocator) CodegenError!void {
         switch (statement.*) {
@@ -208,6 +223,11 @@ pub const Statement = union(StatementType) {
                     try compoundStatement.genTAC(instructions, allocator);
                 }
             },
+            .Continue => {},
+            .Break => {},
+            .DoWhile => {},
+            .While => {},
+            .For => {},
         }
     }
 };

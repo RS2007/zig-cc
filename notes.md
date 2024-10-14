@@ -60,7 +60,7 @@ Return(Unary(Negate,
 ## TODO:
 
 - [x] Gotos and labelled
-- [ ] Compound statements 
+- [x] Compound statements 
 - [ ] Loops
 - [ ] Functions
 - [ ] Storage specifiers
