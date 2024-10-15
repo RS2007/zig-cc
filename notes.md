@@ -109,3 +109,34 @@ in the codegeneration itself.
 - support for labels
 - problem in the design of the lexer.
 - lex the whole file store in an array, peek ahead as require 
+
+## How do do while loops and while loops look in assembly?
+
+### Do while
+
+- generate a label doWhileStart
+- generate body 
+- check condition
+- jump to doWhileStart label if condition is not zero
+
+### While
+
+- 
+- 
+
+> [!NOTE]
+> Loop inversion can be done here. This clearly shows why the do while loop is
+> better. 
+
+- Should we make this the first optimization?
+
+
+### For loops in assembly
+
+- initialization rendered
+- forStart label
+- condition check, if zero jump to forLoopEnd  
+- body start
+- update
+- unconditional jump to forStart
+- label forLoopEnd
