@@ -105,6 +105,11 @@ pub const StatementType = enum {
     Goto,
     Label,
     Compound,
+    Break,
+    Continue,
+    DoWhile,
+    While,
+    For,
 };
 pub const ExpressionType = enum {
     Integer,
@@ -137,6 +142,38 @@ pub const FunctionDef = struct {
         }
     }
 };
+pub const While = struct {
+    condition: *Expression,
+    body: *Statement,
+    loopId: u32,
+};
+
+pub const ForInit = union(ForInitType) {
+    Declaration: *Declaration,
+    Expression: *Expression,
+    pub fn genTACInstructions(forInit: *ForInit, instructions: *std.ArrayList(*tac.Instruction), allocator: std.mem.Allocator) CodegenError!void {
+        switch (forInit.*) {
+            .Declaration => |decl| {
+                try decl.genTACInstructions(instructions, allocator);
+            },
+            .Expression => |expr| {
+                _ = try expr.genTACInstructions(instructions, allocator);
+            },
+        }
+    }
+};
+pub const ForInitType = enum {
+    Declaration,
+    Expression,
+};
+
+pub const For = struct {
+    init: *ForInit,
+    condition: ?*Expression,
+    post: ?*Expression,
+    body: *Statement,
+    loopId: u32,
+};
 
 pub const Statement = union(StatementType) {
     Return: Return,
@@ -146,6 +183,11 @@ pub const Statement = union(StatementType) {
     Goto: []u8,
     Label: []u8,
     Compound: std.ArrayList(*BlockItem),
+    Break: u32,
+    Continue: u32,
+    DoWhile: While,
+    While: While,
+    For: For,
 
     pub fn genTACInstructions(statement: *Statement, instructions: *std.ArrayList(*tac.Instruction), allocator: std.mem.Allocator) CodegenError!void {
         switch (statement.*) {
@@ -208,6 +250,106 @@ pub const Statement = union(StatementType) {
                     try compoundStatement.genTAC(instructions, allocator);
                 }
             },
+            .Continue => |cont| {
+                const jumpUnconditional = try allocator.create(tac.Instruction);
+                jumpUnconditional.* = .{
+                    .Jump = try std.fmt.allocPrint(allocator, "loop_start_{d}", .{cont}),
+                };
+                try instructions.append(jumpUnconditional);
+            },
+            .Break => |brk| {
+                const jumpUnconditional = try allocator.create(tac.Instruction);
+                jumpUnconditional.* = .{
+                    .Jump = try std.fmt.allocPrint(allocator, "loop_end_{d}", .{brk}),
+                };
+                try instructions.append(jumpUnconditional);
+            },
+            .DoWhile => |doWhile| {
+                const doWhileStartLabel = try std.fmt.allocPrint(allocator, "loop_start_{d}", .{doWhile.loopId});
+                const doWhileLabel = try allocator.create(tac.Instruction);
+                doWhileLabel.* = tac.Instruction{
+                    .Label = doWhileStartLabel,
+                };
+                try instructions.append(doWhileLabel);
+                try doWhile.body.genTACInstructions(instructions, allocator);
+                const condition = try doWhile.condition.genTACInstructions(instructions, allocator);
+                const jmpIfNotZero = try allocator.create(tac.Instruction);
+                jmpIfNotZero.* = tac.Instruction{ .JumpIfNotZero = tac.Jmp{
+                    .condition = condition,
+                    .target = doWhileStartLabel,
+                } };
+                try instructions.append(jmpIfNotZero);
+                const doWhileEndLabel = try std.fmt.allocPrint(allocator, "loop_end_{d}", .{doWhile.loopId});
+                const doWhileEnd = try allocator.create(tac.Instruction);
+                doWhileEnd.* = .{
+                    .Label = doWhileEndLabel,
+                };
+                try instructions.append(doWhileEnd);
+            },
+            .While => |whileStmt| {
+                // INFO: The first optimization: This should be an if condition
+                // followed by the do while loop assembly to save jumps
+                const conditionOfIf = try whileStmt.condition.genTACInstructions(instructions, allocator);
+                const whileEndLabelName = try std.fmt.allocPrint(allocator, "loop_end_{d}", .{whileStmt.loopId});
+                const initJumpIfZero = try allocator.create(tac.Instruction);
+                initJumpIfZero.* = tac.Instruction{ .JumpIfZero = tac.Jmp{
+                    .condition = conditionOfIf,
+                    .target = whileEndLabelName,
+                } };
+                try instructions.append(initJumpIfZero);
+                const whileStartLabelName = try std.fmt.allocPrint(allocator, "loop_start_{d}", .{whileStmt.loopId});
+                const whileStartLabel = try allocator.create(tac.Instruction);
+                whileStartLabel.* = tac.Instruction{
+                    .Label = whileStartLabelName,
+                };
+                try instructions.append(whileStartLabel);
+                try whileStmt.body.genTACInstructions(instructions, allocator);
+                const conditionForInnerDoWhile = try whileStmt.condition.genTACInstructions(instructions, allocator);
+                const jmpToWhileStart = try allocator.create(tac.Instruction);
+                jmpToWhileStart.* = tac.Instruction{ .JumpIfNotZero = .{
+                    .target = whileStartLabelName,
+                    .condition = conditionForInnerDoWhile,
+                } };
+                try instructions.append(jmpToWhileStart);
+                const whileEndLabel = try allocator.create(tac.Instruction);
+                whileEndLabel.* = tac.Instruction{
+                    .Label = whileEndLabelName,
+                };
+                try instructions.append(whileEndLabel);
+            },
+            .For => |forStmt| {
+                const forStartLabelName = try std.fmt.allocPrint(allocator, "loop_start_{d}", .{forStmt.loopId});
+                const forEndLabelName = try std.fmt.allocPrint(allocator, "loop_end_{d}", .{forStmt.loopId});
+                try forStmt.init.genTACInstructions(instructions, allocator);
+                const forStart = try allocator.create(tac.Instruction);
+                forStart.* = .{
+                    .Label = forStartLabelName,
+                };
+                try instructions.append(forStart);
+                if (forStmt.condition) |condition| {
+                    const condVal = try condition.genTACInstructions(instructions, allocator);
+                    const jmpIfZero = try allocator.create(tac.Instruction);
+                    jmpIfZero.* = .{ .JumpIfZero = .{
+                        .condition = condVal,
+                        .target = forEndLabelName,
+                    } };
+                    try instructions.append(jmpIfZero);
+                }
+                try forStmt.body.genTACInstructions(instructions, allocator);
+                if (forStmt.post) |post|
+                    _ = try post.genTACInstructions(instructions, allocator);
+
+                const uncondJumpToStart = try allocator.create(tac.Instruction);
+                uncondJumpToStart.* = .{
+                    .Jump = forStartLabelName,
+                };
+                try instructions.append(uncondJumpToStart);
+                const forEnd = try allocator.create(tac.Instruction);
+                forEnd.* = .{
+                    .Label = forEndLabelName,
+                };
+                try instructions.append(forEnd);
+            },
         }
     }
 };
@@ -263,6 +405,11 @@ pub fn prettyPrintAST(node: Node, writer: anytype, depth: usize) !void {
                 .Label => |label| try writer.print("{s} Label: {s}{s}", .{ colors.cyan, label, colors.reset }),
                 .Goto => |goto| try writer.print("{s} Goto: {s}{s}", .{ colors.cyan, goto, colors.reset }),
                 .Compound => try writer.print("{s} Compound: TODO{s}", .{ colors.cyan, colors.reset }),
+                .For => try writer.print("{s} For: TODO{s}", .{ colors.cyan, colors.reset }),
+                .DoWhile => try writer.print("{s} DoWhile: TODO{s}", .{ colors.cyan, colors.reset }),
+                .While => try writer.print("{s} While: TODO{s}", .{ colors.cyan, colors.reset }),
+                .Break => try writer.print("{s} Break: TODO{s}", .{ colors.cyan, colors.reset }),
+                .Continue => try writer.print("{s} Continue: TODO{s}", .{ colors.cyan, colors.reset }),
             }
         },
         .Expression => |expr| {
@@ -588,69 +735,147 @@ pub const Expression = union(ExpressionType) {
     }
 };
 
-pub fn expressionScopeVariableResolve(expression: *Expression, currentScope: u32, allocator: std.mem.Allocator) MemoryError!void {
+pub fn expressionScopeVariableResolve(expression: *Expression, currentScope: u32, allocator: std.mem.Allocator, varMap: *std.StringHashMap(u32)) MemoryError!void {
     switch (expression.*) {
         .Integer => {},
         .Identifier => |identifier| {
-            expression.Identifier =
-                try std.fmt.allocPrint(allocator, "{s}{d}", .{ identifier, currentScope });
+            if (varMap.contains(identifier)) {
+                std.log.warn("Modified {s} in next scope\n", .{identifier});
+                expression.Identifier = try std.fmt.allocPrint(allocator, "{s}{d}", .{ identifier, varMap.get(identifier).? });
+            }
         },
         .Assignment => |assignment| {
-            try expressionScopeVariableResolve(assignment.lhs, currentScope, allocator);
-            try expressionScopeVariableResolve(assignment.rhs, currentScope, allocator);
+            try expressionScopeVariableResolve(assignment.lhs, currentScope, allocator, varMap);
+            try expressionScopeVariableResolve(assignment.rhs, currentScope, allocator, varMap);
         },
         .Ternary => |ternary| {
-            try expressionScopeVariableResolve(ternary.condition, currentScope, allocator);
-            try expressionScopeVariableResolve(ternary.lhs, currentScope, allocator);
-            try expressionScopeVariableResolve(ternary.rhs, currentScope, allocator);
+            try expressionScopeVariableResolve(ternary.condition, currentScope, allocator, varMap);
+            try expressionScopeVariableResolve(ternary.lhs, currentScope, allocator, varMap);
+            try expressionScopeVariableResolve(ternary.rhs, currentScope, allocator, varMap);
         },
         .Unary => |unary| {
-            try expressionScopeVariableResolve(unary.exp, currentScope, allocator);
+            try expressionScopeVariableResolve(unary.exp, currentScope, allocator, varMap);
         },
         .Binary => |binary| {
-            try expressionScopeVariableResolve(binary.lhs, currentScope, allocator);
-            try expressionScopeVariableResolve(binary.rhs, currentScope, allocator);
+            try expressionScopeVariableResolve(binary.lhs, currentScope, allocator, varMap);
+            try expressionScopeVariableResolve(binary.rhs, currentScope, allocator, varMap);
         },
     }
 }
 
-pub fn blockStatementScopeVariableResolve(blockItem: *BlockItem, currentScope: u32, allocator: std.mem.Allocator) MemoryError!void {
+pub fn blockStatementScopeVariableResolve(blockItem: *BlockItem, currentScope: u32, allocator: std.mem.Allocator, varMap: *std.StringHashMap(u32)) MemoryError!void {
     switch (blockItem.*) {
         .Statement => |statement| {
-            try statementScopeVariableResolve(statement, currentScope, allocator);
+            try statementScopeVariableResolve(statement, currentScope, allocator, varMap);
         },
         .Declaration => |decl| {
+            std.log.warn("Putting {s} scope: {d}", .{ decl.name, currentScope });
+            try varMap.put(decl.name, currentScope);
             blockItem.Declaration.name = try std.fmt.allocPrint(allocator, "{s}{d}", .{ decl.name, currentScope });
         },
     }
 }
-pub fn statementScopeVariableResolve(statement: *Statement, currentScope: u32, allocator: std.mem.Allocator) MemoryError!void {
+pub fn statementScopeVariableResolve(statement: *Statement, currentScope: u32, allocator: std.mem.Allocator, varMap: *std.StringHashMap(u32)) MemoryError!void {
     switch (statement.*) {
         .Compound => |compound| {
             for (compound.items) |blockItemCompound| {
-                try blockStatementScopeVariableResolve(blockItemCompound, currentScope + 1, allocator);
+                try blockStatementScopeVariableResolve(blockItemCompound, currentScope + 1, allocator, varMap);
             }
         },
         .Null, .Label, .Goto => {},
         .If => |ifStmt| {
-            try expressionScopeVariableResolve(ifStmt.condition, currentScope, allocator);
-            try statementScopeVariableResolve(ifStmt.thenStmt, currentScope, allocator);
+            try expressionScopeVariableResolve(ifStmt.condition, currentScope, allocator, varMap);
+            try statementScopeVariableResolve(ifStmt.thenStmt, currentScope, allocator, varMap);
             if (ifStmt.elseStmt) |elseStmt| {
-                try statementScopeVariableResolve(elseStmt, currentScope, allocator);
+                try statementScopeVariableResolve(elseStmt, currentScope, allocator, varMap);
             }
         },
         .Return => |ret| {
-            try expressionScopeVariableResolve(ret.expression, currentScope, allocator);
+            try expressionScopeVariableResolve(ret.expression, currentScope, allocator, varMap);
         },
         .Expression => |expression| {
-            try expressionScopeVariableResolve(expression, currentScope, allocator);
+            try expressionScopeVariableResolve(expression, currentScope, allocator, varMap);
         },
+        .DoWhile => |doWhile| {
+            try expressionScopeVariableResolve(doWhile.condition, currentScope, allocator, varMap);
+            try statementScopeVariableResolve(doWhile.body, currentScope, allocator, varMap);
+        },
+        .While => |whileStmt| {
+            try expressionScopeVariableResolve(whileStmt.condition, currentScope, allocator, varMap);
+            try statementScopeVariableResolve(whileStmt.body, currentScope, allocator, varMap);
+        },
+        .For => |forStmt| {
+            if (std.mem.eql(u8, @tagName(forStmt.init.*), "Expression")) {
+                try expressionScopeVariableResolve(forStmt.init.Expression, currentScope, allocator, varMap);
+            }
+            if (forStmt.condition) |condition|
+                try expressionScopeVariableResolve(condition, currentScope, allocator, varMap);
+            if (forStmt.post) |post|
+                try expressionScopeVariableResolve(post, currentScope, allocator, varMap);
+            try statementScopeVariableResolve(forStmt.body, currentScope, allocator, varMap);
+        },
+        .Break => {},
+        .Continue => {},
     }
 }
 
 pub fn scopeVariableResolutionPass(program: *Program, allocator: std.mem.Allocator) MemoryError!void {
+    var varMap = std.StringHashMap(u32).init(allocator);
     for (program.function.blockItems.items) |blockItem| {
-        try blockStatementScopeVariableResolve(blockItem, 0, allocator);
+        try blockStatementScopeVariableResolve(blockItem, 0, allocator, &varMap);
+    }
+}
+
+pub fn statementLoopLabelPass(statement: *Statement, loopId: u32, allocator: std.mem.Allocator) MemoryError!void {
+    switch (statement.*) {
+        .For => |forStmt| {
+            const newLoopId = tempGen.genId();
+            statement.For.loopId = newLoopId;
+            try statementLoopLabelPass(forStmt.body, loopId, allocator);
+        },
+        .Compound => |blockItems| {
+            for (blockItems.items) |blockItem| {
+                try blockItemLoopLabelPass(blockItem, loopId, allocator);
+            }
+        },
+        .While => |whileStmt| {
+            const newLoopId = tempGen.genId();
+            statement.While.loopId = newLoopId;
+            try statementLoopLabelPass(whileStmt.body, newLoopId, allocator);
+        },
+        .DoWhile => |doWhile| {
+            const newLoopId = tempGen.genId();
+            statement.DoWhile.loopId = newLoopId;
+            try statementLoopLabelPass(doWhile.body, newLoopId, allocator);
+        },
+        .Break => {
+            statement.Break = loopId;
+        },
+        .Continue => {
+            statement.Continue = loopId;
+        },
+        .If => |ifStmt| {
+            try statementLoopLabelPass(ifStmt.thenStmt, loopId, allocator);
+            if (ifStmt.elseStmt) |elseStmt| {
+                try statementLoopLabelPass(elseStmt, loopId, allocator);
+            }
+        },
+        else => {},
+    }
+}
+
+pub fn blockItemLoopLabelPass(blockItem: *BlockItem, loopId: u32, allocator: std.mem.Allocator) MemoryError!void {
+    switch (blockItem.*) {
+        .Statement => |statement| {
+            try statementLoopLabelPass(statement, loopId, allocator);
+        },
+        .Declaration => {},
+    }
+}
+
+pub fn loopLabelPass(program: *Program, allocator: std.mem.Allocator) MemoryError!void {
+    for (program.function.blockItems.items) |blockItem| {
+        try blockItemLoopLabelPass(blockItem, 0, allocator);
     }
 }
 
@@ -753,3 +978,37 @@ test "test tac generation for ternary" {
     //    std.log.warn("Inst at {}: {any}\n",.{i,inst});
     //}
 }
+
+test "test while and do while" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const programStr =
+        \\ int main(){
+        \\     int x = 0;
+        \\     while(x < 5) x = x + 1;
+        \\     do x = x + 1; while(x < 10);
+        \\     return x;
+        \\ }
+    ;
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    const program = try p.parseProgram();
+    _ = try program.genTAC(allocator);
+    //for (instructions.items, 0..) |inst, i| {
+    //    std.log.warn("Inst at {}: {any}\n", .{ i, inst });
+    //}
+}
+
+//test "test break with while" {
+//
+//        \\ int main(){
+//        \\     int x = 0;
+//        \\     while(x < 5){
+//        \\         if(x == 3) break;
+//        \\         x = x + 1;
+//        \\     }
+//        \\     do x = x + 1; while(x < 10);
+//        \\     return x;
+//        \\ }
+//}

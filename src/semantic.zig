@@ -73,6 +73,26 @@ pub fn resolveStatement(statement: *AST.Statement, varMap: *std.StringHashMap([]
                 try resolveBlockItem(blockItemInCompound, varMap);
             }
         },
+        .For => |forStmt| {
+            if (std.mem.eql(u8, @tagName(forStmt.init.*), "Expression")) {
+                try resolveExpression(forStmt.init.Expression, varMap);
+            }
+            if (forStmt.condition) |condition|
+                try resolveExpression(condition, varMap);
+            if (forStmt.post) |post|
+                try resolveExpression(post, varMap);
+            try resolveStatement(forStmt.body, varMap);
+        },
+        .DoWhile => |doWhile| {
+            try resolveExpression(doWhile.condition, varMap);
+            try resolveStatement(doWhile.body, varMap);
+        },
+        .While => |whileStmt| {
+            try resolveExpression(whileStmt.condition, varMap);
+            try resolveStatement(whileStmt.body, varMap);
+        },
+        .Break => {},
+        .Continue => {},
     }
 }
 
@@ -91,7 +111,6 @@ pub fn resolveBlockItem(blockItem: *AST.BlockItem, varMap: *std.StringHashMap([]
 }
 
 pub fn varResolutionPass(allocator: std.mem.Allocator, node: *AST.Program) SemanticError!void {
-    // Takes in a program node traverses the AST and replaces the variables there with temps
     const varMap = std.StringHashMap([]u8).init(allocator);
     for (node.function.blockItems.items) |blockItem| {
         try resolveBlockItem(blockItem, @constCast(&varMap));
