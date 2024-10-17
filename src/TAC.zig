@@ -507,8 +507,8 @@ test "tac generation - if" {
     const program = try p.parseProgram();
     const instructions = try program.genTAC(allocator);
     var asmInstructions = std.ArrayList(*assembly.Instruction).init(allocator);
-    std.log.warn("second declaration: {any}\n", .{program.function.blockItems.items[1].Declaration});
-    std.log.warn("second declaration more info: {any} \n", .{program.function.blockItems.items[1].Declaration.expression.?.Assignment});
+    std.log.warn("second declaration: {any}\n", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[1].Declaration});
+    std.log.warn("second declaration more info: {any} \n", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[1].Declaration.expression.?.Assignment});
 
     for (instructions.items) |inst| {
         std.log.warn("inst: {any}\n", .{inst});
@@ -539,8 +539,6 @@ test "tac generation - if nested" {
     const program = try p.parseProgram();
     const instructions = try program.genTAC(allocator);
     var asmInstructions = std.ArrayList(*assembly.Instruction).init(allocator);
-    std.log.warn("second declaration: {any}\n", .{program.function.blockItems.items[1].Declaration});
-    std.log.warn("second declaration more info: {any} \n", .{program.function.blockItems.items[1].Declaration.expression.?.Assignment});
 
     for (instructions.items) |inst| {
         std.log.warn("inst: {any}\n", .{inst});

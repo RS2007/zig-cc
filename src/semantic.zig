@@ -111,9 +111,19 @@ pub fn resolveBlockItem(blockItem: *AST.BlockItem, varMap: *std.StringHashMap([]
 }
 
 pub fn varResolutionPass(allocator: std.mem.Allocator, node: *AST.Program) SemanticError!void {
-    const varMap = std.StringHashMap([]u8).init(allocator);
-    for (node.function.blockItems.items) |blockItem| {
-        try resolveBlockItem(blockItem, @constCast(&varMap));
+    // TODO: Support for global variables
+    for (node.externalDecls.items) |externalDecl| {
+        switch (externalDecl.*) {
+            .FunctionDecl => |functionDecl| {
+                const varMap = std.StringHashMap([]u8).init(allocator);
+                for (functionDecl.blockItems.items) |blockItem| {
+                    try resolveBlockItem(blockItem, @constCast(&varMap));
+                }
+            },
+            .VarDeclaration => {
+                unreachable();
+            },
+        }
     }
 }
 

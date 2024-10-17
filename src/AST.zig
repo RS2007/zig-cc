@@ -52,6 +52,17 @@ pub const ExternalDeclType = enum {
 pub const ExternalDecl = union(ExternalDeclType) {
     FunctionDecl: *FunctionDef,
     VarDeclaration: *Declaration,
+    const Self = @This();
+    pub fn genTAC(externalDecl: *Self, instructions: *std.ArrayList(*tac.Instruction), allocator: std.mem.Allocator) CodegenError!void {
+        switch (externalDecl.*) {
+            .FunctionDecl => |functionDecl| {
+                try functionDecl.genTAC(instructions, allocator);
+            },
+            .VarDeclaration => {
+                unreachable();
+            },
+        }
+    }
 };
 
 pub const BlockItemType = enum {
@@ -136,7 +147,9 @@ pub const Program = struct {
 
     pub fn genTAC(program: *Program, allocator: std.mem.Allocator) CodegenError!std.ArrayList(*tac.Instruction) {
         var instructions = std.ArrayList(*tac.Instruction).init(allocator);
-        try program.externalDecls.genTAC(&instructions, allocator);
+        for (program.externalDecls.items) |externalDecl| {
+            try externalDecl.genTAC(&instructions, allocator);
+        }
         return instructions;
     }
 };
@@ -366,6 +379,7 @@ pub const Statement = union(StatementType) {
 };
 
 pub fn prettyPrintAST(node: Node, writer: anytype, depth: usize) !void {
+    // TODO: out of the loop, support it with multiple functions
     const colors = struct {
         const reset = "\x1b[0m";
         const bold = "\x1b[1m";
@@ -895,7 +909,7 @@ pub fn blockItemLoopLabelPass(blockItem: *BlockItem, loopId: u32, allocator: std
 
 pub fn loopLabelPass(program: *Program, allocator: std.mem.Allocator) MemoryError!void {
     for (program.externalDecls.items) |externalDecl| {
-        switch (externalDecl) {
+        switch (externalDecl.*) {
             .VarDeclaration => {
                 unreachable();
             },
@@ -907,9 +921,6 @@ pub fn loopLabelPass(program: *Program, allocator: std.mem.Allocator) MemoryErro
                 }
             },
         }
-    }
-    for (program.externalDecls.blockItems.items) |blockItem| {
-        try blockItemLoopLabelPass(blockItem, 0, allocator);
     }
 }
 
@@ -940,7 +951,7 @@ test "Negation and bitwise complement codegeneration" {
     const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
     var p = try parser.Parser.init(allocator, l);
     const program = try p.parseProgram();
-    std.log.warn("{}", .{program.externalDecls.blockItems.items[0].Statement.Return.expression.Unary.exp});
+    std.log.warn("{}", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[0].Statement.Return.expression.Unary.exp});
 }
 
 test "Declarations" {
@@ -952,9 +963,9 @@ test "Declarations" {
     var p = try parser.Parser.init(allocator, l);
     const program = try p.parseProgram();
     try semantic.varResolutionPass(allocator, program);
-    const stdout = std.io.getStdOut().writer();
-    try prettyPrintAST(Node{ .Program = program }, stdout, 0);
-    std.log.warn("{any}", .{program.externalDecls.blockItems.items[2].Statement.Return.expression.Unary.exp});
+    //const stdout = std.io.getStdOut().writer();
+    //try prettyPrintAST(Node{ .Program = program }, stdout, 0);
+    std.log.warn("{any}", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[2].Statement.Return.expression.Unary.exp});
 }
 
 test "codegen TAC" {
