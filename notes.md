@@ -140,3 +140,9 @@ in the codegeneration itself.
 - update
 - unconditional jump to forStart
 - label forLoopEnd
+
+## Support for functions in the parser
+* Can I deviate from the book here?  
+    * Have a program with external declaration, either variable declaration or a function declaration/definition
+    * Compound statements have BlockStatement 
+

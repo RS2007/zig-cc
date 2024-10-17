@@ -38,9 +38,20 @@ const TempGenerator = struct {
 pub const ASTType = enum {
     Program,
     FunctionDef,
+    ExternalDecl,
     BlockItem,
     Statement,
     Expression,
+};
+
+pub const ExternalDeclType = enum {
+    FunctionDecl,
+    VarDeclaration,
+};
+
+pub const ExternalDecl = union(ExternalDeclType) {
+    FunctionDecl: *FunctionDef,
+    VarDeclaration: *Declaration,
 };
 
 pub const BlockItemType = enum {
@@ -121,11 +132,11 @@ pub const ExpressionType = enum {
 };
 
 pub const Program = struct {
-    function: FunctionDef,
+    externalDecls: std.ArrayList(*ExternalDecl),
 
     pub fn genTAC(program: *Program, allocator: std.mem.Allocator) CodegenError!std.ArrayList(*tac.Instruction) {
         var instructions = std.ArrayList(*tac.Instruction).init(allocator);
-        try program.function.genTAC(&instructions, allocator);
+        try program.externalDecls.genTAC(&instructions, allocator);
         return instructions;
     }
 };
@@ -372,7 +383,7 @@ pub fn prettyPrintAST(node: Node, writer: anytype, depth: usize) !void {
     switch (node) {
         .Program => |program| {
             try writer.print("\n{s}Program{s}\n", .{ colors.red, colors.reset });
-            try prettyPrintAST(Node{ .FunctionDef = &program.function }, writer, depth + 1);
+            try prettyPrintAST(Node{ .FunctionDef = &program.externalDecls }, writer, depth + 1);
         },
         .FunctionDef => |func| {
             try writer.print("{s}Function: {s}{s}\n", .{ colors.green, func.name, colors.reset });
@@ -820,9 +831,18 @@ pub fn statementScopeVariableResolve(statement: *Statement, currentScope: u32, a
 }
 
 pub fn scopeVariableResolutionPass(program: *Program, allocator: std.mem.Allocator) MemoryError!void {
-    var varMap = std.StringHashMap(u32).init(allocator);
-    for (program.function.blockItems.items) |blockItem| {
-        try blockStatementScopeVariableResolve(blockItem, 0, allocator, &varMap);
+    for (program.externalDecls.items) |externalDecl| {
+        switch (externalDecl.*) {
+            .FunctionDecl => |functionDecl| {
+                var varMap = std.StringHashMap(u32).init(allocator);
+                for (functionDecl.blockItems.items) |blockItem| {
+                    try blockStatementScopeVariableResolve(blockItem, 0, allocator, &varMap);
+                }
+            },
+            .VarDeclaration => {
+                unreachable();
+            },
+        }
     }
 }
 
@@ -874,7 +894,21 @@ pub fn blockItemLoopLabelPass(blockItem: *BlockItem, loopId: u32, allocator: std
 }
 
 pub fn loopLabelPass(program: *Program, allocator: std.mem.Allocator) MemoryError!void {
-    for (program.function.blockItems.items) |blockItem| {
+    for (program.externalDecls.items) |externalDecl| {
+        switch (externalDecl) {
+            .VarDeclaration => {
+                unreachable();
+            },
+            .FunctionDecl => |functionDecl| {
+                for (functionDecl.blockItems.items) |blockItem| {
+                    // TODO: Fine for testing basic functionality, but counter to be a pointer
+                    // to integer and should be mutated by these label function calls
+                    try blockItemLoopLabelPass(blockItem, 0, allocator);
+                }
+            },
+        }
+    }
+    for (program.externalDecls.blockItems.items) |blockItem| {
         try blockItemLoopLabelPass(blockItem, 0, allocator);
     }
 }
@@ -906,7 +940,7 @@ test "Negation and bitwise complement codegeneration" {
     const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
     var p = try parser.Parser.init(allocator, l);
     const program = try p.parseProgram();
-    std.log.warn("{}", .{program.function.blockItems.items[0].Statement.Return.expression.Unary.exp});
+    std.log.warn("{}", .{program.externalDecls.blockItems.items[0].Statement.Return.expression.Unary.exp});
 }
 
 test "Declarations" {
@@ -920,7 +954,7 @@ test "Declarations" {
     try semantic.varResolutionPass(allocator, program);
     const stdout = std.io.getStdOut().writer();
     try prettyPrintAST(Node{ .Program = program }, stdout, 0);
-    std.log.warn("{any}", .{program.function.blockItems.items[2].Statement.Return.expression.Unary.exp});
+    std.log.warn("{any}", .{program.externalDecls.blockItems.items[2].Statement.Return.expression.Unary.exp});
 }
 
 test "codegen TAC" {
