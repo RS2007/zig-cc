@@ -62,8 +62,17 @@ pub const Parser = struct {
             return ParserError.Unimplemented;
         }
         const fnNameToken = try self.l.nextToken(self.allocator);
+        var argList = std.ArrayList(*AST.Arg).init(self.allocator);
         std.debug.assert(fnNameToken.type == lexer.TokenType.IDENTIFIER);
         std.debug.assert((try self.l.nextToken(self.allocator)).type == lexer.TokenType.LPAREN);
+        // TODO: parse function arguments
+        while ((try self.l.peekToken(self.allocator)).?.type != lexer.TokenType.RPAREN) {
+            const arg = try self.parseArg();
+            try argList.append(arg);
+            if ((try self.l.peekToken(self.allocator)).?.type == lexer.TokenType.COMMA) {
+                _ = try self.l.nextToken(self.allocator);
+            }
+        }
         std.debug.assert((try self.l.nextToken(self.allocator)).type == lexer.TokenType.RPAREN);
         std.debug.assert((try self.l.nextToken(self.allocator)).type == lexer.TokenType.LBRACE);
         const blockItems = std.ArrayList(*AST.BlockItem).init(self.allocator);
@@ -73,6 +82,7 @@ pub const Parser = struct {
         functionDef.* = .{
             .name = self.l.buffer[fnNameToken.start .. fnNameToken.end + 1],
             .blockItems = blockItems,
+            .args = argList,
         };
         functionDecl.* = .{
             .FunctionDecl = functionDef,
@@ -86,6 +96,31 @@ pub const Parser = struct {
         const rbrace = try self.l.nextToken(self.allocator);
         std.debug.assert(rbrace.type == lexer.TokenType.RBRACE);
         return functionDecl;
+    }
+
+    pub fn parseArg(self: *Parser) ParserError!*AST.Arg {
+        const hasPeeked = try self.l.peekToken(self.allocator);
+        std.debug.assert(hasPeeked != null);
+        switch (hasPeeked.?.type) {
+            .INT_TYPE => {
+                const arg = try self.allocator.create(AST.Arg);
+                _ = try self.l.nextToken(self.allocator);
+                const argName = try self.l.nextToken(self.allocator);
+                arg.* = .{ .NonVoidArg = .{ .type = AST.Type.Integer, .identifier = self.l.buffer[argName.start .. argName.end + 1] } };
+                return arg;
+            },
+            //.VOID => {
+            //    const arg = self.allocator.create(AST.Arg);
+            //    arg.* = .{
+            //        .Void = {},
+            //    };
+            //    return arg;
+            //},
+            else => {
+                std.log.warn("Unexpected peeked token in parseArg: {any}\n", .{hasPeeked});
+            },
+        }
+        return ParserError.Unexpected;
     }
 
     pub fn parseBlockItem(self: *Parser) ParserError!*AST.BlockItem {
@@ -178,6 +213,7 @@ pub const Parser = struct {
         switch ((try self.l.peekToken(self.allocator)).?.type) {
             .RETURN => {
                 _ = try self.l.nextToken(self.allocator);
+                std.log.warn("In return\n", .{});
                 const expr = try self.parseExpression(0);
                 try self.logger.info("Expr obtained from return: {any} and {any}\n", .{ expr, if (std.meta.activeTag(expr.*) == AST.ExpressionType.Unary) expr.Unary.exp else null });
                 const retStmt = try self.allocator.create(AST.Statement);
@@ -412,6 +448,29 @@ pub const Parser = struct {
                 return exp;
             },
             .IDENTIFIER => {
+                const peekedTwo = try self.l.peekTwoTokens(self.allocator);
+                if (peekedTwo[1].?.type == lexer.TokenType.LPAREN) {
+                    //Function Call
+                    const fnName = self.l.buffer[peekedTwo[0].?.start .. peekedTwo[0].?.end + 1];
+                    var args = std.ArrayList(*AST.Expression).init(self.allocator);
+                    _ = try self.l.nextToken(self.allocator);
+                    _ = try self.l.nextToken(self.allocator);
+                    while ((try self.l.peekToken(self.allocator)).?.type != lexer.TokenType.RPAREN) {
+                        const expr = try self.parseExpression(0);
+                        try args.append(expr);
+                        if ((try self.l.peekToken(self.allocator)).?.type == lexer.TokenType.COMMA) {
+                            _ = try self.l.nextToken(self.allocator);
+                        }
+                    }
+                    _ = try self.l.nextToken(self.allocator);
+                    const functionCall = try self.allocator.create(AST.Expression);
+                    functionCall.* = .{ .FunctionCall = .{
+                        .name = fnName,
+                        .args = args,
+                    } };
+                    return functionCall;
+                }
+                // Identifier
                 const currToken = try self.l.nextToken(self.allocator);
                 const identifier = try self.allocator.create(AST.Expression);
                 identifier.* = AST.Expression{ .Identifier = self.l.buffer[currToken.start .. currToken.end + 1] };
@@ -745,4 +804,31 @@ test "test for statement" {
     std.log.warn("for condition:{any} ", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[1].Statement.For.condition});
     std.log.warn("for post:{any} ", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[1].Statement.For.post});
     std.log.warn("for statement:{any} ", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[1].Statement.For.body});
+}
+
+test "parse multiple functions" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const programStr =
+        \\ int add(int x, int y) { return x+y;}
+        \\ int main(){
+        \\     return add(2,3);
+        \\ }
+    ;
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try Parser.init(allocator, l);
+    const program = try p.parseProgram();
+    try AST.scopeVariableResolutionPass(program, allocator);
+    std.log.warn("Add function : {s}, body: {any}\n", .{
+        program.externalDecls.items[0].FunctionDecl.name,
+        program.externalDecls.items[0].FunctionDecl.blockItems.items[0].Statement.Return,
+    });
+    std.log.warn("Main function : {s}, body: {any}\n", .{
+        program.externalDecls.items[1].FunctionDecl.name,
+        program.externalDecls.items[1].FunctionDecl.blockItems.items[0].Statement.Return.expression.FunctionCall,
+    });
+    for (program.externalDecls.items[1].FunctionDecl.blockItems.items[0].Statement.Return.expression.FunctionCall.args.items) |arg| {
+        std.log.warn("Arg is {any}\n", .{arg});
+    }
 }

@@ -140,6 +140,7 @@ pub const ExpressionType = enum {
     Ternary,
     Identifier,
     Assignment,
+    FunctionCall,
 };
 
 pub const Program = struct {
@@ -156,8 +157,28 @@ pub const Program = struct {
 pub const Return = struct {
     expression: *Expression,
 };
+
+pub const Type = enum { Integer };
+
+pub const NonVoidArg = struct {
+    type: Type,
+    identifier: []u8,
+};
+
+// INFO: Might be a bad idea, maybe look into this later?
+pub const ArgType = enum {
+    Void,
+    NonVoidArg,
+};
+
+pub const Arg = union(ArgType) {
+    Void: void,
+    NonVoidArg: NonVoidArg,
+};
+
 pub const FunctionDef = struct {
     name: []u8,
+    args: std.ArrayList(*Arg),
     blockItems: std.ArrayList(*BlockItem),
 
     pub fn genTAC(functionDef: FunctionDef, instructions: *std.ArrayList(*tac.Instruction), allocator: std.mem.Allocator) CodegenError!void {
@@ -529,6 +550,11 @@ pub const Assignment = struct {
     rhs: *Expression,
 };
 
+pub const FunctionCall = struct {
+    name: []u8,
+    args: std.ArrayList(*Expression),
+};
+
 pub const Expression = union(ExpressionType) {
     Integer: u32,
     Unary: Unary,
@@ -536,6 +562,7 @@ pub const Expression = union(ExpressionType) {
     Ternary: Ternary,
     Identifier: []u8,
     Assignment: Assignment,
+    FunctionCall: FunctionCall,
 
     pub fn genTACInstructions(expression: *Expression, instructions: *std.ArrayList(*tac.Instruction), allocator: std.mem.Allocator) CodegenError!*tac.Val {
         switch (expression.*) {
@@ -784,6 +811,11 @@ pub fn expressionScopeVariableResolve(expression: *Expression, currentScope: u32
         .Binary => |binary| {
             try expressionScopeVariableResolve(binary.lhs, currentScope, allocator, varMap);
             try expressionScopeVariableResolve(binary.rhs, currentScope, allocator, varMap);
+        },
+        .FunctionCall => |fnCall| {
+            for (fnCall.args.items) |arg| {
+                try expressionScopeVariableResolve(arg, currentScope, allocator, varMap);
+            }
         },
     }
 }
