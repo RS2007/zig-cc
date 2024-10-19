@@ -162,3 +162,17 @@ in the codegeneration itself.
 
 - genTAC implementation in all the tests should be breaking now
 
+
+## Function call in assembly
+
+- Handling Function: 
+    - pushing rbp
+    - moving rbp to rsp
+    - stack sub for local variables
+    - move arguments to the specific registers
+    - How do arguments get resolved?
+    - assign args place in the stack during the resolve pass
+    - leaveq and retq in the end
+- Handling FunctionCall
+    - move arguments to the specific registers
+    - call to the function

@@ -16,11 +16,22 @@ pub const Program = struct {
     pub fn codegen(self: *Program, allocator: std.mem.Allocator) !std.ArrayList(*assembly.Function) {
         var functions = std.ArrayList(*assembly.Function).init(allocator);
         for (self.function.items) |item| {
+            std.log.warn("We are at {s} and args length: {d}\n", .{ item.name, item.args.items.len });
             const func = try allocator.create(assembly.Function);
             func.* = .{
                 .name = item.name,
                 .instructions = std.ArrayList(*assembly.Instruction).init(allocator),
+                .args = item.args,
             };
+            const registers = [_]assembly.Reg{ assembly.Reg.EDI, assembly.Reg.ESI, assembly.Reg.EDX, assembly.Reg.ECX, assembly.Reg.R8, assembly.Reg.R9 };
+            for (item.args.items, 0..) |arg, i| {
+                const movInstructoin = try allocator.create(assembly.Instruction);
+                movInstructoin.* = assembly.Instruction{ .Mov = assembly.MovInst{
+                    .src = assembly.Operand{ .Reg = registers[i] },
+                    .dest = assembly.Operand{ .Pseudo = arg },
+                } };
+                try func.instructions.append(movInstructoin);
+            }
             for (item.instructions.items) |instruction| {
                 try instruction.codegen(&func.instructions, allocator);
             }
@@ -333,9 +344,41 @@ pub const Instruction = union(InstructionType) {
                 };
                 try instructions.append(label);
             },
-            .FunctionCall => {
-                std.log.warn("Function call\n", .{});
-                unreachable();
+            .FunctionCall => |fnCall| {
+                const registers = [_]assembly.Reg{ assembly.Reg.EDI, assembly.Reg.ESI, assembly.Reg.EDX, assembly.Reg.ECX, assembly.Reg.R8, assembly.Reg.R9 };
+                if (fnCall.args.items.len < 6) {
+                    for (fnCall.args.items, 0..) |arg, i| {
+                        const movArgToReg = try allocator.create(assembly.Instruction);
+                        const assemblyArg = try arg.codegen(allocator);
+                        movArgToReg.* = assembly.Instruction{
+                            .Mov = assembly.MovInst{
+                                .src = assemblyArg,
+                                .dest = assembly.Operand{ .Reg = registers[i] },
+                            },
+                        };
+                        try instructions.append(movArgToReg);
+                    }
+                    const call = try allocator.create(assembly.Instruction);
+                    call.* = assembly.Instruction{
+                        .FnCall = .{
+                            .name = fnCall.name,
+                        },
+                    };
+                    try instructions.append(call);
+                    const movReturnToReg = try allocator.create(assembly.Instruction);
+                    const asmDest = try fnCall.dest.codegen(allocator);
+                    movReturnToReg.* = assembly.Instruction{
+                        .Mov = assembly.MovInst{
+                            .dest = asmDest,
+                            .src = assembly.Operand{ .Reg = assembly.Reg.EAX },
+                        },
+                    };
+                    try instructions.append(movReturnToReg);
+                } else {
+                    // TODO: People should be taxed for using more than six
+                    // arguments
+                    unreachable();
+                }
             },
         }
     }
@@ -916,12 +959,13 @@ test "multiple functions and call" {
     const program = try p.parseProgram();
     try ast.scopeVariableResolutionPass(program, allocator);
     try ast.loopLabelPass(program, allocator);
-    const maybeInstructions = for ((try program.genTAC(allocator)).function.items) |function| {
-        if (std.mem.eql(u8, function.name, "main")) break function.instructions;
-    } else null;
-    const instructions = maybeInstructions.?;
-    std.log.warn("Multiple functions and call: {any}\n", .{instructions.items[0]});
-    std.log.warn("This: {any}\n", .{(try (try program.genTAC(allocator)).codegen(allocator))});
+    const asmFunctions = try (try program.genTAC(allocator)).codegen(allocator);
+    for (asmFunctions.items) |function| {
+        try assembly.replacePseudoRegs(function, allocator);
+        const fixedAsmInstructions = try assembly.fixupInstructions(&function.instructions, allocator);
+        function.instructions = fixedAsmInstructions;
+        std.log.warn("{s}", .{(try function.stringify(allocator))});
+    }
     //try assembly.replacePseudoRegs(&asmInstructions, allocator);
     //const fixedAsmInstructions = try assembly.fixupInstructions(&asmInstructions, allocator);
     //std.log.warn("POST PSEUDO REPLACEMENT AND STACK TO STACK MOVES", .{});

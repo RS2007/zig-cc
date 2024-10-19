@@ -64,6 +64,9 @@ pub const ExternalDecl = union(ExternalDeclType) {
                     .args = std.ArrayList([]u8).init(allocator),
                     .instructions = instructions,
                 };
+                for (functionDecl.args.items) |arg| {
+                    try tacFunctionDef.args.append(arg.NonVoidArg.identifier);
+                }
                 return tacFunctionDef;
             },
             .VarDeclaration => {
@@ -125,6 +128,7 @@ pub const Declaration = struct {
 
 pub const CodegenError = error{
     OutOfMemory,
+    NoSpaceLeft,
 };
 
 pub const StatementType = enum {
@@ -796,6 +800,7 @@ pub const Expression = union(ExpressionType) {
             },
             .FunctionCall => |fnCall| {
                 const storeTemp = try allocator.create(tac.Val);
+                storeTemp.* = tac.Val{ .Variable = try tempGen.genTemp(allocator) };
                 const tacFnCall = try allocator.create(tac.Instruction);
                 var tacFnCallArgs = std.ArrayList(*tac.Val).init(allocator);
                 for (fnCall.args.items) |arg| {
@@ -806,6 +811,7 @@ pub const Expression = union(ExpressionType) {
                     .args = tacFnCallArgs,
                     .dest = storeTemp,
                 } };
+                try instructions.append(tacFnCall);
                 return storeTemp;
             },
         }
