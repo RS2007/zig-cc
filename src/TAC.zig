@@ -4,13 +4,30 @@ const assembly = @import("./Assembly.zig");
 const lexer = @import("./lexer.zig");
 const parser = @import("./parser.zig");
 
-pub const Program = struct {
-    function: FunctionDef,
-};
-
 pub const FunctionDef = struct {
     name: []u8,
+    args: std.ArrayList([]u8),
+    //TODO: should I be putting type information here? We only have ints for now, so names are fine (FOR NOW)
     instructions: std.ArrayList(*Instruction),
+};
+
+pub const Program = struct {
+    function: std.ArrayList(*FunctionDef),
+    pub fn codegen(self: *Program, allocator: std.mem.Allocator) !std.ArrayList(*assembly.Function) {
+        var functions = std.ArrayList(*assembly.Function).init(allocator);
+        for (self.function.items) |item| {
+            const func = try allocator.create(assembly.Function);
+            func.* = .{
+                .name = item.name,
+                .instructions = std.ArrayList(*assembly.Instruction).init(allocator),
+            };
+            for (item.instructions.items) |instruction| {
+                try instruction.codegen(&func.instructions, allocator);
+            }
+            try functions.append(func);
+        }
+        return functions;
+    }
 };
 
 pub const InstructionType = enum {
@@ -22,6 +39,7 @@ pub const InstructionType = enum {
     JumpIfZero,
     JumpIfNotZero,
     Label,
+    FunctionCall,
 };
 
 pub const Return = struct {
@@ -87,6 +105,12 @@ pub const Jmp = struct {
     target: []u8,
 };
 
+pub const FunctionCall = struct {
+    name: []u8,
+    args: std.ArrayList(*Val),
+    dest: *Val,
+};
+
 pub const Instruction = union(InstructionType) {
     Return: Return,
     Unary: Unary,
@@ -96,6 +120,7 @@ pub const Instruction = union(InstructionType) {
     JumpIfZero: Jmp,
     JumpIfNotZero: Jmp,
     Label: []u8,
+    FunctionCall: FunctionCall,
     pub fn codegen(instruction: *Instruction, instructions: *std.ArrayList(*assembly.Instruction), allocator: std.mem.Allocator) ast.CodegenError!void {
         switch (instruction.*) {
             .Return => |ret| {
@@ -308,6 +333,10 @@ pub const Instruction = union(InstructionType) {
                 };
                 try instructions.append(label);
             },
+            .FunctionCall => {
+                std.log.warn("Function call\n", .{});
+                unreachable();
+            },
         }
     }
 };
@@ -348,7 +377,10 @@ test "testing assembly generation - unary" {
     const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
     var p = try parser.Parser.init(allocator, l);
     var program = try p.parseProgram();
-    const instructions = try program.genTAC(allocator);
+    const maybeInstructions = for ((try program.genTAC(allocator)).function.items) |function| {
+        if (std.mem.eql(u8, function.name, "main")) break function.instructions;
+    } else null;
+    const instructions = maybeInstructions.?;
     var asmInstructions = std.ArrayList(*assembly.Instruction).init(allocator);
     for (instructions.items) |inst| {
         try inst.codegen(&asmInstructions, allocator);
@@ -379,7 +411,10 @@ test "testing assembly generation - binary" {
     const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
     var p = try parser.Parser.init(allocator, l);
     var program = try p.parseProgram();
-    const instructions = try program.genTAC(allocator);
+    const maybeInstructions = for ((try program.genTAC(allocator)).function.items) |function| {
+        if (std.mem.eql(u8, function.name, "main")) break function.instructions;
+    } else null;
+    const instructions = maybeInstructions.?;
     var asmInstructions = std.ArrayList(*assembly.Instruction).init(allocator);
     for (instructions.items) |inst| {
         try inst.codegen(&asmInstructions, allocator);
@@ -411,7 +446,10 @@ test "testing assembly generation - >= and <=" {
     var p = try parser.Parser.init(allocator, l);
     const program = try p.parseProgram();
 
-    const instructions = try program.genTAC(allocator);
+    const maybeInstructions = for ((try program.genTAC(allocator)).function.items) |function| {
+        if (std.mem.eql(u8, function.name, "main")) break function.instructions;
+    } else null;
+    const instructions = maybeInstructions.?;
     var asmInstructions = std.ArrayList(*assembly.Instruction).init(allocator);
     for (instructions.items) |inst| {
         try inst.codegen(&asmInstructions, allocator);
@@ -443,7 +481,10 @@ test "testing assembly generation - short circuiting with logical AND and OR" {
     var p = try parser.Parser.init(allocator, l);
     const program = try p.parseProgram();
 
-    const instructions = try program.genTAC(allocator);
+    const maybeInstructions = for ((try program.genTAC(allocator)).function.items) |function| {
+        if (std.mem.eql(u8, function.name, "main")) break function.instructions;
+    } else null;
+    const instructions = maybeInstructions.?;
     var asmInstructions = std.ArrayList(*assembly.Instruction).init(allocator);
     for (instructions.items) |inst| {
         try inst.codegen(&asmInstructions, allocator);
@@ -474,7 +515,10 @@ test "testing assembly generation - declarations" {
     const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
     var p = try parser.Parser.init(allocator, l);
     var program = try p.parseProgram();
-    const instructions = try program.genTAC(allocator);
+    const maybeInstructions = for ((try program.genTAC(allocator)).function.items) |function| {
+        if (std.mem.eql(u8, function.name, "main")) break function.instructions;
+    } else null;
+    const instructions = maybeInstructions.?;
     var asmInstructions = std.ArrayList(*assembly.Instruction).init(allocator);
     for (instructions.items) |inst| {
         try inst.codegen(&asmInstructions, allocator);
@@ -505,7 +549,10 @@ test "tac generation - if" {
     const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
     var p = try parser.Parser.init(allocator, l);
     const program = try p.parseProgram();
-    const instructions = try program.genTAC(allocator);
+    const maybeInstructions = for ((try program.genTAC(allocator)).function.items) |function| {
+        if (std.mem.eql(u8, function.name, "main")) break function.instructions;
+    } else null;
+    const instructions = maybeInstructions.?;
     var asmInstructions = std.ArrayList(*assembly.Instruction).init(allocator);
     std.log.warn("second declaration: {any}\n", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[1].Declaration});
     std.log.warn("second declaration more info: {any} \n", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[1].Declaration.expression.?.Assignment});
@@ -537,7 +584,10 @@ test "tac generation - if nested" {
     const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
     var p = try parser.Parser.init(allocator, l);
     const program = try p.parseProgram();
-    const instructions = try program.genTAC(allocator);
+    const maybeInstructions = for ((try program.genTAC(allocator)).function.items) |function| {
+        if (std.mem.eql(u8, function.name, "main")) break function.instructions;
+    } else null;
+    const instructions = maybeInstructions.?;
     var asmInstructions = std.ArrayList(*assembly.Instruction).init(allocator);
 
     for (instructions.items) |inst| {
@@ -567,7 +617,10 @@ test "assembly generation with ternary" {
     const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
     var p = try parser.Parser.init(allocator, l);
     const program = try p.parseProgram();
-    const instructions = try program.genTAC(allocator);
+    const maybeInstructions = for ((try program.genTAC(allocator)).function.items) |function| {
+        if (std.mem.eql(u8, function.name, "main")) break function.instructions;
+    } else null;
+    const instructions = maybeInstructions.?;
     var asmInstructions = std.ArrayList(*assembly.Instruction).init(allocator);
     for (instructions.items) |inst| {
         try inst.codegen(&asmInstructions, allocator);
@@ -595,7 +648,10 @@ test "assembly generation with nested ternary" {
     const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
     var p = try parser.Parser.init(allocator, l);
     const program = try p.parseProgram();
-    const instructions = try program.genTAC(allocator);
+    const maybeInstructions = for ((try program.genTAC(allocator)).function.items) |function| {
+        if (std.mem.eql(u8, function.name, "main")) break function.instructions;
+    } else null;
+    const instructions = maybeInstructions.?;
     var asmInstructions = std.ArrayList(*assembly.Instruction).init(allocator);
     for (instructions.items) |inst| {
         try inst.codegen(&asmInstructions, allocator);
@@ -623,7 +679,10 @@ test "assembly generation with labelled statements and goto" {
     const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
     var p = try parser.Parser.init(allocator, l);
     const program = try p.parseProgram();
-    const instructions = try program.genTAC(allocator);
+    const maybeInstructions = for ((try program.genTAC(allocator)).function.items) |function| {
+        if (std.mem.eql(u8, function.name, "main")) break function.instructions;
+    } else null;
+    const instructions = maybeInstructions.?;
     var asmInstructions = std.ArrayList(*assembly.Instruction).init(allocator);
     for (instructions.items) |inst| {
         try inst.codegen(&asmInstructions, allocator);
@@ -652,7 +711,10 @@ test "testing assembly generation with compound statement parsing" {
     var p = try parser.Parser.init(allocator, l);
     const program = try p.parseProgram();
     try ast.scopeVariableResolutionPass(program, allocator);
-    const instructions = try program.genTAC(allocator);
+    const maybeInstructions = for ((try program.genTAC(allocator)).function.items) |function| {
+        if (std.mem.eql(u8, function.name, "main")) break function.instructions;
+    } else null;
+    const instructions = maybeInstructions.?;
     var asmInstructions = std.ArrayList(*assembly.Instruction).init(allocator);
     for (instructions.items) |inst| {
         try inst.codegen(&asmInstructions, allocator);
@@ -689,7 +751,10 @@ test "testing assembly generation with do and while loop" {
     const program = try p.parseProgram();
     try ast.scopeVariableResolutionPass(program, allocator);
     try ast.loopLabelPass(program, allocator);
-    const instructions = try program.genTAC(allocator);
+    const maybeInstructions = for ((try program.genTAC(allocator)).function.items) |function| {
+        if (std.mem.eql(u8, function.name, "main")) break function.instructions;
+    } else null;
+    const instructions = maybeInstructions.?;
     var asmInstructions = std.ArrayList(*assembly.Instruction).init(allocator);
     for (instructions.items) |inst| {
         try inst.codegen(&asmInstructions, allocator);
@@ -728,7 +793,10 @@ test "testing assembly generation loop with breaks and continue" {
     const program = try p.parseProgram();
     try ast.scopeVariableResolutionPass(program, allocator);
     try ast.loopLabelPass(program, allocator);
-    const instructions = try program.genTAC(allocator);
+    const maybeInstructions = for ((try program.genTAC(allocator)).function.items) |function| {
+        if (std.mem.eql(u8, function.name, "main")) break function.instructions;
+    } else null;
+    const instructions = maybeInstructions.?;
     var asmInstructions = std.ArrayList(*assembly.Instruction).init(allocator);
     for (instructions.items) |inst| {
         try inst.codegen(&asmInstructions, allocator);
@@ -772,7 +840,10 @@ test "nested while and do while loops with continue" {
     const program = try p.parseProgram();
     try ast.scopeVariableResolutionPass(program, allocator);
     try ast.loopLabelPass(program, allocator);
-    const instructions = try program.genTAC(allocator);
+    const maybeInstructions = for ((try program.genTAC(allocator)).function.items) |function| {
+        if (std.mem.eql(u8, function.name, "main")) break function.instructions;
+    } else null;
+    const instructions = maybeInstructions.?;
     var asmInstructions = std.ArrayList(*assembly.Instruction).init(allocator);
     for (instructions.items) |inst| {
         try inst.codegen(&asmInstructions, allocator);
@@ -808,7 +879,10 @@ test "test assembly generation for for loops" {
     const program = try p.parseProgram();
     try ast.scopeVariableResolutionPass(program, allocator);
     try ast.loopLabelPass(program, allocator);
-    const instructions = try program.genTAC(allocator);
+    const maybeInstructions = for ((try program.genTAC(allocator)).function.items) |function| {
+        if (std.mem.eql(u8, function.name, "main")) break function.instructions;
+    } else null;
+    const instructions = maybeInstructions.?;
     var asmInstructions = std.ArrayList(*assembly.Instruction).init(allocator);
     for (instructions.items) |inst| {
         try inst.codegen(&asmInstructions, allocator);
@@ -824,6 +898,40 @@ test "test assembly generation for for loops" {
         const printedSlice = try std.fmt.bufPrint(buf, "\n{s}", .{try asmInst.stringify(allocator)});
         buf = buf[printedSlice.len..];
     }
-
     std.log.warn("\n\x1b[33m{s}\x1b[0m", .{mem});
+}
+//
+test "multiple functions and call" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const programStr =
+        \\ int add(int x, int y) { return x+y;}
+        \\ int main(){
+        \\     return add(2,3);
+        \\ }
+    ;
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    const program = try p.parseProgram();
+    try ast.scopeVariableResolutionPass(program, allocator);
+    try ast.loopLabelPass(program, allocator);
+    const maybeInstructions = for ((try program.genTAC(allocator)).function.items) |function| {
+        if (std.mem.eql(u8, function.name, "main")) break function.instructions;
+    } else null;
+    const instructions = maybeInstructions.?;
+    std.log.warn("Multiple functions and call: {any}\n", .{instructions.items[0]});
+    std.log.warn("This: {any}\n", .{(try (try program.genTAC(allocator)).codegen(allocator))});
+    //try assembly.replacePseudoRegs(&asmInstructions, allocator);
+    //const fixedAsmInstructions = try assembly.fixupInstructions(&asmInstructions, allocator);
+    //std.log.warn("POST PSEUDO REPLACEMENT AND STACK TO STACK MOVES", .{});
+    //var mem: [2048]u8 = std.mem.zeroes([2048]u8);
+    //var buf = @as([]u8, &mem);
+    //const header = try std.fmt.bufPrint(buf, ".globl main\nmain:\npush %rbp", .{});
+    //buf = buf[header.len..];
+    //for (fixedAsmInstructions.items) |asmInst| {
+    //    const printedSlice = try std.fmt.bufPrint(buf, "\n{s}", .{try asmInst.stringify(allocator)});
+    //    buf = buf[printedSlice.len..];
+    //}
+    //std.log.warn("\n\x1b[33m{s}\x1b[0m", .{mem});
 }

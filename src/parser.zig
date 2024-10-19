@@ -449,7 +449,7 @@ pub const Parser = struct {
             },
             .IDENTIFIER => {
                 const peekedTwo = try self.l.peekTwoTokens(self.allocator);
-                if (peekedTwo[1].?.type == lexer.TokenType.LPAREN) {
+                if (peekedTwo[1] != null and peekedTwo[1].?.type == lexer.TokenType.LPAREN) {
                     //Function Call
                     const fnName = self.l.buffer[peekedTwo[0].?.start .. peekedTwo[0].?.end + 1];
                     var args = std.ArrayList(*AST.Expression).init(self.allocator);

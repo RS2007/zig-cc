@@ -145,4 +145,20 @@ in the codegeneration itself.
 * Can I deviate from the book here?  
     * Have a program with external declaration, either variable declaration or a function declaration/definition
     * Compound statements have BlockStatement 
+* Current plan is to follow the book till the CFG construction pass
+* Then don't directly register allocate, convert to SSA and start writing the SSA passes
+
+
+
+### Idea dump
+* High level loop optimizations and inlining.
+* TAC -> CFG -> SSA -> Sparse Conditional Constant Propogation ->
+    Dead code elimination -> Strength Reduction -> Induction Variable Elimination -> Value numbering
+* Garbage collector? (GC_malloc implementation?)
+
+
+> [!NOTE]
+> Introducing function abstraction for TAC and Assembly 
+
+- genTAC implementation in all the tests should be breaking now
 

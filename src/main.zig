@@ -32,7 +32,10 @@ pub fn main() !void {
     const l = try lexer.Lexer.init(allocator, buffer);
     var p = try parser.Parser.init(allocator, l);
     var program = try p.parseProgram();
-    const instructions = try program.genTAC(allocator);
+    const maybeInstructions = for ((try program.genTAC(allocator)).function.items) |function| {
+        if (std.mem.eql(u8, function.name, "main")) break function.instructions;
+    } else null;
+    const instructions = maybeInstructions.?;
     var asmInstructions = std.ArrayList(*assembly.Instruction).init(allocator);
     for (instructions.items) |inst| {
         try inst.codegen(&asmInstructions, allocator);

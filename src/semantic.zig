@@ -47,6 +47,11 @@ pub fn resolveExpression(expression: *AST.Expression, varMap: *std.StringHashMap
             try resolveExpression(ternary.lhs, varMap);
             try resolveExpression(ternary.rhs, varMap);
         },
+        .FunctionCall => |fnCall| {
+            for (fnCall.args.items) |arg| {
+                try resolveExpression(arg, varMap);
+            }
+        },
     }
 }
 

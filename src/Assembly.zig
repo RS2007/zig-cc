@@ -5,6 +5,12 @@ const tac = @import("./TAC.zig");
 inline fn abs(src: i32) u32 {
     return if (src < 0) @intCast(-src) else @intCast(src);
 }
+
+pub const Function = struct {
+    name: []u8,
+    instructions: std.ArrayList(*Instruction),
+};
+
 pub const Reg = enum {
     AX,
     R10,
@@ -269,7 +275,7 @@ pub fn fixupInstructions(instructions: *std.ArrayList(*Instruction), allocator: 
             },
             .Binary => |binary| {
                 if (binary.op == BinaryOp.Multiply) {
-                    if(std.mem.eql(u8,@tagName(binary.lhs),"Stack")){
+                    if (std.mem.eql(u8, @tagName(binary.lhs), "Stack")) {
                         const movLeftToR11 = try allocator.create(Instruction);
                         movLeftToR11.* = Instruction{
                             .Mov = MovInst{
@@ -282,11 +288,11 @@ pub fn fixupInstructions(instructions: *std.ArrayList(*Instruction), allocator: 
                             .dest = inst.Binary.lhs,
                             .src = Operand{ .Reg = Reg.R11 },
                         } };
-                        inst.Binary.lhs = Operand{.Reg = Reg.R11};
+                        inst.Binary.lhs = Operand{ .Reg = Reg.R11 };
                         try fixedInstructions.append(movLeftToR11);
                         try fixedInstructions.append(inst);
                         try fixedInstructions.append(movR11ToLeft);
-                    }else{
+                    } else {
                         try fixedInstructions.append(inst);
                     }
                     continue;

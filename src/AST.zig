@@ -53,10 +53,18 @@ pub const ExternalDecl = union(ExternalDeclType) {
     FunctionDecl: *FunctionDef,
     VarDeclaration: *Declaration,
     const Self = @This();
-    pub fn genTAC(externalDecl: *Self, instructions: *std.ArrayList(*tac.Instruction), allocator: std.mem.Allocator) CodegenError!void {
+    pub fn genTAC(externalDecl: *Self, allocator: std.mem.Allocator) CodegenError!*tac.FunctionDef {
         switch (externalDecl.*) {
             .FunctionDecl => |functionDecl| {
-                try functionDecl.genTAC(instructions, allocator);
+                const tacFunctionDef = try allocator.create(tac.FunctionDef);
+                var instructions = std.ArrayList(*tac.Instruction).init(allocator);
+                try functionDecl.genTAC(&instructions, allocator);
+                tacFunctionDef.* = .{
+                    .name = functionDecl.name,
+                    .args = std.ArrayList([]u8).init(allocator),
+                    .instructions = instructions,
+                };
+                return tacFunctionDef;
             },
             .VarDeclaration => {
                 unreachable();
@@ -146,12 +154,15 @@ pub const ExpressionType = enum {
 pub const Program = struct {
     externalDecls: std.ArrayList(*ExternalDecl),
 
-    pub fn genTAC(program: *Program, allocator: std.mem.Allocator) CodegenError!std.ArrayList(*tac.Instruction) {
-        var instructions = std.ArrayList(*tac.Instruction).init(allocator);
+    pub fn genTAC(program: *Program, allocator: std.mem.Allocator) CodegenError!*tac.Program {
+        const tacProgram = try allocator.create(tac.Program);
+        tacProgram.function = std.ArrayList(*tac.FunctionDef).init(allocator);
         for (program.externalDecls.items) |externalDecl| {
-            try externalDecl.genTAC(&instructions, allocator);
+            const functionDef = try externalDecl.genTAC(allocator);
+            // TODO: Not handling global variables
+            try tacProgram.function.append(functionDef);
         }
-        return instructions;
+        return tacProgram;
     }
 };
 pub const Return = struct {
@@ -783,6 +794,20 @@ pub const Expression = union(ExpressionType) {
                 try instructions.append(endLabel);
                 return storeTemp;
             },
+            .FunctionCall => |fnCall| {
+                const storeTemp = try allocator.create(tac.Val);
+                const tacFnCall = try allocator.create(tac.Instruction);
+                var tacFnCallArgs = std.ArrayList(*tac.Val).init(allocator);
+                for (fnCall.args.items) |arg| {
+                    try tacFnCallArgs.append(try arg.genTACInstructions(instructions, allocator));
+                }
+                tacFnCall.* = .{ .FunctionCall = .{
+                    .name = fnCall.name,
+                    .args = tacFnCallArgs,
+                    .dest = storeTemp,
+                } };
+                return storeTemp;
+            },
         }
     }
 };
@@ -1008,7 +1033,11 @@ test "codegen TAC" {
     const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
     var p = try parser.Parser.init(allocator, l);
     var program = try p.parseProgram();
-    const instructions = try program.genTAC(allocator);
+    // INFO: repeat this in the other places
+    const maybeInstructions = for ((try program.genTAC(allocator)).function.items) |function| {
+        if (std.mem.eql(u8, function.name, "main")) break function.instructions;
+    } else null;
+    const instructions = maybeInstructions.?;
     std.log.warn("\n \x1b[34m{any}\x1b[0m", .{instructions.items[0]});
     std.log.warn("\n \x1b[34m{any}\x1b[0m", .{instructions.items[1]});
     std.log.warn("\n \x1b[34m{s}\x1b[0m", .{instructions.items[0].Unary.dest.Variable});
@@ -1024,7 +1053,10 @@ test "codegen TAC with logical and relational ops" {
     const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
     var p = try parser.Parser.init(allocator, l);
     var program = try p.parseProgram();
-    const instructions = try program.genTAC(allocator);
+    const maybeInstructions = for ((try program.genTAC(allocator)).function.items) |function| {
+        if (std.mem.eql(u8, function.name, "main")) break function.instructions;
+    } else null;
+    const instructions = maybeInstructions.?;
     std.log.warn("\n \x1b[34m{any}\x1b[0m", .{instructions.items[0]});
     std.log.warn("\n \x1b[34m{any}\x1b[0m", .{instructions.items[1]});
 }
@@ -1037,7 +1069,10 @@ test "codegen TAC with declarations" {
     const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
     var p = try parser.Parser.init(allocator, l);
     var program = try p.parseProgram();
-    const instructions = try program.genTAC(allocator);
+    const maybeInstructions = for ((try program.genTAC(allocator)).function.items) |function| {
+        if (std.mem.eql(u8, function.name, "main")) break function.instructions;
+    } else null;
+    const instructions = maybeInstructions.?;
     std.log.warn("\n \x1b[34m{any}\x1b[0m", .{instructions.items[0]});
     std.log.warn("\n \x1b[34m{any}\x1b[0m", .{instructions.items[1]});
 }
@@ -1050,7 +1085,7 @@ test "test tac generation for ternary" {
     const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
     var p = try parser.Parser.init(allocator, l);
     const program = try p.parseProgram();
-    _ = try program.genTAC(allocator);
+    _ = (try program.genTAC(allocator));
     //for(instructions.items,0..) |inst,i| {
     //    std.log.warn("Inst at {}: {any}\n",.{i,inst});
     //}
@@ -1071,10 +1106,27 @@ test "test while and do while" {
     const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
     var p = try parser.Parser.init(allocator, l);
     const program = try p.parseProgram();
-    _ = try program.genTAC(allocator);
+    _ = (try program.genTAC(allocator));
     //for (instructions.items, 0..) |inst, i| {
     //    std.log.warn("Inst at {}: {any}\n", .{ i, inst });
     //}
+}
+
+test "test multiple functions" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const programStr =
+        \\ int add(int x, int y) { return x+y;}
+        \\ int main(){
+        \\     return add(2,3);
+        \\ }
+    ;
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    const program = try p.parseProgram();
+    try scopeVariableResolutionPass(program, allocator);
+    _ = (try program.genTAC(allocator));
 }
 
 //test "test break with while" {
