@@ -187,3 +187,12 @@ in the codegeneration itself.
 - Handling FunctionCall
     - move arguments to the specific registers
     - call to the function
+
+
+### Typechecker
+-  functions can return void 
+
+### Enhancements
+
+- When there is no return in int main, make it return 0.
+- Inside a function ensure that return types matches the type specified  

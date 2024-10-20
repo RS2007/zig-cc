@@ -55,8 +55,8 @@ pub const Parser = struct {
     }
 
     pub fn parseExternalDecl(self: *Parser) ParserError!*AST.ExternalDecl {
-        const intToken = try self.l.nextToken(self.allocator);
-        std.debug.assert(intToken.type == lexer.TokenType.INT_TYPE);
+        const returnType = try self.l.nextToken(self.allocator);
+        std.debug.assert(returnType.type == lexer.TokenType.INT_TYPE or returnType.type == lexer.TokenType.VOID);
         const peekTwo = try self.l.peekTwoTokens(self.allocator);
         if (peekTwo[1].?.type != lexer.TokenType.LPAREN) {
             return ParserError.Unimplemented;
@@ -83,6 +83,7 @@ pub const Parser = struct {
             .name = self.l.buffer[fnNameToken.start .. fnNameToken.end + 1],
             .blockItems = blockItems,
             .args = argList,
+            .returnType = if (returnType.type == lexer.TokenType.INT_TYPE) AST.Type.Integer else AST.Type.Void,
         };
         functionDecl.* = .{
             .FunctionDecl = functionDef,
@@ -162,6 +163,7 @@ pub const Parser = struct {
                 declaration.* = AST.Declaration{
                     .name = self.l.buffer[identifier.start .. identifier.end + 1],
                     .expression = null,
+                    .type = AST.Type.Integer,
                 };
                 const peeked = try self.l.peekToken(self.allocator);
                 std.debug.assert(peeked != null);

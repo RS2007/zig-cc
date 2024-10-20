@@ -9,11 +9,102 @@ const SemanticError = error{
     NoSpaceLeft,
 };
 
-const TypeError = error{TypeMismatch};
+const TypeError = error{ TypeMismatch, OutOfMemory };
 
-pub fn typechecker(program: *AST.Program) TypeError!void {
-    _ = program;
-    unreachable();
+pub const FnMetaData = struct {
+    returnType: AST.Type,
+    localVarTypeMap: *std.StringHashMap(AST.Type),
+};
+
+pub fn typechecker(program: *AST.Program, allocator: std.mem.Allocator) TypeError!void {
+    // INFO: Only typechecking requirement right now is function call return
+    // INFO: Maintain a function metadata hashmap and query that to check if the return type match
+    // Buildling a metadata map for functions.
+    var fnMetaDataMap = std.StringHashMap(FnMetaData).init(allocator);
+    for (program.externalDecls.items) |externalDecl| {
+        switch (externalDecl.*) {
+            .FunctionDecl => |fnDecl| {
+                const localVarTypeMap = std.StringHashMap(AST.Type).init(allocator);
+                try fnMetaDataMap.put(
+                    fnDecl.name,
+                    .{
+                        .returnType = fnDecl.returnType,
+                        .localVarTypeMap = @constCast(&localVarTypeMap),
+                    },
+                );
+            },
+            .VarDeclaration => {},
+        }
+    }
+    for (program.externalDecls.items) |externalDecl| {
+        switch (externalDecl.*) {
+            .FunctionDecl => |fnDecl| {
+                for (fnDecl.blockItems.items) |blkItem| {
+                    switch (blkItem.*) {
+                        .Declaration => |decl| {
+                            try fnMetaDataMap.get(fnDecl.name).?.localVarTypeMap.put(
+                                decl.name,
+                                decl.type,
+                            );
+                        },
+                        .Statement => {},
+                    }
+                }
+            },
+            .VarDeclaration => {},
+        }
+    }
+    var iter = fnMetaDataMap.iterator();
+    while (iter.next()) |entry| {
+        std.log.warn("{s} : \n", .{entry.key_ptr.*});
+        var varIter = entry.value_ptr.localVarTypeMap.iterator();
+        while (varIter.next()) |varEntry| {
+            std.log.warn("{s}: {any}\n", .{ varEntry.key_ptr.*, varEntry.value_ptr.* });
+        }
+    }
+    for (program.externalDecls.items) |externalDecl| {
+        switch (externalDecl.*) {
+            .FunctionDecl => |fnDecl| {
+                for (fnDecl.blockItems.items) |blkItem| {
+                    switch (blkItem.*) {
+                        .Statement => |stmt| {
+                            // Check assignment statements
+                            if (std.mem.eql(u8, @tagName(stmt.*), "Expression")) {
+                                if (std.mem.eql(u8, @tagName(stmt.Expression.*), "Assignment")) {
+                                    if (std.mem.eql(u8, @tagName(stmt.Expression.Assignment.rhs.*), "FunctionCall")) {
+                                        std.debug.assert(std.mem.eql(u8, @tagName(stmt.Expression.Assignment.lhs.*), "Identifier"));
+                                        const lhsType = fnMetaDataMap.get(fnDecl.name).?.localVarTypeMap.get(stmt.Expression.Assignment.lhs.Identifier).?;
+                                        const rhsType = fnMetaDataMap.get(stmt.Expression.Assignment.rhs.FunctionCall.name).?.returnType;
+                                        if (lhsType != rhsType) {
+                                            return TypeError.TypeMismatch;
+                                        }
+                                    }
+                                }
+                            }
+                            // Check return statements in the function and check the type
+                            if (std.mem.eql(u8, @tagName(stmt.*), "Return")) {
+                                if (std.mem.eql(u8, @tagName(stmt.Return.expression.*), "Identifier")) {
+                                    const identifierType = fnMetaDataMap.get(fnDecl.name).?.localVarTypeMap.get(stmt.Return.expression.Identifier).?;
+                                    if (identifierType != fnDecl.returnType) return TypeError.TypeMismatch;
+                                }
+                            }
+                        },
+                        .Declaration => |decl| {
+                            // Check declaration assignments
+                            if (decl.expression) |expr| {
+                                if (std.mem.eql(u8, @tagName(expr.*), "FunctionCall")) {
+                                    if (decl.type != fnMetaDataMap.get(expr.FunctionCall.name).?.returnType) {
+                                        return TypeError.TypeMismatch;
+                                    }
+                                }
+                            }
+                        },
+                    }
+                }
+            },
+            .VarDeclaration => {},
+        }
+    }
 }
 
 pub fn resolveDeclaration(declaration: *AST.Declaration, varMap: *std.StringHashMap([]u8)) SemanticError!void {
@@ -181,4 +272,26 @@ pub fn gotoResolutionPass(allocator: std.mem.Allocator, node: *AST.Program) Sema
     //      },
     //    }
     //  }
+}
+
+test "typechecker" {
+    const lexer = @import("./lexer.zig");
+    const parser = @import("./parser.zig");
+    const ast = @import("./AST.zig");
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const programStr =
+        \\ void add() { int a; return a;}
+        \\ int main(){
+        \\     int c = 3;
+        \\     return c;
+        \\ }
+    ;
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    const program = try p.parseProgram();
+    try ast.scopeVariableResolutionPass(program, allocator);
+    try ast.loopLabelPass(program, allocator);
+    try typechecker(program, allocator);
 }

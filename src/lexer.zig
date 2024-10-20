@@ -41,6 +41,7 @@ pub const TokenType = enum {
     BREAK,
     CONTINUE,
     COMMA,
+    VOID,
 };
 
 pub const Token = struct {
@@ -215,43 +216,6 @@ pub const Lexer = struct {
                 while (initialPtr + offset < lexer.buffer.len and !std.ascii.isWhitespace(lexer.buffer[initialPtr + offset]) and (std.ascii.isLower(lexer.buffer[initialPtr + offset]) or std.ascii.isUpper(lexer.buffer[initialPtr + offset]))) {
                     offset += 1;
                 }
-                //if (std.mem.eql(u8, lexer.buffer[initialPtr .. initialPtr + offset], "int")) {
-                //    token.type = TokenType.INT_TYPE;
-                //    token.start = initialPtr;
-                //    token.end = initialPtr + offset - 1;
-                //    lexer.currentToken = token;
-                //    return token;
-                //} else if (std.mem.eql(u8, lexer.buffer[initialPtr .. initialPtr + offset], "return")) {
-                //    token.type = TokenType.RETURN;
-                //    token.start = initialPtr;
-                //    token.end = initialPtr + offset - 1;
-                //    lexer.currentToken = token;
-                //    return token;
-                //} else if (std.mem.eql(u8, lexer.buffer[initialPtr .. initialPtr + offset], "if")) {
-                //    token.type = TokenType.IF;
-                //    token.start = initialPtr;
-                //    token.end = initialPtr + offset - 1;
-                //    lexer.currentToken = token;
-                //    return token;
-                //} else if (std.mem.eql(u8, lexer.buffer[initialPtr .. initialPtr + offset], "else")) {
-                //    token.type = TokenType.ELSE;
-                //    token.start = initialPtr;
-                //    token.end = initialPtr + offset - 1;
-                //    lexer.currentToken = token;
-                //    return token;
-                //} else if (std.mem.eql(u8, lexer.buffer[initialPtr .. initialPtr + offset], "goto")) {
-                //    token.type = TokenType.GOTO;
-                //    token.start = initialPtr;
-                //    token.end = initialPtr + offset - 1;
-                //    lexer.currentToken = token;
-                //    return token;
-                //}
-
-                //token.type = TokenType.IDENTIFIER;
-                //token.start = initialPtr;
-                //token.end = initialPtr + offset - 1;
-                //lexer.currentToken = token;
-                //return token;
 
                 return peekKeyword(&[_][]const u8{
                     "int",
@@ -264,6 +228,7 @@ pub const Lexer = struct {
                     "for",
                     "continue",
                     "break",
+                    "void",
                 }, &[_]TokenType{
                     TokenType.INT_TYPE,
                     TokenType.RETURN,
@@ -275,6 +240,7 @@ pub const Lexer = struct {
                     TokenType.FOR,
                     TokenType.CONTINUE,
                     TokenType.BREAK,
+                    TokenType.VOID,
                 }, lexer, token);
             },
         }
@@ -408,7 +374,19 @@ pub const Lexer = struct {
                     lexer.currentToken = token;
                     return token;
                 }
-                return lexKeyword(&[_][]const u8{ "int", "return", "if", "else", "goto", "do", "while", "for", "continue", "break" }, &[_]TokenType{
+                return lexKeyword(&[_][]const u8{
+                    "int",
+                    "return",
+                    "if",
+                    "else",
+                    "goto",
+                    "do",
+                    "while",
+                    "for",
+                    "continue",
+                    "break",
+                    "void",
+                }, &[_]TokenType{
                     TokenType.INT_TYPE,
                     TokenType.RETURN,
                     TokenType.IF,
@@ -419,6 +397,7 @@ pub const Lexer = struct {
                     TokenType.FOR,
                     TokenType.CONTINUE,
                     TokenType.BREAK,
+                    TokenType.VOID,
                 }, lexer, token);
             },
         }
@@ -620,12 +599,14 @@ test "Ternary and if else" {
     _ = try std.testing.expectEqual(elseTok.type, TokenType.ELSE);
 }
 
-test "comma" {
+test "comma and void" {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     const allocator = arena.allocator();
     defer arena.deinit();
-    const buffer = ",";
+    const buffer = ", void";
     const lexer = try Lexer.init(allocator, @as([]u8, @constCast(buffer)));
-    const comma = try lexer.nextToken(allocator); //ternary
+    const comma = try lexer.nextToken(allocator);
+    const voidTok = try lexer.nextToken(allocator);
     _ = try std.testing.expectEqual(comma.type, TokenType.COMMA);
+    _ = try std.testing.expectEqual(voidTok.type, TokenType.VOID);
 }
