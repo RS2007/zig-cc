@@ -19,8 +19,10 @@ pub fn main() !void {
     }
 
     const filename = args[1];
+    const shouldDumpTac = if (args.len >= 3) args[2] else null;
 
     const file = try std.fs.cwd().openFile(filename, std.fs.File.OpenFlags{ .mode = .read_only });
+
     defer file.close();
 
     // Read the entire file into a buffer
@@ -34,6 +36,21 @@ pub fn main() !void {
     var program = try p.parseProgram();
     try ast.scopeVariableResolutionPass(program, allocator);
     try ast.loopLabelPass(program, allocator);
-    const asmProgram = try (try program.genTAC(allocator)).codegen(allocator);
+    const tacProgram = try program.genTAC(allocator);
+
+    if (shouldDumpTac != null and std.mem.eql(u8, shouldDumpTac.?, "tacDump")) {
+        _ = try std.fs.cwd().createFile("tacDump", .{});
+        const tacDump = try std.fs.cwd().openFile("tacDump", std.fs.File.OpenFlags{ .mode = .read_write });
+        defer tacDump.close();
+        const tacDumpWriter = tacDump.writer();
+        for (tacProgram.function.items) |tacFn| {
+            try tacDumpWriter.writeAll(tacFn.name);
+            try tacDumpWriter.writeAll("\n\n");
+            for (tacFn.instructions.items) |tacFnInst| {
+                try tacDumpWriter.writeAll(try std.fmt.allocPrint(allocator, "{any}\n", .{tacFnInst}));
+            }
+        }
+    }
+    const asmProgram = try tacProgram.codegen(allocator);
     try asmProgram.stringify(std.io.getStdOut().writer(), allocator);
 }

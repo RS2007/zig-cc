@@ -312,7 +312,7 @@ pub const Instruction = union(InstructionType) {
 // This function fixes the instructions, stack to stack moves
 pub fn fixupInstructions(instructions: *std.ArrayList(*Instruction), allocator: std.mem.Allocator) ast.CodegenError!std.ArrayList(*Instruction) {
     var fixedInstructions = try std.ArrayList(*Instruction).initCapacity(allocator, instructions.items.len);
-    for (instructions.items, 0..) |inst, i| {
+    for (instructions.items) |inst| {
         switch (inst.*) {
             .Mov => |mov| {
                 var isSrcStack = false;
@@ -398,7 +398,7 @@ pub fn fixupInstructions(instructions: *std.ArrayList(*Instruction), allocator: 
                         .Mov = MovInst{ .src = cmp.op1, .dest = Operand{ .Reg = Reg.R10 } },
                     };
                     inst.Cmp.op1 = Operand{ .Reg = Reg.R10 };
-                    try fixedInstructions.insert(i, movInst);
+                    try fixedInstructions.append(movInst);
                     try fixedInstructions.append(inst);
                     continue;
                 } else {
