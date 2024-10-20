@@ -5,11 +5,64 @@ const tac = @import("./TAC.zig");
 inline fn abs(src: i32) u32 {
     return if (src < 0) @intCast(-src) else @intCast(src);
 }
+
+pub const Program = struct {
+    functions: std.ArrayList(*Function),
+    const Self = @This();
+    pub fn stringify(self: *Self, writer: std.fs.File.Writer, allocator: std.mem.Allocator) !void {
+        try writer.writeAll(
+            \\ .section .note.GNU-stack,"",@progbits
+            \\ .section .text
+            \\
+        );
+        try writer.writeAll(".globl main\n");
+        for (self.functions.items) |function| {
+            try replacePseudoRegs(function, allocator);
+            const fixedAsmInstructions = try fixupInstructions(&function.instructions, allocator);
+            function.instructions = fixedAsmInstructions;
+            //TODO: Probably return the string and not print it here
+            const fnString = try function.stringify(allocator);
+            try writer.writeAll(fnString);
+            try writer.writeAll("\n");
+        }
+    }
+};
+
+pub const Function = struct {
+    name: []u8,
+    args: std.ArrayList([]u8),
+    instructions: std.ArrayList(*Instruction),
+    const Self = @This();
+    pub fn stringify(self: *Self, allocator: std.mem.Allocator) ast.CodegenError![]u8 {
+        const buf = try allocator.alloc(u8, 2048);
+        var bufPtr = buf;
+        const fnLabelOffset = try std.fmt.bufPrint(bufPtr, "{s}:\n", .{self.name});
+        bufPtr = bufPtr[fnLabelOffset.len..];
+        const fnPrologue = try std.fmt.bufPrint(bufPtr, "push %rbp", .{});
+        bufPtr = bufPtr[fnPrologue.len..];
+
+        //TODO: probably should add the mov instruction here, but omitting for
+        //now
+        for (self.instructions.items) |asmInst| {
+            const printedSlice = try std.fmt.bufPrint(bufPtr, "\n{s}", .{try asmInst.stringify(allocator)});
+            bufPtr = bufPtr[printedSlice.len..];
+        }
+        return buf;
+    }
+};
+
 pub const Reg = enum {
     AX,
     R10,
     DX,
     R11,
+    EDI,
+    ESI,
+    EDX,
+    ECX,
+    R8,
+    R9,
+    EAX,
     pub fn stringify(register: Reg, allocator: std.mem.Allocator) ast.CodegenError![]u8 {
         switch (register) {
             .AX => {
@@ -23,6 +76,27 @@ pub const Reg = enum {
             },
             .R11 => {
                 return (try std.fmt.allocPrint(allocator, "%r11d", .{}));
+            },
+            .EDI => {
+                return (try std.fmt.allocPrint(allocator, "%edi", .{}));
+            },
+            .ESI => {
+                return (try std.fmt.allocPrint(allocator, "%esi", .{}));
+            },
+            .EDX => {
+                return (try std.fmt.allocPrint(allocator, "%edx", .{}));
+            },
+            .ECX => {
+                return (try std.fmt.allocPrint(allocator, "%ecx", .{}));
+            },
+            .R8 => {
+                return (try std.fmt.allocPrint(allocator, "%r8d", .{}));
+            },
+            .R9 => {
+                return (try std.fmt.allocPrint(allocator, "%r9d", .{}));
+            },
+            .EAX => {
+                return (try std.fmt.allocPrint(allocator, "%eax", .{}));
             },
         }
     }
@@ -123,6 +197,7 @@ pub const InstructionType = enum {
     JmpCC,
     SetCC,
     Label,
+    FnCall,
 };
 
 pub const MovInst = struct {
@@ -155,6 +230,10 @@ pub const SetCC = struct {
     dest: Operand,
 };
 
+pub const FnCall = struct {
+    name: []u8,
+};
+
 pub const Instruction = union(InstructionType) {
     Mov: MovInst,
     Unary: UnaryInst,
@@ -168,6 +247,7 @@ pub const Instruction = union(InstructionType) {
     JmpCC: JmpCC,
     SetCC: SetCC,
     Label: []u8,
+    FnCall: FnCall,
 
     pub fn stringify(instruction: *Instruction, allocator: std.mem.Allocator) ast.CodegenError![]u8 {
         switch (instruction.*) {
@@ -188,7 +268,7 @@ pub const Instruction = union(InstructionType) {
                 return (try std.fmt.allocPrint(allocator, "mov %rsp,%rbp\nsub $0x{x},%rsp", .{allocStack}));
             },
             .Ret => {
-                return (try std.fmt.allocPrint(allocator, "movl %eax,%edi\nmovl $0x3c,%eax\nsyscall\nleaveq\nretq", .{}));
+                return (try std.fmt.allocPrint(allocator, "leaveq\nretq", .{}));
             },
             .Binary => |binary| {
                 const lhsOperand = try @constCast(&binary.lhs).stringify(allocator);
@@ -222,6 +302,9 @@ pub const Instruction = union(InstructionType) {
             .Label => |label| {
                 return (try std.fmt.allocPrint(allocator, ".L{s}:", .{label}));
             },
+            .FnCall => |fnCall| {
+                return (try std.fmt.allocPrint(allocator, "call {s}", .{fnCall.name}));
+            },
         }
     }
 };
@@ -229,7 +312,7 @@ pub const Instruction = union(InstructionType) {
 // This function fixes the instructions, stack to stack moves
 pub fn fixupInstructions(instructions: *std.ArrayList(*Instruction), allocator: std.mem.Allocator) ast.CodegenError!std.ArrayList(*Instruction) {
     var fixedInstructions = try std.ArrayList(*Instruction).initCapacity(allocator, instructions.items.len);
-    for (instructions.items, 0..) |inst, i| {
+    for (instructions.items) |inst| {
         switch (inst.*) {
             .Mov => |mov| {
                 var isSrcStack = false;
@@ -269,7 +352,7 @@ pub fn fixupInstructions(instructions: *std.ArrayList(*Instruction), allocator: 
             },
             .Binary => |binary| {
                 if (binary.op == BinaryOp.Multiply) {
-                    if(std.mem.eql(u8,@tagName(binary.lhs),"Stack")){
+                    if (std.mem.eql(u8, @tagName(binary.lhs), "Stack")) {
                         const movLeftToR11 = try allocator.create(Instruction);
                         movLeftToR11.* = Instruction{
                             .Mov = MovInst{
@@ -282,11 +365,11 @@ pub fn fixupInstructions(instructions: *std.ArrayList(*Instruction), allocator: 
                             .dest = inst.Binary.lhs,
                             .src = Operand{ .Reg = Reg.R11 },
                         } };
-                        inst.Binary.lhs = Operand{.Reg = Reg.R11};
+                        inst.Binary.lhs = Operand{ .Reg = Reg.R11 };
                         try fixedInstructions.append(movLeftToR11);
                         try fixedInstructions.append(inst);
                         try fixedInstructions.append(movR11ToLeft);
-                    }else{
+                    } else {
                         try fixedInstructions.append(inst);
                     }
                     continue;
@@ -309,14 +392,13 @@ pub fn fixupInstructions(instructions: *std.ArrayList(*Instruction), allocator: 
                 }
             },
             .Cmp => |cmp| {
-                std.log.warn("op1 tagName: {s} and op2 tagName: {s}\n", .{ @tagName(cmp.op1), @tagName(cmp.op2) });
                 if (std.mem.eql(u8, @tagName(cmp.op1), "Stack") and std.mem.eql(u8, @tagName(cmp.op2), "Stack")) {
                     const movInst = try allocator.create(Instruction);
                     movInst.* = Instruction{
                         .Mov = MovInst{ .src = cmp.op1, .dest = Operand{ .Reg = Reg.R10 } },
                     };
                     inst.Cmp.op1 = Operand{ .Reg = Reg.R10 };
-                    try fixedInstructions.insert(i, movInst);
+                    try fixedInstructions.append(movInst);
                     try fixedInstructions.append(inst);
                     continue;
                 } else {
@@ -335,13 +417,13 @@ pub fn fixupInstructions(instructions: *std.ArrayList(*Instruction), allocator: 
     return fixedInstructions;
 }
 
-pub fn replacePseudoRegs(instructions: *std.ArrayList(*Instruction), allocator: std.mem.Allocator) ast.CodegenError!void {
+pub fn replacePseudoRegs(function: *Function, allocator: std.mem.Allocator) ast.CodegenError!void {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     const hashAllocator = arena.allocator();
     defer arena.deinit();
     var lookup = std.StringHashMap(i32).init(hashAllocator);
     var topOfStack: i32 = 0;
-    for (instructions.items, 0..) |inst, i| {
+    for (function.instructions.items, 0..) |inst, i| {
         switch (inst.*) {
             .Mov => |mov| {
                 switch (mov.src) {
@@ -435,7 +517,7 @@ pub fn replacePseudoRegs(instructions: *std.ArrayList(*Instruction), allocator: 
                                 .src = idiv,
                                 .dest = Operand{ .Reg = Reg.R10 },
                             } };
-                            try instructions.insert(
+                            try function.instructions.insert(
                                 i,
                                 movIdivArgToR10,
                             );
@@ -448,7 +530,7 @@ pub fn replacePseudoRegs(instructions: *std.ArrayList(*Instruction), allocator: 
                             .src = Operand{ .Pseudo = pseudo },
                             .dest = Operand{ .Reg = Reg.R10 },
                         } };
-                        try instructions.insert(
+                        try function.instructions.insert(
                             i,
                             movIdivArgToR10,
                         );
@@ -460,7 +542,7 @@ pub fn replacePseudoRegs(instructions: *std.ArrayList(*Instruction), allocator: 
                             .src = Operand{ .Imm = imm },
                             .dest = Operand{ .Reg = Reg.R10 },
                         } };
-                        try instructions.insert(
+                        try function.instructions.insert(
                             i,
                             movIdivArgToR10,
                         );
@@ -504,7 +586,6 @@ pub fn replacePseudoRegs(instructions: *std.ArrayList(*Instruction), allocator: 
                     },
                     else => {},
                 }
-                std.log.warn("New inst: {any}\n", .{inst.Cmp});
             },
             .SetCC => |setCC| {
                 switch (setCC.dest) {
@@ -524,7 +605,7 @@ pub fn replacePseudoRegs(instructions: *std.ArrayList(*Instruction), allocator: 
                     else => {},
                 }
             },
-            .Jmp, .Label, .JmpCC => {
+            .Jmp, .Label, .JmpCC, .FnCall => {
                 // Jmp does not involve any operands
             },
         }
@@ -533,7 +614,7 @@ pub fn replacePseudoRegs(instructions: *std.ArrayList(*Instruction), allocator: 
     allocateStackInst.* = Instruction{
         .AllocateStack = @as(u32, abs(topOfStack)),
     };
-    try instructions.insert(
+    try function.instructions.insert(
         0,
         allocateStackInst,
     );

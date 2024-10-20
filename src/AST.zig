@@ -38,9 +38,42 @@ const TempGenerator = struct {
 pub const ASTType = enum {
     Program,
     FunctionDef,
+    ExternalDecl,
     BlockItem,
     Statement,
     Expression,
+};
+
+pub const ExternalDeclType = enum {
+    FunctionDecl,
+    VarDeclaration,
+};
+
+pub const ExternalDecl = union(ExternalDeclType) {
+    FunctionDecl: *FunctionDef,
+    VarDeclaration: *Declaration,
+    const Self = @This();
+    pub fn genTAC(externalDecl: *Self, allocator: std.mem.Allocator) CodegenError!*tac.FunctionDef {
+        switch (externalDecl.*) {
+            .FunctionDecl => |functionDecl| {
+                const tacFunctionDef = try allocator.create(tac.FunctionDef);
+                var instructions = std.ArrayList(*tac.Instruction).init(allocator);
+                try functionDecl.genTAC(&instructions, allocator);
+                tacFunctionDef.* = .{
+                    .name = functionDecl.name,
+                    .args = std.ArrayList([]u8).init(allocator),
+                    .instructions = instructions,
+                };
+                for (functionDecl.args.items) |arg| {
+                    try tacFunctionDef.args.append(arg.NonVoidArg.identifier);
+                }
+                return tacFunctionDef;
+            },
+            .VarDeclaration => {
+                unreachable();
+            },
+        }
+    }
 };
 
 pub const BlockItemType = enum {
@@ -95,6 +128,7 @@ pub const Declaration = struct {
 
 pub const CodegenError = error{
     OutOfMemory,
+    NoSpaceLeft,
 };
 
 pub const StatementType = enum {
@@ -118,22 +152,48 @@ pub const ExpressionType = enum {
     Ternary,
     Identifier,
     Assignment,
+    FunctionCall,
 };
 
 pub const Program = struct {
-    function: FunctionDef,
+    externalDecls: std.ArrayList(*ExternalDecl),
 
-    pub fn genTAC(program: *Program, allocator: std.mem.Allocator) CodegenError!std.ArrayList(*tac.Instruction) {
-        var instructions = std.ArrayList(*tac.Instruction).init(allocator);
-        try program.function.genTAC(&instructions, allocator);
-        return instructions;
+    pub fn genTAC(program: *Program, allocator: std.mem.Allocator) CodegenError!*tac.Program {
+        const tacProgram = try allocator.create(tac.Program);
+        tacProgram.function = std.ArrayList(*tac.FunctionDef).init(allocator);
+        for (program.externalDecls.items) |externalDecl| {
+            const functionDef = try externalDecl.genTAC(allocator);
+            // TODO: Not handling global variables
+            try tacProgram.function.append(functionDef);
+        }
+        return tacProgram;
     }
 };
 pub const Return = struct {
     expression: *Expression,
 };
+
+pub const Type = enum { Integer };
+
+pub const NonVoidArg = struct {
+    type: Type,
+    identifier: []u8,
+};
+
+// INFO: Might be a bad idea, maybe look into this later?
+pub const ArgType = enum {
+    Void,
+    NonVoidArg,
+};
+
+pub const Arg = union(ArgType) {
+    Void: void,
+    NonVoidArg: NonVoidArg,
+};
+
 pub const FunctionDef = struct {
     name: []u8,
+    args: std.ArrayList(*Arg),
     blockItems: std.ArrayList(*BlockItem),
 
     pub fn genTAC(functionDef: FunctionDef, instructions: *std.ArrayList(*tac.Instruction), allocator: std.mem.Allocator) CodegenError!void {
@@ -355,6 +415,7 @@ pub const Statement = union(StatementType) {
 };
 
 pub fn prettyPrintAST(node: Node, writer: anytype, depth: usize) !void {
+    // TODO: out of the loop, support it with multiple functions
     const colors = struct {
         const reset = "\x1b[0m";
         const bold = "\x1b[1m";
@@ -372,7 +433,7 @@ pub fn prettyPrintAST(node: Node, writer: anytype, depth: usize) !void {
     switch (node) {
         .Program => |program| {
             try writer.print("\n{s}Program{s}\n", .{ colors.red, colors.reset });
-            try prettyPrintAST(Node{ .FunctionDef = &program.function }, writer, depth + 1);
+            try prettyPrintAST(Node{ .FunctionDef = &program.externalDecls }, writer, depth + 1);
         },
         .FunctionDef => |func| {
             try writer.print("{s}Function: {s}{s}\n", .{ colors.green, func.name, colors.reset });
@@ -504,6 +565,11 @@ pub const Assignment = struct {
     rhs: *Expression,
 };
 
+pub const FunctionCall = struct {
+    name: []u8,
+    args: std.ArrayList(*Expression),
+};
+
 pub const Expression = union(ExpressionType) {
     Integer: u32,
     Unary: Unary,
@@ -511,6 +577,7 @@ pub const Expression = union(ExpressionType) {
     Ternary: Ternary,
     Identifier: []u8,
     Assignment: Assignment,
+    FunctionCall: FunctionCall,
 
     pub fn genTACInstructions(expression: *Expression, instructions: *std.ArrayList(*tac.Instruction), allocator: std.mem.Allocator) CodegenError!*tac.Val {
         switch (expression.*) {
@@ -731,6 +798,22 @@ pub const Expression = union(ExpressionType) {
                 try instructions.append(endLabel);
                 return storeTemp;
             },
+            .FunctionCall => |fnCall| {
+                const storeTemp = try allocator.create(tac.Val);
+                storeTemp.* = tac.Val{ .Variable = try tempGen.genTemp(allocator) };
+                const tacFnCall = try allocator.create(tac.Instruction);
+                var tacFnCallArgs = std.ArrayList(*tac.Val).init(allocator);
+                for (fnCall.args.items) |arg| {
+                    try tacFnCallArgs.append(try arg.genTACInstructions(instructions, allocator));
+                }
+                tacFnCall.* = .{ .FunctionCall = .{
+                    .name = fnCall.name,
+                    .args = tacFnCallArgs,
+                    .dest = storeTemp,
+                } };
+                try instructions.append(tacFnCall);
+                return storeTemp;
+            },
         }
     }
 };
@@ -759,6 +842,11 @@ pub fn expressionScopeVariableResolve(expression: *Expression, currentScope: u32
         .Binary => |binary| {
             try expressionScopeVariableResolve(binary.lhs, currentScope, allocator, varMap);
             try expressionScopeVariableResolve(binary.rhs, currentScope, allocator, varMap);
+        },
+        .FunctionCall => |fnCall| {
+            for (fnCall.args.items) |arg| {
+                try expressionScopeVariableResolve(arg, currentScope, allocator, varMap);
+            }
         },
     }
 }
@@ -820,9 +908,18 @@ pub fn statementScopeVariableResolve(statement: *Statement, currentScope: u32, a
 }
 
 pub fn scopeVariableResolutionPass(program: *Program, allocator: std.mem.Allocator) MemoryError!void {
-    var varMap = std.StringHashMap(u32).init(allocator);
-    for (program.function.blockItems.items) |blockItem| {
-        try blockStatementScopeVariableResolve(blockItem, 0, allocator, &varMap);
+    for (program.externalDecls.items) |externalDecl| {
+        switch (externalDecl.*) {
+            .FunctionDecl => |functionDecl| {
+                var varMap = std.StringHashMap(u32).init(allocator);
+                for (functionDecl.blockItems.items) |blockItem| {
+                    try blockStatementScopeVariableResolve(blockItem, 0, allocator, &varMap);
+                }
+            },
+            .VarDeclaration => {
+                unreachable();
+            },
+        }
     }
 }
 
@@ -874,8 +971,19 @@ pub fn blockItemLoopLabelPass(blockItem: *BlockItem, loopId: u32, allocator: std
 }
 
 pub fn loopLabelPass(program: *Program, allocator: std.mem.Allocator) MemoryError!void {
-    for (program.function.blockItems.items) |blockItem| {
-        try blockItemLoopLabelPass(blockItem, 0, allocator);
+    for (program.externalDecls.items) |externalDecl| {
+        switch (externalDecl.*) {
+            .VarDeclaration => {
+                unreachable();
+            },
+            .FunctionDecl => |functionDecl| {
+                for (functionDecl.blockItems.items) |blockItem| {
+                    // TODO: Fine for testing basic functionality, but counter to be a pointer
+                    // to integer and should be mutated by these label function calls
+                    try blockItemLoopLabelPass(blockItem, 0, allocator);
+                }
+            },
+        }
     }
 }
 
@@ -906,7 +1014,7 @@ test "Negation and bitwise complement codegeneration" {
     const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
     var p = try parser.Parser.init(allocator, l);
     const program = try p.parseProgram();
-    std.log.warn("{}", .{program.function.blockItems.items[0].Statement.Return.expression.Unary.exp});
+    std.log.warn("{}", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[0].Statement.Return.expression.Unary.exp});
 }
 
 test "Declarations" {
@@ -918,9 +1026,9 @@ test "Declarations" {
     var p = try parser.Parser.init(allocator, l);
     const program = try p.parseProgram();
     try semantic.varResolutionPass(allocator, program);
-    const stdout = std.io.getStdOut().writer();
-    try prettyPrintAST(Node{ .Program = program }, stdout, 0);
-    std.log.warn("{any}", .{program.function.blockItems.items[2].Statement.Return.expression.Unary.exp});
+    //const stdout = std.io.getStdOut().writer();
+    //try prettyPrintAST(Node{ .Program = program }, stdout, 0);
+    std.log.warn("{any}", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[2].Statement.Return.expression.Unary.exp});
 }
 
 test "codegen TAC" {
@@ -931,7 +1039,11 @@ test "codegen TAC" {
     const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
     var p = try parser.Parser.init(allocator, l);
     var program = try p.parseProgram();
-    const instructions = try program.genTAC(allocator);
+    // INFO: repeat this in the other places
+    const maybeInstructions = for ((try program.genTAC(allocator)).function.items) |function| {
+        if (std.mem.eql(u8, function.name, "main")) break function.instructions;
+    } else null;
+    const instructions = maybeInstructions.?;
     std.log.warn("\n \x1b[34m{any}\x1b[0m", .{instructions.items[0]});
     std.log.warn("\n \x1b[34m{any}\x1b[0m", .{instructions.items[1]});
     std.log.warn("\n \x1b[34m{s}\x1b[0m", .{instructions.items[0].Unary.dest.Variable});
@@ -947,7 +1059,10 @@ test "codegen TAC with logical and relational ops" {
     const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
     var p = try parser.Parser.init(allocator, l);
     var program = try p.parseProgram();
-    const instructions = try program.genTAC(allocator);
+    const maybeInstructions = for ((try program.genTAC(allocator)).function.items) |function| {
+        if (std.mem.eql(u8, function.name, "main")) break function.instructions;
+    } else null;
+    const instructions = maybeInstructions.?;
     std.log.warn("\n \x1b[34m{any}\x1b[0m", .{instructions.items[0]});
     std.log.warn("\n \x1b[34m{any}\x1b[0m", .{instructions.items[1]});
 }
@@ -960,7 +1075,10 @@ test "codegen TAC with declarations" {
     const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
     var p = try parser.Parser.init(allocator, l);
     var program = try p.parseProgram();
-    const instructions = try program.genTAC(allocator);
+    const maybeInstructions = for ((try program.genTAC(allocator)).function.items) |function| {
+        if (std.mem.eql(u8, function.name, "main")) break function.instructions;
+    } else null;
+    const instructions = maybeInstructions.?;
     std.log.warn("\n \x1b[34m{any}\x1b[0m", .{instructions.items[0]});
     std.log.warn("\n \x1b[34m{any}\x1b[0m", .{instructions.items[1]});
 }
@@ -973,7 +1091,7 @@ test "test tac generation for ternary" {
     const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
     var p = try parser.Parser.init(allocator, l);
     const program = try p.parseProgram();
-    _ = try program.genTAC(allocator);
+    _ = (try program.genTAC(allocator));
     //for(instructions.items,0..) |inst,i| {
     //    std.log.warn("Inst at {}: {any}\n",.{i,inst});
     //}
@@ -994,10 +1112,27 @@ test "test while and do while" {
     const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
     var p = try parser.Parser.init(allocator, l);
     const program = try p.parseProgram();
-    _ = try program.genTAC(allocator);
+    _ = (try program.genTAC(allocator));
     //for (instructions.items, 0..) |inst, i| {
     //    std.log.warn("Inst at {}: {any}\n", .{ i, inst });
     //}
+}
+
+test "test multiple functions" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const programStr =
+        \\ int add(int x, int y) { return x+y;}
+        \\ int main(){
+        \\     return add(2,3);
+        \\ }
+    ;
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    const program = try p.parseProgram();
+    try scopeVariableResolutionPass(program, allocator);
+    _ = (try program.genTAC(allocator));
 }
 
 //test "test break with while" {

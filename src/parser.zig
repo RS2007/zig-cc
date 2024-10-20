@@ -30,6 +30,7 @@ pub const ParserError = error{
     LockViolation,
     WouldBlock,
     ConnectionResetByPeer,
+    Unimplemented,
 };
 
 pub const Parser = struct {
@@ -43,29 +44,83 @@ pub const Parser = struct {
     }
 
     pub fn parseProgram(self: *Parser) ParserError!*AST.Program {
+        const program = try self.allocator.create(AST.Program);
+        const externalDeclList = std.ArrayList(*AST.ExternalDecl).init(self.allocator);
+        program.externalDecls = externalDeclList;
+        while ((try self.l.peekToken(self.allocator)) != null) {
+            const externalDecl = try self.parseExternalDecl();
+            try program.externalDecls.append(externalDecl);
+        }
+        return program;
+    }
+
+    pub fn parseExternalDecl(self: *Parser) ParserError!*AST.ExternalDecl {
         const intToken = try self.l.nextToken(self.allocator);
         std.debug.assert(intToken.type == lexer.TokenType.INT_TYPE);
+        const peekTwo = try self.l.peekTwoTokens(self.allocator);
+        if (peekTwo[1].?.type != lexer.TokenType.LPAREN) {
+            return ParserError.Unimplemented;
+        }
         const fnNameToken = try self.l.nextToken(self.allocator);
+        var argList = std.ArrayList(*AST.Arg).init(self.allocator);
         std.debug.assert(fnNameToken.type == lexer.TokenType.IDENTIFIER);
         std.debug.assert((try self.l.nextToken(self.allocator)).type == lexer.TokenType.LPAREN);
+        // TODO: parse function arguments
+        while ((try self.l.peekToken(self.allocator)).?.type != lexer.TokenType.RPAREN) {
+            const arg = try self.parseArg();
+            try argList.append(arg);
+            if ((try self.l.peekToken(self.allocator)).?.type == lexer.TokenType.COMMA) {
+                _ = try self.l.nextToken(self.allocator);
+            }
+        }
         std.debug.assert((try self.l.nextToken(self.allocator)).type == lexer.TokenType.RPAREN);
         std.debug.assert((try self.l.nextToken(self.allocator)).type == lexer.TokenType.LBRACE);
         const blockItems = std.ArrayList(*AST.BlockItem).init(self.allocator);
         var peekToken = try self.l.peekToken(self.allocator);
-        const program = try self.allocator.create(AST.Program);
-        program.* = AST.Program{
-            .function = AST.FunctionDef{
-                .name = self.l.buffer[fnNameToken.start .. fnNameToken.end + 1],
-                .blockItems = blockItems,
-            },
+        const functionDecl = try self.allocator.create(AST.ExternalDecl);
+        const functionDef = try self.allocator.create(AST.FunctionDef);
+        functionDef.* = .{
+            .name = self.l.buffer[fnNameToken.start .. fnNameToken.end + 1],
+            .blockItems = blockItems,
+            .args = argList,
+        };
+        functionDecl.* = .{
+            .FunctionDecl = functionDef,
         };
         while (peekToken != null and peekToken.?.type != lexer.TokenType.RBRACE) {
             std.log.warn("Next peek token is {any} and {any}\n", .{ peekToken, self.l.currentToken });
             const blockItem = try self.parseBlockItem();
-            try program.function.blockItems.append(blockItem);
+            try functionDef.blockItems.append(blockItem);
             peekToken = try self.l.peekToken(self.allocator);
         }
-        return program;
+        const rbrace = try self.l.nextToken(self.allocator);
+        std.debug.assert(rbrace.type == lexer.TokenType.RBRACE);
+        return functionDecl;
+    }
+
+    pub fn parseArg(self: *Parser) ParserError!*AST.Arg {
+        const hasPeeked = try self.l.peekToken(self.allocator);
+        std.debug.assert(hasPeeked != null);
+        switch (hasPeeked.?.type) {
+            .INT_TYPE => {
+                const arg = try self.allocator.create(AST.Arg);
+                _ = try self.l.nextToken(self.allocator);
+                const argName = try self.l.nextToken(self.allocator);
+                arg.* = .{ .NonVoidArg = .{ .type = AST.Type.Integer, .identifier = self.l.buffer[argName.start .. argName.end + 1] } };
+                return arg;
+            },
+            //.VOID => {
+            //    const arg = self.allocator.create(AST.Arg);
+            //    arg.* = .{
+            //        .Void = {},
+            //    };
+            //    return arg;
+            //},
+            else => {
+                std.log.warn("Unexpected peeked token in parseArg: {any}\n", .{hasPeeked});
+            },
+        }
+        return ParserError.Unexpected;
     }
 
     pub fn parseBlockItem(self: *Parser) ParserError!*AST.BlockItem {
@@ -158,6 +213,7 @@ pub const Parser = struct {
         switch ((try self.l.peekToken(self.allocator)).?.type) {
             .RETURN => {
                 _ = try self.l.nextToken(self.allocator);
+                std.log.warn("In return\n", .{});
                 const expr = try self.parseExpression(0);
                 try self.logger.info("Expr obtained from return: {any} and {any}\n", .{ expr, if (std.meta.activeTag(expr.*) == AST.ExpressionType.Unary) expr.Unary.exp else null });
                 const retStmt = try self.allocator.create(AST.Statement);
@@ -392,6 +448,29 @@ pub const Parser = struct {
                 return exp;
             },
             .IDENTIFIER => {
+                const peekedTwo = try self.l.peekTwoTokens(self.allocator);
+                if (peekedTwo[1] != null and peekedTwo[1].?.type == lexer.TokenType.LPAREN) {
+                    //Function Call
+                    const fnName = self.l.buffer[peekedTwo[0].?.start .. peekedTwo[0].?.end + 1];
+                    var args = std.ArrayList(*AST.Expression).init(self.allocator);
+                    _ = try self.l.nextToken(self.allocator);
+                    _ = try self.l.nextToken(self.allocator);
+                    while ((try self.l.peekToken(self.allocator)).?.type != lexer.TokenType.RPAREN) {
+                        const expr = try self.parseExpression(0);
+                        try args.append(expr);
+                        if ((try self.l.peekToken(self.allocator)).?.type == lexer.TokenType.COMMA) {
+                            _ = try self.l.nextToken(self.allocator);
+                        }
+                    }
+                    _ = try self.l.nextToken(self.allocator);
+                    const functionCall = try self.allocator.create(AST.Expression);
+                    functionCall.* = .{ .FunctionCall = .{
+                        .name = fnName,
+                        .args = args,
+                    } };
+                    return functionCall;
+                }
+                // Identifier
                 const currToken = try self.l.nextToken(self.allocator);
                 const identifier = try self.allocator.create(AST.Expression);
                 identifier.* = AST.Expression{ .Identifier = self.l.buffer[currToken.start .. currToken.end + 1] };
@@ -550,7 +629,7 @@ test "testing basic parser" {
     const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
     var p = try Parser.init(allocator, l);
     const program = try p.parseProgram();
-    _ = try std.testing.expect(std.mem.eql(u8, program.function.name, "main"));
+    _ = try std.testing.expect(std.mem.eql(u8, program.externalDecls.items[0].FunctionDecl.name, "main"));
 }
 
 test "parse factor" {
@@ -573,7 +652,7 @@ test "parsing expression with precedence" {
     const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
     var p = try Parser.init(allocator, l);
     const program = try p.parseProgram();
-    std.log.warn("\x1b[34m{any}\x1b[0m", .{program.function.blockItems.items[0].Statement.Return.expression});
+    std.log.warn("\x1b[34m{any}\x1b[0m", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[0].Statement.Return.expression});
     //_ = try std.testing.expectEqual(program.function.statement.Return.expression, 2);
 }
 
@@ -585,8 +664,8 @@ test "more complicated precedence" {
     const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
     var p = try Parser.init(allocator, l);
     const program = try p.parseProgram();
-    std.log.warn("\x1b[34m{any}\x1b[0m", .{program.function.blockItems.items[0].Statement.Return.expression});
-    std.log.warn("\x1b[34m{any}\x1b[0m", .{program.function.blockItems.items[0].Statement.Return.expression.Binary.lhs});
+    std.log.warn("\x1b[34m{any}\x1b[0m", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[0].Statement.Return.expression});
+    std.log.warn("\x1b[34m{any}\x1b[0m", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[0].Statement.Return.expression.Binary.lhs});
 }
 
 test "precedence with >= and <=" {
@@ -597,11 +676,11 @@ test "precedence with >= and <=" {
     const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
     var p = try Parser.init(allocator, l);
     const program = try p.parseProgram();
-    std.log.warn("Return exp: \x1b[34m{any}\x1b[0m", .{program.function.blockItems.items[0].Statement.Return.expression});
-    std.log.warn("Binary lhs: \x1b[34m{any}\x1b[0m", .{program.function.blockItems.items[0].Statement.Return.expression.Binary.lhs});
-    std.log.warn("\x1b[34m{any}\x1b[0m", .{program.function.blockItems.items[0].Statement.Return.expression.Binary.lhs.Binary.lhs});
-    std.log.warn("\x1b[34m{any}\x1b[0m", .{program.function.blockItems.items[0].Statement.Return.expression.Binary.lhs.Binary.rhs});
-    std.log.warn("\x1b[34m{any}\x1b[0m", .{program.function.blockItems.items[0].Statement.Return.expression.Binary.rhs.Integer});
+    std.log.warn("Return exp: \x1b[34m{any}\x1b[0m", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[0].Statement.Return.expression});
+    std.log.warn("Binary lhs: \x1b[34m{any}\x1b[0m", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[0].Statement.Return.expression.Binary.lhs});
+    std.log.warn("\x1b[34m{any}\x1b[0m", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[0].Statement.Return.expression.Binary.lhs.Binary.lhs});
+    std.log.warn("\x1b[34m{any}\x1b[0m", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[0].Statement.Return.expression.Binary.lhs.Binary.rhs});
+    std.log.warn("\x1b[34m{any}\x1b[0m", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[0].Statement.Return.expression.Binary.rhs.Integer});
 }
 
 test "parsing declarations and statements" {
@@ -612,8 +691,8 @@ test "parsing declarations and statements" {
     const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
     var p = try Parser.init(allocator, l);
     const program = try p.parseProgram();
-    std.log.warn("\x1b[34m{any}\x1b[0m", .{program.function.blockItems.items[0]});
-    std.log.warn("\x1b[34m{s}\x1b[0m", .{program.function.blockItems.items[0].Declaration.name});
+    std.log.warn("\x1b[34m{any}\x1b[0m", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[0]});
+    std.log.warn("\x1b[34m{s}\x1b[0m", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[0].Declaration.name});
 }
 
 test "parsing declarations right associativity" {
@@ -624,13 +703,13 @@ test "parsing declarations right associativity" {
     const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
     var p = try Parser.init(allocator, l);
     const program = try p.parseProgram();
-    std.log.warn("\x1b[34m{any}\x1b[0m", .{program.function.blockItems.items[0]});
-    std.log.warn("\x1b[34m{s}\x1b[0m", .{program.function.blockItems.items[0].Declaration.name});
-    std.log.warn("\x1b[34m{any}\x1b[0m", .{program.function.blockItems.items[1]});
-    std.log.warn("\x1b[34m{s}\x1b[0m", .{program.function.blockItems.items[1].Declaration.name});
-    std.log.warn("\x1b[34m{any}\x1b[0m", .{program.function.blockItems.items[1].Declaration.expression});
-    std.log.warn("\x1b[34m{s}\x1b[0m", .{program.function.blockItems.items[1].Declaration.expression.?.Assignment.lhs.Identifier});
-    std.log.warn("\x1b[34m{any}\x1b[0m", .{program.function.blockItems.items[1].Declaration.expression.?.Assignment.rhs});
+    std.log.warn("\x1b[34m{any}\x1b[0m", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[0]});
+    std.log.warn("\x1b[34m{s}\x1b[0m", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[0].Declaration.name});
+    std.log.warn("\x1b[34m{any}\x1b[0m", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[1]});
+    std.log.warn("\x1b[34m{s}\x1b[0m", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[1].Declaration.name});
+    std.log.warn("\x1b[34m{any}\x1b[0m", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[1].Declaration.expression});
+    std.log.warn("\x1b[34m{s}\x1b[0m", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[1].Declaration.expression.?.Assignment.lhs.Identifier});
+    std.log.warn("\x1b[34m{any}\x1b[0m", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[1].Declaration.expression.?.Assignment.rhs});
 }
 
 test "test if statements" {
@@ -641,9 +720,9 @@ test "test if statements" {
     const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
     var p = try Parser.init(allocator, l);
     const program = try p.parseProgram();
-    std.log.warn("Cond: \x1b[34m{any}\x1b[0m\n", .{program.function.blockItems.items[2].Statement.If.condition});
-    std.log.warn("Then: \x1b[34m{any}\x1b[0m\n", .{program.function.blockItems.items[2].Statement.If.thenStmt});
-    std.log.warn("Else: \x1b[34m{any}\x1b[0m", .{program.function.blockItems.items[2].Statement.If.elseStmt.?});
+    std.log.warn("Cond: \x1b[34m{any}\x1b[0m\n", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[2].Statement.If.condition});
+    std.log.warn("Then: \x1b[34m{any}\x1b[0m\n", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[2].Statement.If.thenStmt});
+    std.log.warn("Else: \x1b[34m{any}\x1b[0m", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[2].Statement.If.elseStmt.?});
 }
 
 test "test ternary statements" {
@@ -654,9 +733,9 @@ test "test ternary statements" {
     const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
     var p = try Parser.init(allocator, l);
     const program = try p.parseProgram();
-    std.log.warn("lhs: {any}\n", .{program.function.blockItems.items[2].Statement.Return.expression.Ternary.lhs});
-    std.log.warn("rhs: {any}\n", .{program.function.blockItems.items[2].Statement.Return.expression.Ternary.rhs});
-    std.log.warn("condition: {any}\n", .{program.function.blockItems.items[2].Statement.Return.expression.Ternary.condition});
+    std.log.warn("lhs: {any}\n", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[2].Statement.Return.expression.Ternary.lhs});
+    std.log.warn("rhs: {any}\n", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[2].Statement.Return.expression.Ternary.rhs});
+    std.log.warn("condition: {any}\n", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[2].Statement.Return.expression.Ternary.condition});
 }
 
 test "test label" {
@@ -667,22 +746,22 @@ test "test label" {
     const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
     var p = try Parser.init(allocator, l);
     const program = try p.parseProgram();
-    std.log.warn("Goto: {s}\n", .{program.function.blockItems.items[2].Statement.Goto});
-    std.log.warn("Label: {s}\n", .{program.function.blockItems.items[3].Statement.Label});
+    std.log.warn("Goto: {s}\n", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[2].Statement.Goto});
+    std.log.warn("Label: {s}\n", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[3].Statement.Label});
 }
 
 test "test compound statement parsing" {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     const allocator = arena.allocator();
     defer arena.deinit();
-    const programStr = "int main(){int y = 4; int x = 2; {int x = 3;} return x+y;";
+    const programStr = "int main(){int y = 4; int x = 2; {int x = 3;} return x+y;}";
     const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
     var p = try Parser.init(allocator, l);
     const program = try p.parseProgram();
     try AST.scopeVariableResolutionPass(program, allocator);
-    std.log.warn("Compound statement: first statement: {any}\n", .{program.function.blockItems.items[2].Statement.Compound.items[0]});
-    std.log.warn("Declaration: of x: {s}\n", .{program.function.blockItems.items[1].Declaration.name});
-    std.log.warn("Compound statement: first statement decl varName: {s}\n", .{program.function.blockItems.items[2].Statement.Compound.items[0].Declaration.name});
+    std.log.warn("Compound statement: first statement: {any}\n", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[2].Statement.Compound.items[0]});
+    std.log.warn("Declaration: of x: {s}\n", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[1].Declaration.name});
+    std.log.warn("Compound statement: first statement decl varName: {s}\n", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[2].Statement.Compound.items[0].Declaration.name});
 }
 
 test "test while and dowhile" {
@@ -701,9 +780,9 @@ test "test while and dowhile" {
     var p = try Parser.init(allocator, l);
     const program = try p.parseProgram();
     try AST.scopeVariableResolutionPass(program, allocator);
-    std.log.warn("While statement: condition: {any}\n", .{program.function.blockItems.items[1].Statement.While.condition});
-    std.log.warn("While statement: body: {any}\n", .{program.function.blockItems.items[1].Statement.While.body});
-    std.log.warn("DoWhile statement: body: {any}\n", .{program.function.blockItems.items[2].Statement.DoWhile.body});
+    std.log.warn("While statement: condition: {any}\n", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[1].Statement.While.condition});
+    std.log.warn("While statement: body: {any}\n", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[1].Statement.While.body});
+    std.log.warn("DoWhile statement: body: {any}\n", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[2].Statement.DoWhile.body});
 }
 
 test "test for statement" {
@@ -721,8 +800,35 @@ test "test for statement" {
     var p = try Parser.init(allocator, l);
     const program = try p.parseProgram();
     try AST.scopeVariableResolutionPass(program, allocator);
-    std.log.warn("for init:{any} ", .{program.function.blockItems.items[1].Statement.For.init});
-    std.log.warn("for condition:{any} ", .{program.function.blockItems.items[1].Statement.For.condition});
-    std.log.warn("for post:{any} ", .{program.function.blockItems.items[1].Statement.For.post});
-    std.log.warn("for statement:{any} ", .{program.function.blockItems.items[1].Statement.For.body});
+    std.log.warn("for init:{any} ", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[1].Statement.For.init});
+    std.log.warn("for condition:{any} ", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[1].Statement.For.condition});
+    std.log.warn("for post:{any} ", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[1].Statement.For.post});
+    std.log.warn("for statement:{any} ", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[1].Statement.For.body});
+}
+
+test "parse multiple functions" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const programStr =
+        \\ int add(int x, int y) { return x+y;}
+        \\ int main(){
+        \\     return add(2,3);
+        \\ }
+    ;
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try Parser.init(allocator, l);
+    const program = try p.parseProgram();
+    try AST.scopeVariableResolutionPass(program, allocator);
+    std.log.warn("Add function : {s}, body: {any}\n", .{
+        program.externalDecls.items[0].FunctionDecl.name,
+        program.externalDecls.items[0].FunctionDecl.blockItems.items[0].Statement.Return,
+    });
+    std.log.warn("Main function : {s}, body: {any}\n", .{
+        program.externalDecls.items[1].FunctionDecl.name,
+        program.externalDecls.items[1].FunctionDecl.blockItems.items[0].Statement.Return.expression.FunctionCall,
+    });
+    for (program.externalDecls.items[1].FunctionDecl.blockItems.items[0].Statement.Return.expression.FunctionCall.args.items) |arg| {
+        std.log.warn("Arg is {any}\n", .{arg});
+    }
 }

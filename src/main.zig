@@ -1,5 +1,6 @@
 const std = @import("std");
 const lexer = @import("./lexer.zig");
+const ast = @import("./AST.zig");
 const parser = @import("./parser.zig");
 const assembly = @import("./Assembly.zig");
 
@@ -18,9 +19,10 @@ pub fn main() !void {
     }
 
     const filename = args[1];
+    const shouldDumpTac = if (args.len >= 3) args[2] else null;
 
-    // Open the file for reading
-    const file = try std.fs.cwd().openFile(filename, .{});
+    const file = try std.fs.cwd().openFile(filename, std.fs.File.OpenFlags{ .mode = .read_only });
+
     defer file.close();
 
     // Read the entire file into a buffer
@@ -32,41 +34,23 @@ pub fn main() !void {
     const l = try lexer.Lexer.init(allocator, buffer);
     var p = try parser.Parser.init(allocator, l);
     var program = try p.parseProgram();
-    const instructions = try program.genTAC(allocator);
-    var asmInstructions = std.ArrayList(*assembly.Instruction).init(allocator);
-    for (instructions.items) |inst| {
-        try inst.codegen(&asmInstructions, allocator);
+    try ast.scopeVariableResolutionPass(program, allocator);
+    try ast.loopLabelPass(program, allocator);
+    const tacProgram = try program.genTAC(allocator);
+
+    if (shouldDumpTac != null and std.mem.eql(u8, shouldDumpTac.?, "tacDump")) {
+        _ = try std.fs.cwd().createFile("tacDump", .{});
+        const tacDump = try std.fs.cwd().openFile("tacDump", std.fs.File.OpenFlags{ .mode = .read_write });
+        defer tacDump.close();
+        const tacDumpWriter = tacDump.writer();
+        for (tacProgram.function.items) |tacFn| {
+            try tacDumpWriter.writeAll(tacFn.name);
+            try tacDumpWriter.writeAll("\n\n");
+            for (tacFn.instructions.items) |tacFnInst| {
+                try tacDumpWriter.writeAll(try std.fmt.allocPrint(allocator, "{any}\n", .{tacFnInst}));
+            }
+        }
     }
-    for (asmInstructions.items) |asmInst| {
-        std.log.warn("\n \x1b[34m{any}\x1b[0m", .{asmInst});
-    }
-    try assembly.replacePseudoRegs(&asmInstructions, allocator);
-    const fixedAsmInstructions = assembly.fixupInstructions(&asmInstructions, allocator);
-    std.log.warn("POST PSEUDO REPLACEMENT AND STACK TO STACK MOVES", .{});
-    // for (asmInstructions.items) |asmInst| {
-    //     std.log.warn("\n \x1b[34m{any}\x1b[0m", .{asmInst});
-    // }
-    var mem: [2048]u8 = std.mem.zeroes([2048]u8);
-    var buf = @as([]u8, &mem);
-    const header = try std.fmt.bufPrint(buf, ".globl main\nmain:\npush %rbp", .{});
-    buf = buf[header.len..];
-    for (fixedAsmInstructions.items) |asmInst| {
-        const printedSlice = try std.fmt.bufPrint(buf, "\n{s}", .{try asmInst.stringify(allocator)});
-        buf = buf[printedSlice.len..];
-    }
-
-    const temp_filename = "temp.s";
-    var writeFile = try std.fs.cwd().createFile(temp_filename, .{});
-    defer writeFile.close();
-
-    try writeFile.writeAll(@as([]u8, &mem));
-
-    // Step 2: Run `gcc -o test temp.s`
-    //var gcc_args = [_][]const u8{ "gcc", "-o", "test", temp_filename };
-    //var gcc_exec = std.process.Exec.make(allocator, gcc_args) catch |err| {
-    //    std.debug.print("Failed to start gcc: {}\n", .{err});
-    //    return err;
-    //};
-
-    std.log.warn("\n\x1b[33m{s}\x1b[0m", .{buf});
+    const asmProgram = try tacProgram.codegen(allocator);
+    try asmProgram.stringify(std.io.getStdOut().writer(), allocator);
 }

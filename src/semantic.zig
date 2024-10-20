@@ -6,6 +6,7 @@ const SemanticError = error{
     VarNotDeclared,
     OutOfMemory,
     UnknownLabel,
+    NoSpaceLeft,
 };
 
 pub fn resolveDeclaration(declaration: *AST.Declaration, varMap: *std.StringHashMap([]u8)) SemanticError!void {
@@ -46,6 +47,11 @@ pub fn resolveExpression(expression: *AST.Expression, varMap: *std.StringHashMap
             try resolveExpression(ternary.condition, varMap);
             try resolveExpression(ternary.lhs, varMap);
             try resolveExpression(ternary.rhs, varMap);
+        },
+        .FunctionCall => |fnCall| {
+            for (fnCall.args.items) |arg| {
+                try resolveExpression(arg, varMap);
+            }
         },
     }
 }
@@ -111,9 +117,19 @@ pub fn resolveBlockItem(blockItem: *AST.BlockItem, varMap: *std.StringHashMap([]
 }
 
 pub fn varResolutionPass(allocator: std.mem.Allocator, node: *AST.Program) SemanticError!void {
-    const varMap = std.StringHashMap([]u8).init(allocator);
-    for (node.function.blockItems.items) |blockItem| {
-        try resolveBlockItem(blockItem, @constCast(&varMap));
+    // TODO: Support for global variables
+    for (node.externalDecls.items) |externalDecl| {
+        switch (externalDecl.*) {
+            .FunctionDecl => |functionDecl| {
+                const varMap = std.StringHashMap([]u8).init(allocator);
+                for (functionDecl.blockItems.items) |blockItem| {
+                    try resolveBlockItem(blockItem, @constCast(&varMap));
+                }
+            },
+            .VarDeclaration => {
+                unreachable();
+            },
+        }
     }
 }
 

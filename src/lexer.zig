@@ -40,6 +40,7 @@ pub const TokenType = enum {
     FOR,
     BREAK,
     CONTINUE,
+    COMMA,
 };
 
 pub const Token = struct {
@@ -170,6 +171,9 @@ pub const Lexer = struct {
             },
             '}' => {
                 return (try createSingleWidthToken(TokenType.RBRACE, allocator, lexer));
+            },
+            ',' => {
+                return (try createSingleWidthToken(TokenType.COMMA, allocator, lexer));
             },
             '<' => {
                 return (try createDoubleWidthToken(&[_]u8{'='}, &[_]TokenType{TokenType.LESSEQ}, TokenType.LESS, allocator, lexer));
@@ -355,6 +359,9 @@ pub const Lexer = struct {
             },
             ';' => {
                 nextSingleWidthTokMacro(TokenType.SEMICOLON, token, lexer);
+            },
+            ',' => {
+                nextSingleWidthTokMacro(TokenType.COMMA, token, lexer);
             },
             '!' => {
                 try nextDoubleWidthTokMacro(&[_]TokenType{TokenType.ASSIGN}, &[_]TokenType{TokenType.NOT_EQUALS}, TokenType.NOT, lexer, token, allocator);
@@ -611,4 +618,14 @@ test "Ternary and if else" {
     _ = try std.testing.expectEqual(colon.type, TokenType.COLON);
     _ = try std.testing.expectEqual(ifTok.type, TokenType.IF);
     _ = try std.testing.expectEqual(elseTok.type, TokenType.ELSE);
+}
+
+test "comma" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const buffer = ",";
+    const lexer = try Lexer.init(allocator, @as([]u8, @constCast(buffer)));
+    const comma = try lexer.nextToken(allocator); //ternary
+    _ = try std.testing.expectEqual(comma.type, TokenType.COMMA);
 }
