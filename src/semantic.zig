@@ -6,6 +6,7 @@ const SemanticError = error{
     VarNotDeclared,
     OutOfMemory,
     UnknownLabel,
+    NoSpaceLeft,
 };
 
 pub fn resolveDeclaration(declaration: *AST.Declaration, varMap: *std.StringHashMap([]u8)) SemanticError!void {

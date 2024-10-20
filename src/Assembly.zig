@@ -6,6 +6,28 @@ inline fn abs(src: i32) u32 {
     return if (src < 0) @intCast(-src) else @intCast(src);
 }
 
+pub const Program = struct {
+    functions: std.ArrayList(*Function),
+    const Self = @This();
+    pub fn stringify(self: *Self, writer: std.fs.File.Writer, allocator: std.mem.Allocator) !void {
+        try writer.writeAll(
+            \\ .section .note.GNU-stack,"",@progbits
+            \\ .section .text
+            \\
+        );
+        try writer.writeAll(".globl main\n");
+        for (self.functions.items) |function| {
+            try replacePseudoRegs(function, allocator);
+            const fixedAsmInstructions = try fixupInstructions(&function.instructions, allocator);
+            function.instructions = fixedAsmInstructions;
+            //TODO: Probably return the string and not print it here
+            const fnString = try function.stringify(allocator);
+            try writer.writeAll(fnString);
+            try writer.writeAll("\n");
+        }
+    }
+};
+
 pub const Function = struct {
     name: []u8,
     args: std.ArrayList([]u8),
@@ -370,7 +392,6 @@ pub fn fixupInstructions(instructions: *std.ArrayList(*Instruction), allocator: 
                 }
             },
             .Cmp => |cmp| {
-                std.log.warn("op1 tagName: {s} and op2 tagName: {s}\n", .{ @tagName(cmp.op1), @tagName(cmp.op2) });
                 if (std.mem.eql(u8, @tagName(cmp.op1), "Stack") and std.mem.eql(u8, @tagName(cmp.op2), "Stack")) {
                     const movInst = try allocator.create(Instruction);
                     movInst.* = Instruction{
@@ -565,7 +586,6 @@ pub fn replacePseudoRegs(function: *Function, allocator: std.mem.Allocator) ast.
                     },
                     else => {},
                 }
-                std.log.warn("New inst: {any}\n", .{inst.Cmp});
             },
             .SetCC => |setCC| {
                 switch (setCC.dest) {
