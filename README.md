@@ -5,7 +5,6 @@
 
 ```bash
 zig build
-./zig-out/bin/zig-cc test.c # This generates a temp.s asm file
-zig cc -o exec temp.s
-./exec
+./zig-out/bin/zig-cc <c-file-path> # generates assembly to stdout
 ```
+- providing `tacDump` as `argv[2]` for zig-cc will dump the TAC structs into a file.

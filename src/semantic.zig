@@ -9,6 +9,13 @@ const SemanticError = error{
     NoSpaceLeft,
 };
 
+const TypeError = error{TypeMismatch};
+
+pub fn typechecker(program: *AST.Program) TypeError!void {
+    _ = program;
+    unreachable();
+}
+
 pub fn resolveDeclaration(declaration: *AST.Declaration, varMap: *std.StringHashMap([]u8)) SemanticError!void {
     if (!varMap.contains(declaration.name)) {
         const temp = try AST.tempGen.genTemp(varMap.allocator);
