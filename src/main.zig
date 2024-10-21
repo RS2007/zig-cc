@@ -35,6 +35,7 @@ pub fn main() !void {
     const l = try lexer.Lexer.init(allocator, buffer);
     var p = try parser.Parser.init(allocator, l);
     var program = try p.parseProgram();
+
     try ast.scopeVariableResolutionPass(program, allocator); // Resolve scope by a variable renaming pass
     const hasTypeError = try semantic.typechecker(program, allocator); // Check if there are type issues
     if (hasTypeError) |typeError| {
@@ -57,6 +58,7 @@ pub fn main() !void {
             }
         }
     }
+
     const asmProgram = try tacProgram.codegen(allocator);
     try asmProgram.stringify(std.io.getStdOut().writer(), allocator);
 }

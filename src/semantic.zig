@@ -250,6 +250,7 @@ pub fn varResolutionPass(allocator: std.mem.Allocator, node: *AST.Program) Seman
                 const varMap = std.StringHashMap([]u8).init(allocator);
                 for (functionDecl.blockItems.items) |blockItem| {
                     try resolveBlockItem(blockItem, @constCast(&varMap), allocator);
+
                 }
             },
             .VarDeclaration => {

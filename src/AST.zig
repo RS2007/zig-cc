@@ -174,7 +174,9 @@ pub const Return = struct {
     expression: *Expression,
 };
 
+
 pub const Type = enum { Integer, Void };
+
 
 pub const NonVoidArg = struct {
     type: Type,

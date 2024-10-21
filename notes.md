@@ -189,9 +189,6 @@ in the codegeneration itself.
     - call to the function
 
 
-### Typechecker
--  functions can return void 
-
 ### Enhancements
 
 - VarResolutionPass is shady within scopes
