@@ -194,5 +194,5 @@ in the codegeneration itself.
 
 ### Enhancements
 
+- VarResolutionPass is shady within scopes
 - When there is no return in int main, make it return 0.
-- Inside a function ensure that return types matches the type specified  

@@ -3,6 +3,7 @@ const lexer = @import("./lexer.zig");
 const ast = @import("./AST.zig");
 const parser = @import("./parser.zig");
 const assembly = @import("./Assembly.zig");
+const semantic = @import("./semantic.zig");
 
 pub fn main() !void {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
@@ -34,8 +35,13 @@ pub fn main() !void {
     const l = try lexer.Lexer.init(allocator, buffer);
     var p = try parser.Parser.init(allocator, l);
     var program = try p.parseProgram();
-    try ast.scopeVariableResolutionPass(program, allocator);
-    try ast.loopLabelPass(program, allocator);
+    try ast.scopeVariableResolutionPass(program, allocator); // Resolve scope by a variable renaming pass
+    const hasTypeError = try semantic.typechecker(program, allocator); // Check if there are type issues
+    if (hasTypeError) |typeError| {
+        std.log.warn("\x1b[33mError\x1b[0m: {s}\n", .{typeError.errorPayload});
+        std.os.linux.exit(-1);
+    }
+    try ast.loopLabelPass(program, allocator); // Labelling loops for break and continue
     const tacProgram = try program.genTAC(allocator);
 
     if (shouldDumpTac != null and std.mem.eql(u8, shouldDumpTac.?, "tacDump")) {
