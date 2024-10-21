@@ -107,6 +107,7 @@ pub const BlockItem = union(BlockItemType) {
 pub const Declaration = struct {
     name: []u8,
     expression: ?*Expression,
+    type: Type,
 
     const Self = @This();
     pub fn genTACInstructions(self: Self, instructions: *std.ArrayList(*tac.Instruction), allocator: std.mem.Allocator) CodegenError!void {
@@ -173,7 +174,9 @@ pub const Return = struct {
     expression: *Expression,
 };
 
-pub const Type = enum { Integer };
+
+pub const Type = enum { Integer, Void };
+
 
 pub const NonVoidArg = struct {
     type: Type,
@@ -195,6 +198,7 @@ pub const FunctionDef = struct {
     name: []u8,
     args: std.ArrayList(*Arg),
     blockItems: std.ArrayList(*BlockItem),
+    returnType: Type,
 
     pub fn genTAC(functionDef: FunctionDef, instructions: *std.ArrayList(*tac.Instruction), allocator: std.mem.Allocator) CodegenError!void {
         for (functionDef.blockItems.items) |blockItem| {

@@ -61,8 +61,10 @@ Return(Unary(Negate,
 
 - [x] Gotos and labelled
 - [x] Compound statements 
-- [ ] Loops
+- [x] Loops
 - [ ] Functions
+    - [ ] Typechecker(void lexing + writing a pass)
+    - [ ] Unit tests for error messages (parser + semantic analysis level) 
 - [ ] Storage specifiers
 - [ ] long
 - [ ] uint
@@ -71,6 +73,15 @@ Return(Unary(Negate,
 - [ ] arrays + pointer arithmetic
 - [ ] chars and strings
 - [ ] dynamic memory allocation (can we support garbage collection?)
+- [ ] TAC to CFG
+- [ ] CFG to SSA
+- [ ] Dead code Elimination
+- [ ] Conditional Constant Propogation
+- [ ] Strength Reduction and Global Value Numbering
+- [ ] Peephole optimizations
+- [ ] Register Allocation
+- [ ] Support for function inlining (call graph construction)
+
 
 ### Can we support garbage collection?
 
@@ -176,3 +187,9 @@ in the codegeneration itself.
 - Handling FunctionCall
     - move arguments to the specific registers
     - call to the function
+
+
+### Enhancements
+
+- VarResolutionPass is shady within scopes
+- When there is no return in int main, make it return 0.
