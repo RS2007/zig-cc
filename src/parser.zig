@@ -55,7 +55,6 @@ pub const Parser = struct {
     }
 
     pub fn parseExternalDecl(self: *Parser) ParserError!*AST.ExternalDecl {
-
         const returnType = try self.l.nextToken(self.allocator);
         std.debug.assert(returnType.type == lexer.TokenType.INT_TYPE or returnType.type == lexer.TokenType.VOID);
         const peekTwo = try self.l.peekTwoTokens(self.allocator);
@@ -85,7 +84,6 @@ pub const Parser = struct {
             .blockItems = blockItems,
             .args = argList,
             .returnType = if (returnType.type == lexer.TokenType.INT_TYPE) AST.Type.Integer else AST.Type.Void,
-
         };
         functionDecl.* = .{
             .FunctionDecl = functionDef,

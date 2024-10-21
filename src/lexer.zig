@@ -599,7 +599,6 @@ test "Ternary and if else" {
     _ = try std.testing.expectEqual(elseTok.type, TokenType.ELSE);
 }
 
-
 test "comma and void" {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     const allocator = arena.allocator();
