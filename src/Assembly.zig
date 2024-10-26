@@ -6,8 +6,35 @@ inline fn abs(src: i32) u32 {
     return if (src < 0) @intCast(-src) else @intCast(src);
 }
 
+pub const GlobalVar = struct {
+    name: []u8,
+};
+
+pub const AsmRenderer = struct {
+    dataSection: std.ArrayList(u8),
+    textSection: std.ArrayList(u8),
+    dataSectionWriter: std.io.Writer,
+    textSectionWriter: std.io.Writer,
+
+    const Self = @This();
+    pub fn init(allocator: std.mem.Allocator) !*Self {
+        const asmRenderer = try allocator.create(Self);
+        asmRenderer.* = .{
+            .dataSection = std.ArrayList(u8).init(allocator),
+            .textSection = std.ArrayList(u8).init(allocator),
+        };
+        asmRenderer.dataSectionWriter = asmRenderer.dataSection.writer();
+        asmRenderer.textSectionWriter = asmRenderer.textSection.writer();
+        return asmRenderer;
+    }
+    pub fn render(program: *tac.Program) ![]u8{
+
+    }
+};
+
 pub const Program = struct {
     functions: std.ArrayList(*Function),
+    globals: std.ArrayList(*GlobalVar),
     const Self = @This();
     pub fn stringify(self: *Self, writer: std.fs.File.Writer, allocator: std.mem.Allocator) !void {
         try writer.writeAll(
@@ -15,12 +42,21 @@ pub const Program = struct {
             \\ .section .text
             \\
         );
+        try writer.writeAll(
+            \\ .section .data
+            \\ .align 4
+        );
+        for (self.globals.items) |globl| {
+            try writer.writeAll("\n");
+            try writer.writeAll(try std.fmt.allocPrint(".globl {s}\n", .{globl.name}));
+            try writer.writeAll(try std.fmt.allocPrint("{s}:", .{globl.name}));
+            try writer.writeAll(try std.fmt.allocPrint(".long 0", .{globl.name}));
+        }
         try writer.writeAll(".globl main\n");
         for (self.functions.items) |function| {
             try replacePseudoRegs(function, allocator);
             const fixedAsmInstructions = try fixupInstructions(&function.instructions, allocator);
             function.instructions = fixedAsmInstructions;
-            //TODO: Probably return the string and not print it here
             const fnString = try function.stringify(allocator);
             try writer.writeAll(fnString);
             try writer.writeAll("\n");
@@ -618,4 +654,25 @@ pub fn replacePseudoRegs(function: *Function, allocator: std.mem.Allocator) ast.
         0,
         allocateStackInst,
     );
+}
+
+test "asmRenderer" {
+    const lexer = @import("./lexer.zig");
+    const parser = @import("./parser.zig");
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const programStr =
+        \\ int k = 3*4;
+        \\ int main(){
+        \\     return k;
+        \\ }
+    ;
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    const program = try p.parseProgram();
+    try ast.scopeVariableResolutionPass(program, allocator);
+    try ast.loopLabelPass(program, allocator);
+    const asmRenderer = try AsmRenderer.init(allocator);
+    try asmRenderer.render((try program.genTAC(allocator)));
 }

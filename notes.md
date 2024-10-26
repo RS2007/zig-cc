@@ -193,3 +193,66 @@ in the codegeneration itself.
 
 - VarResolutionPass is shady within scopes
 - When there is no return in int main, make it return 0.
+
+## Storage specifiers 
+
+- Static, Extern and None.  
+- These have different meanings based on where they are used (file scope or block scope)
+- In assembly:   
+
+
+### Modifications to semantic analyzer
+
+* Symbol table redesign
+* Typechecker should run before the symbol table resolution
+- Typechecker can weed out a lot of trivial issues, so that we can maintain a single table for scope resolutions
+- maintaing a scope within a typechecker
+- global scope, at every compound copy the hashmap and run it within the children
+- currently there are two types: `Int` and `Function`
+- TypeCheckerTableEntry should have a `isDefined` for functions to weed out multiple definitions.
+
+- Final goal is to have a single table that encapsulates all the necessary info about the AST.
+
+### General cleanup
+
+* Some functions are very large as of now, shorten them by creating helpers 
+
+### On linkage
+
+* Interal linkage entries never refer to entries in different files.
+* Global variables and functions have external linkage.
+ 
+* Just have a pass to check if the function returns have the right types?  
+* loss of the typechecker
+- The API's require a lot of work to be clean
+* The craziest blunder in this whole business was to implement a typechecker right now.  
+* Esoteric behaviour will be handled later
+
+
+* Polymorphic typecheck table for varDecl and fnDecl is fine
+* Resolve Expression  
+
+> [!NOTE]
+> Not supporting extern for now
+
+* Check types, in your var resolution pass dont rename globals
+* In genTAC, the tac global symbols  should be stored in another array
+* Convert to assembly globals array
+* This should ideally work
+
+> [!NOTE]
+> When the functions are getting two many arguments, you probably need a class to store state
+
+
+### Plan
+
+* Why does assemby have a program abstraction?     
+* Assembly is linear: labels, loads, stores, arith etc
+* Different sections in assembly can be made into different buffers
+* Renderer should have state (too many args to functions)
+
+* ASMRenderer:
+    * pass in a function that takes in a tac program and tac global symbols
+    * two buffers internally, a data buffer and a text buffer
+    * push the glob symbols with inits into the data buffer
+    *  

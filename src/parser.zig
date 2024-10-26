@@ -1,6 +1,7 @@
 const std = @import("std");
 const lexer = @import("./lexer.zig");
 const AST = @import("./AST.zig");
+const semantic = @import("./semantic.zig");
 const Logger = @import("./Logger.zig");
 const MyLogger = Logger.Logger;
 
@@ -59,7 +60,35 @@ pub const Parser = struct {
         std.debug.assert(returnType.type == lexer.TokenType.INT_TYPE or returnType.type == lexer.TokenType.VOID);
         const peekTwo = try self.l.peekTwoTokens(self.allocator);
         if (peekTwo[1].?.type != lexer.TokenType.LPAREN) {
-            return ParserError.Unimplemented;
+            //TODO: This should be done within parseDeclaration, peekNTokens function?
+            std.debug.assert(returnType.type == lexer.TokenType.INT_TYPE);
+            const varDecl = try self.allocator.create(AST.Declaration);
+            const varName = try self.l.nextToken(self.allocator);
+            varDecl.* = .{
+                .name = self.l.buffer[varName.start .. varName.end + 1],
+                .type = AST.Type.Integer,
+                .expression = null,
+            };
+            const externalDecl = try self.allocator.create(AST.ExternalDecl);
+            externalDecl.* = .{
+                .VarDeclaration = varDecl,
+            };
+            switch (peekTwo[1].?.type) {
+                .SEMICOLON => {
+                    return externalDecl;
+                },
+                .ASSIGN => {
+                    _ = try self.l.nextToken(self.allocator);
+                    const expression = try self.parseExpression(0);
+                    externalDecl.VarDeclaration.expression = expression;
+                    std.debug.assert((try self.l.nextToken(self.allocator)).type == lexer.TokenType.SEMICOLON);
+                    return externalDecl;
+                },
+                else => {
+                    unreachable;
+                },
+            }
+            return externalDecl;
         }
         const fnNameToken = try self.l.nextToken(self.allocator);
         var argList = std.ArrayList(*AST.Arg).init(self.allocator);
@@ -107,18 +136,23 @@ pub const Parser = struct {
                 const arg = try self.allocator.create(AST.Arg);
                 _ = try self.l.nextToken(self.allocator);
                 const argName = try self.l.nextToken(self.allocator);
-                arg.* = .{ .NonVoidArg = .{ .type = AST.Type.Integer, .identifier = self.l.buffer[argName.start .. argName.end + 1] } };
+                arg.* = .{
+                    .NonVoidArg = .{
+                        .type = AST.Type.Integer,
+                        .identifier = self.l.buffer[argName.start .. argName.end + 1],
+                    },
+                };
                 return arg;
             },
-            //.VOID => {
-            //    const arg = self.allocator.create(AST.Arg);
-            //    arg.* = .{
-            //        .Void = {},
-            //    };
-            //    return arg;
-            //},
+            .VOID => {
+                const arg = try self.allocator.create(AST.Arg);
+                arg.* = .{
+                    .Void = {},
+                };
+                return arg;
+            },
             else => {
-                std.log.warn("Unexpected peeked token in parseArg: {any}\n", .{hasPeeked});
+                unreachable;
             },
         }
         return ParserError.Unexpected;
@@ -831,6 +865,39 @@ test "parse multiple functions" {
         program.externalDecls.items[1].FunctionDecl.blockItems.items[0].Statement.Return.expression.FunctionCall,
     });
     for (program.externalDecls.items[1].FunctionDecl.blockItems.items[0].Statement.Return.expression.FunctionCall.args.items) |arg| {
+        std.log.warn("Arg is {any}\n", .{arg});
+    }
+}
+
+test "parsing global variable declarations" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const programStr =
+        \\ int k = 3;
+        \\ int add(int x) { return k;}
+        \\ int main(){
+        \\     return add(2);
+        \\ }
+    ;
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try Parser.init(allocator, l);
+    const program = try p.parseProgram();
+    const hasTypeError = try semantic.typechecker(program, allocator);
+    if (hasTypeError) |typeErr| {
+        std.log.warn("\x1b[33mError\x1b[0m: {s}\n", .{typeErr.errorPayload});
+        unreachable();
+    }
+    std.log.warn("global variable decl parsed: {any} {s} = {any}\n", .{ program.externalDecls.items[0].VarDeclaration.type, program.externalDecls.items[0].VarDeclaration.name, program.externalDecls.items[0].VarDeclaration.expression.? });
+    std.log.warn("Add function : {s}, body: {any}\n", .{
+        program.externalDecls.items[1].FunctionDecl.name,
+        program.externalDecls.items[1].FunctionDecl.blockItems.items[0].Statement.Return,
+    });
+    std.log.warn("Main function : {s}, body: {any}\n", .{
+        program.externalDecls.items[2].FunctionDecl.name,
+        program.externalDecls.items[2].FunctionDecl.blockItems.items[0].Statement.Return.expression.FunctionCall,
+    });
+    for (program.externalDecls.items[2].FunctionDecl.blockItems.items[0].Statement.Return.expression.FunctionCall.args.items) |arg| {
         std.log.warn("Arg is {any}\n", .{arg});
     }
 }

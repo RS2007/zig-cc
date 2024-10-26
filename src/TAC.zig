@@ -11,8 +11,15 @@ pub const FunctionDef = struct {
     instructions: std.ArrayList(*Instruction),
 };
 
+pub const StaticVar = struct {
+    // TODO: have a global attribute (to distinguish between file scope and block scope)
+    name: []u8,
+    global: bool,
+};
+
 pub const Program = struct {
     function: std.ArrayList(*FunctionDef),
+    globalVars: std.ArrayList(*StaticVar),
     pub fn codegen(self: *Program, allocator: std.mem.Allocator) !*assembly.Program {
         var functions = std.ArrayList(*assembly.Function).init(allocator);
         for (self.function.items) |item| {
@@ -691,4 +698,23 @@ test "multiple functions and call" {
     //    buf = buf[printedSlice.len..];
     //}
     //std.log.warn("\n\x1b[33m{s}\x1b[0m", .{mem});
+}
+
+test "assembly generation global vars" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const programStr =
+        \\ int k = 3*4;
+        \\ int main(){
+        \\     return k;
+        \\ }
+    ;
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    const program = try p.parseProgram();
+    try ast.scopeVariableResolutionPass(program, allocator);
+    try ast.loopLabelPass(program, allocator);
+    const asmProgram = try (try program.genTAC(allocator)).codegen(allocator);
+    try asmProgram.stringify(std.io.getStdErr().writer(), allocator);
 }

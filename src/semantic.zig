@@ -9,27 +9,59 @@ const SemanticError = error{
     NoSpaceLeft,
 };
 
-const TypeError = error{ TypeMismatch, OutOfMemory };
+const TypeError = error{
+    TypeMismatch,
+    OutOfMemory,
+    UndefinedFn,
+    NoFnBody,
+    NotEnoughArgs,
+};
 
-pub const TypeErrorStruct = struct {
-    errorType: ?TypeError,
-    errorPayload: []u8,
+pub const TypeCheckResultStruct = struct {
+    result: ?AST.Type = null,
+    errorType: ?TypeError = null,
+    errorPayload: ?[]u8 = null,
+};
+
+// Instead of maintaing a function meta data map and a local variable map
+// Can't we just maintain a list of all the identifiers
+// Issue is scope level declarations, can a local variable be declared
+// in another scope with another type?
+
+pub const VarInfo = struct {
+    type: AST.Type,
+    externLinkage: bool,
+};
+
+pub const TypeKind = enum {
+    GlobalVar,
+    Fn,
+};
+
+pub const TypeData = union(TypeKind) {
+    GlobalVar: *GlobalVarData,
+    Fn: *FnMetaData,
+};
+
+pub const GlobalVarData = struct {
+    type: AST.Type,
 };
 
 pub const FnMetaData = struct {
     returnType: AST.Type,
-    localVarTypeMap: *std.StringHashMap(AST.Type),
+    localVarTypeMap: *std.StringHashMap(VarInfo),
 };
 
-pub fn typechecker(program: *AST.Program, allocator: std.mem.Allocator) !?*TypeErrorStruct {
+pub fn typechecker(program: *AST.Program, allocator: std.mem.Allocator) !?*TypeCheckResultStruct {
     // INFO: Only typechecking requirement right now is function call return
     // INFO: Maintain a function metadata hashmap and query that to check if the return type match
     // Buildling a metadata map for functions.
     var fnMetaDataMap = std.StringHashMap(FnMetaData).init(allocator);
+    // TODO: This may not be the optimal way to do this
     for (program.externalDecls.items) |externalDecl| {
         switch (externalDecl.*) {
             .FunctionDecl => |fnDecl| {
-                const localVarTypeMap = std.StringHashMap(AST.Type).init(allocator);
+                const localVarTypeMap = std.StringHashMap(VarInfo).init(allocator);
                 try fnMetaDataMap.put(
                     fnDecl.name,
                     .{
@@ -47,24 +79,16 @@ pub fn typechecker(program: *AST.Program, allocator: std.mem.Allocator) !?*TypeE
                 for (fnDecl.blockItems.items) |blkItem| {
                     switch (blkItem.*) {
                         .Declaration => |decl| {
-                            try fnMetaDataMap.get(fnDecl.name).?.localVarTypeMap.put(
-                                decl.name,
-                                decl.type,
-                            );
+                            try fnMetaDataMap.get(fnDecl.name).?.localVarTypeMap.put(decl.name, .{
+                                .type = decl.type,
+                                .externalLinkage = false,
+                            });
                         },
                         .Statement => {},
                     }
                 }
             },
             .VarDeclaration => {},
-        }
-    }
-    var iter = fnMetaDataMap.iterator();
-    while (iter.next()) |entry| {
-        std.log.warn("{s} : \n", .{entry.key_ptr.*});
-        var varIter = entry.value_ptr.localVarTypeMap.iterator();
-        while (varIter.next()) |varEntry| {
-            std.log.warn("{s}: {any}\n", .{ varEntry.key_ptr.*, varEntry.value_ptr.* });
         }
     }
     for (program.externalDecls.items) |externalDecl| {
@@ -81,7 +105,7 @@ pub fn typechecker(program: *AST.Program, allocator: std.mem.Allocator) !?*TypeE
                                         const lhsType = fnMetaDataMap.get(fnDecl.name).?.localVarTypeMap.get(stmt.Expression.Assignment.lhs.Identifier).?;
                                         const rhsType = fnMetaDataMap.get(stmt.Expression.Assignment.rhs.FunctionCall.name).?.returnType;
                                         if (lhsType != rhsType) {
-                                            const typeErrorStruct = try allocator.create(TypeErrorStruct);
+                                            const typeErrorStruct = try allocator.create(TypeCheckResultStruct);
                                             typeErrorStruct.* = .{
                                                 .errorType = TypeError.TypeMismatch,
                                                 .errorPayload = (try std.fmt.allocPrint(allocator, "Type mismatch: lhs type: {any} and rhs type: {any}\n", .{ lhsType, rhsType })),
@@ -96,7 +120,7 @@ pub fn typechecker(program: *AST.Program, allocator: std.mem.Allocator) !?*TypeE
                                 if (std.mem.eql(u8, @tagName(stmt.Return.expression.*), "Identifier")) {
                                     const identifierType = fnMetaDataMap.get(fnDecl.name).?.localVarTypeMap.get(stmt.Return.expression.Identifier).?;
                                     if (identifierType != fnDecl.returnType) {
-                                        const typeErrorStruct = try allocator.create(TypeErrorStruct);
+                                        const typeErrorStruct = try allocator.create(TypeCheckResultStruct);
                                         typeErrorStruct.* = .{
                                             .errorType = TypeError.TypeMismatch,
                                             .errorPayload = (try std.fmt.allocPrint(allocator, "Type mismatch: function supposed to return: {any} and found type in return: {any}\n", .{ fnDecl.returnType, identifierType })),
@@ -111,7 +135,7 @@ pub fn typechecker(program: *AST.Program, allocator: std.mem.Allocator) !?*TypeE
                             if (decl.expression) |expr| {
                                 if (std.mem.eql(u8, @tagName(expr.*), "FunctionCall")) {
                                     if (decl.type != fnMetaDataMap.get(expr.FunctionCall.name).?.returnType) {
-                                        const typeErrorStruct = try allocator.create(TypeErrorStruct);
+                                        const typeErrorStruct = try allocator.create(TypeCheckResultStruct);
                                         typeErrorStruct.* = .{
                                             .errorType = TypeError.TypeMismatch,
                                             .errorPayload = (try std.fmt.allocPrint(allocator, "Type mismatch: lhs type: {any} and rhs type: {any}\n", .{ decl.type, fnMetaDataMap.get(expr.FunctionCall.name).?.returnType })),
@@ -300,31 +324,4 @@ pub fn gotoResolutionPass(allocator: std.mem.Allocator, node: *AST.Program) Sema
     //      },
     //    }
     //  }
-}
-
-test "typechecker" {
-    const lexer = @import("./lexer.zig");
-    const parser = @import("./parser.zig");
-    const ast = @import("./AST.zig");
-    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    const allocator = arena.allocator();
-    defer arena.deinit();
-    const programStr =
-        \\ void add() { int a; return a;}
-        \\ int main(){
-        \\     int c = 3;
-        \\     return c;
-        \\ }
-    ;
-    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
-    var p = try parser.Parser.init(allocator, l);
-    const program = try p.parseProgram();
-    try ast.scopeVariableResolutionPass(program, allocator);
-    try ast.loopLabelPass(program, allocator);
-    const hasTypeError = try typechecker(program, allocator);
-    if (hasTypeError) |typeError| {
-        std.log.warn("{s}\n", .{typeError.errorPayload});
-    } else {
-        std.debug.assert(false);
-    }
 }

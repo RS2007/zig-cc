@@ -42,6 +42,8 @@ pub const TokenType = enum {
     CONTINUE,
     COMMA,
     VOID,
+    EXTERN,
+    STATIC,
 };
 
 pub const Token = struct {
@@ -81,7 +83,10 @@ pub const Lexer = struct {
         return token;
     }
 
-    inline fn createDoubleWidthToken(comptime lookAheadChars: []const u8, comptime returnToks: []const TokenType, fallBackTok: TokenType, allocator: std.mem.Allocator, lexer: *Lexer) LexerError!*Token {
+    inline fn createDoubleWidthToken(comptime lookAheadChars: []const u8, comptime returnToks: []const TokenType, fallBackTok: TokenType, allocator: std.mem.Allocator, lexer: *Lexer) LexerError!?*Token {
+        if (lexer.current + 1 >= lexer.buffer.len) {
+            return null;
+        }
         var token = try allocator.create(Token);
         inline for (lookAheadChars, returnToks) |lookAheadChar, returnTok| {
             if (lexer.buffer[lexer.current + 1] == lookAheadChar) {
@@ -136,7 +141,7 @@ pub const Lexer = struct {
 
     pub fn peekToken(lexer: *Lexer, allocator: std.mem.Allocator) LexerError!?*Token {
         lexer.skipWhitespace();
-        if (lexer.current + 1 >= lexer.buffer.len) {
+        if (lexer.current >= lexer.buffer.len) {
             return null;
         }
         switch (lexer.buffer[lexer.current]) {
@@ -229,6 +234,8 @@ pub const Lexer = struct {
                     "continue",
                     "break",
                     "void",
+                    "extern",
+                    "static",
                 }, &[_]TokenType{
                     TokenType.INT_TYPE,
                     TokenType.RETURN,
@@ -241,6 +248,8 @@ pub const Lexer = struct {
                     TokenType.CONTINUE,
                     TokenType.BREAK,
                     TokenType.VOID,
+                    TokenType.EXTERN,
+                    TokenType.STATIC,
                 }, lexer, token);
             },
         }
@@ -386,6 +395,8 @@ pub const Lexer = struct {
                     "continue",
                     "break",
                     "void",
+                    "extern",
+                    "static",
                 }, &[_]TokenType{
                     TokenType.INT_TYPE,
                     TokenType.RETURN,
@@ -398,6 +409,8 @@ pub const Lexer = struct {
                     TokenType.CONTINUE,
                     TokenType.BREAK,
                     TokenType.VOID,
+                    TokenType.EXTERN,
+                    TokenType.STATIC,
                 }, lexer, token);
             },
         }
@@ -609,4 +622,16 @@ test "comma and void" {
     const voidTok = try lexer.nextToken(allocator);
     _ = try std.testing.expectEqual(comma.type, TokenType.COMMA);
     _ = try std.testing.expectEqual(voidTok.type, TokenType.VOID);
+}
+
+test "extern and static" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const buffer = "extern static";
+    const lexer = try Lexer.init(allocator, @as([]u8, @constCast(buffer)));
+    const externTok = try lexer.nextToken(allocator);
+    const static = try lexer.nextToken(allocator);
+    _ = try std.testing.expectEqual(externTok.type, TokenType.EXTERN);
+    _ = try std.testing.expectEqual(static.type, TokenType.STATIC);
 }
