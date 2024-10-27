@@ -36,7 +36,8 @@ pub fn main() !void {
     var p = try parser.Parser.init(allocator, l);
     var program = try p.parseProgram();
 
-    try ast.scopeVariableResolutionPass(program, allocator); // Resolve scope by a variable renaming pass
+    const varResolver = ast.VarResolver.init(allocator);
+    try varResolver.resolve(program); // Resolve scope by a variable renaming pass
     const hasTypeError = try semantic.typechecker(program, allocator); // Check if there are type issues
     if (hasTypeError) |typeError| {
         std.log.warn("\x1b[33mError\x1b[0m: {s}\n", .{typeError.errorPayload});

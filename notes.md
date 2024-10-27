@@ -201,3 +201,9 @@ Return(Unary(Negate,
 - throw error for identifiers that are not part of global symbol table 
 - extract from typechecker? All vars with external linkage can be used
 
+
+## Global variable stuff
+
+* handle globals    
+* global evaluator pass
+* 

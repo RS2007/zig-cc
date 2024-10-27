@@ -820,108 +820,123 @@ pub const Expression = union(ExpressionType) {
     }
 };
 
-pub fn expressionScopeVariableResolve(expression: *Expression, currentScope: u32, allocator: std.mem.Allocator, varMap: *std.StringHashMap(u32)) MemoryError!void {
+pub fn expressionScopeVariableResolve(self: *VarResolver, expression: *Expression, currentScope: u32, varMap: *std.StringHashMap(u32)) MemoryError!void {
     switch (expression.*) {
         .Integer => {},
         .Identifier => |identifier| {
             if (varMap.contains(identifier)) {
-                expression.Identifier = try std.fmt.allocPrint(allocator, "{s}{d}", .{ identifier, varMap.get(identifier).? });
+                expression.Identifier = try std.fmt.allocPrint(self.allocator, "{s}{d}", .{ identifier, varMap.get(identifier).? });
+            }
+            if (self.globals.contains(identifier)) {
+                expression.Identifier = try std.fmt.allocPrint(self.allocator, "{s}", .{identifier});
             }
         },
         .Assignment => |assignment| {
-            try expressionScopeVariableResolve(assignment.lhs, currentScope, allocator, varMap);
-            try expressionScopeVariableResolve(assignment.rhs, currentScope, allocator, varMap);
+            try expressionScopeVariableResolve(self, assignment.lhs, currentScope, varMap);
+            try expressionScopeVariableResolve(self, assignment.rhs, currentScope, varMap);
         },
         .Ternary => |ternary| {
-            try expressionScopeVariableResolve(ternary.condition, currentScope, allocator, varMap);
-            try expressionScopeVariableResolve(ternary.lhs, currentScope, allocator, varMap);
-            try expressionScopeVariableResolve(ternary.rhs, currentScope, allocator, varMap);
+            try expressionScopeVariableResolve(self, ternary.condition, currentScope, varMap);
+            try expressionScopeVariableResolve(self, ternary.lhs, currentScope, varMap);
+            try expressionScopeVariableResolve(self, ternary.rhs, currentScope, varMap);
         },
         .Unary => |unary| {
-            try expressionScopeVariableResolve(unary.exp, currentScope, allocator, varMap);
+            try expressionScopeVariableResolve(self, unary.exp, currentScope, varMap);
         },
         .Binary => |binary| {
-            try expressionScopeVariableResolve(binary.lhs, currentScope, allocator, varMap);
-            try expressionScopeVariableResolve(binary.rhs, currentScope, allocator, varMap);
+            try expressionScopeVariableResolve(self, binary.lhs, currentScope, varMap);
+            try expressionScopeVariableResolve(self, binary.rhs, currentScope, varMap);
         },
         .FunctionCall => |fnCall| {
             for (fnCall.args.items) |arg| {
-                try expressionScopeVariableResolve(arg, currentScope, allocator, varMap);
+                try expressionScopeVariableResolve(self, arg, currentScope, varMap);
             }
         },
     }
 }
 
-pub fn blockStatementScopeVariableResolve(blockItem: *BlockItem, currentScope: u32, allocator: std.mem.Allocator, varMap: *std.StringHashMap(u32)) MemoryError!void {
+pub fn blockStatementScopeVariableResolve(self: *VarResolver, blockItem: *BlockItem, currentScope: u32, varMap: *std.StringHashMap(u32)) MemoryError!void {
     switch (blockItem.*) {
         .Statement => |statement| {
-            try statementScopeVariableResolve(statement, currentScope, allocator, varMap);
+            try statementScopeVariableResolve(self, statement, currentScope, varMap);
         },
         .Declaration => |decl| {
             try varMap.put(decl.name, currentScope);
-            blockItem.Declaration.name = try std.fmt.allocPrint(allocator, "{s}{d}", .{ decl.name, currentScope });
+            blockItem.Declaration.name = try std.fmt.allocPrint(self.allocator, "{s}{d}", .{ decl.name, currentScope });
         },
     }
 }
-pub fn statementScopeVariableResolve(statement: *Statement, currentScope: u32, allocator: std.mem.Allocator, varMap: *std.StringHashMap(u32)) MemoryError!void {
+pub fn statementScopeVariableResolve(self: *VarResolver, statement: *Statement, currentScope: u32, varMap: *std.StringHashMap(u32)) MemoryError!void {
     switch (statement.*) {
         .Compound => |compound| {
             for (compound.items) |blockItemCompound| {
-                try blockStatementScopeVariableResolve(blockItemCompound, currentScope + 1, allocator, varMap);
+                try blockStatementScopeVariableResolve(self, blockItemCompound, currentScope + 1, varMap);
             }
         },
         .Null, .Label, .Goto => {},
         .If => |ifStmt| {
-            try expressionScopeVariableResolve(ifStmt.condition, currentScope, allocator, varMap);
-            try statementScopeVariableResolve(ifStmt.thenStmt, currentScope, allocator, varMap);
+            try expressionScopeVariableResolve(self, ifStmt.condition, currentScope, varMap);
+            try statementScopeVariableResolve(self, ifStmt.thenStmt, currentScope, varMap);
             if (ifStmt.elseStmt) |elseStmt| {
-                try statementScopeVariableResolve(elseStmt, currentScope, allocator, varMap);
+                try statementScopeVariableResolve(self, elseStmt, currentScope, varMap);
             }
         },
         .Return => |ret| {
-            try expressionScopeVariableResolve(ret.expression, currentScope, allocator, varMap);
+            try expressionScopeVariableResolve(self, ret.expression, currentScope, varMap);
         },
         .Expression => |expression| {
-            try expressionScopeVariableResolve(expression, currentScope, allocator, varMap);
+            try expressionScopeVariableResolve(self, expression, currentScope, varMap);
         },
         .DoWhile => |doWhile| {
-            try expressionScopeVariableResolve(doWhile.condition, currentScope, allocator, varMap);
-            try statementScopeVariableResolve(doWhile.body, currentScope, allocator, varMap);
+            try expressionScopeVariableResolve(self, doWhile.condition, currentScope, varMap);
+            try statementScopeVariableResolve(self, doWhile.body, currentScope, varMap);
         },
         .While => |whileStmt| {
-            try expressionScopeVariableResolve(whileStmt.condition, currentScope, allocator, varMap);
-            try statementScopeVariableResolve(whileStmt.body, currentScope, allocator, varMap);
+            try expressionScopeVariableResolve(self, whileStmt.condition, currentScope, varMap);
+            try statementScopeVariableResolve(self, whileStmt.body, currentScope, varMap);
         },
         .For => |forStmt| {
             if (std.mem.eql(u8, @tagName(forStmt.init.*), "Expression")) {
-                try expressionScopeVariableResolve(forStmt.init.Expression, currentScope, allocator, varMap);
+                try expressionScopeVariableResolve(self, forStmt.init.Expression, currentScope, varMap);
             }
             if (forStmt.condition) |condition|
-                try expressionScopeVariableResolve(condition, currentScope, allocator, varMap);
+                try expressionScopeVariableResolve(self, condition, currentScope, varMap);
             if (forStmt.post) |post|
-                try expressionScopeVariableResolve(post, currentScope, allocator, varMap);
-            try statementScopeVariableResolve(forStmt.body, currentScope, allocator, varMap);
+                try expressionScopeVariableResolve(self, post, currentScope, varMap);
+            try statementScopeVariableResolve(self, forStmt.body, currentScope, varMap);
         },
         .Break => {},
         .Continue => {},
     }
 }
 
-pub fn scopeVariableResolutionPass(program: *Program, allocator: std.mem.Allocator) MemoryError!void {
-    for (program.externalDecls.items) |externalDecl| {
-        switch (externalDecl.*) {
-            .FunctionDecl => |functionDecl| {
-                var varMap = std.StringHashMap(u32).init(allocator);
-                for (functionDecl.blockItems.items) |blockItem| {
-                    try blockStatementScopeVariableResolve(blockItem, 0, allocator, &varMap);
-                }
-            },
-            .VarDeclaration => {
-                unreachable();
-            },
+pub const VarResolver = struct {
+    globals: std.StringHashMap(void),
+    allocator: std.mem.Allocator,
+    pub fn init(allocator: std.mem.Allocator) MemoryError!*VarResolver {
+        const self = try allocator.create(VarResolver);
+        self.* = .{
+            .globals = std.StringHashMap(void).init(allocator),
+            .allocator = allocator,
+        };
+        return self;
+    }
+    pub fn resolve(self: *VarResolver, program: *Program) MemoryError!void {
+        for (program.externalDecls.items) |externalDecl| {
+            switch (externalDecl.*) {
+                .FunctionDecl => |functionDecl| {
+                    var varMap = std.StringHashMap(u32).init(self.allocator);
+                    for (functionDecl.blockItems.items) |blockItem| {
+                        try blockStatementScopeVariableResolve(self, blockItem, 0, &varMap);
+                    }
+                },
+                .VarDeclaration => |decl| {
+                    try self.globals.put(decl.name, {});
+                },
+            }
         }
     }
-}
+};
 
 pub fn statementLoopLabelPass(statement: *Statement, loopId: u32, allocator: std.mem.Allocator) MemoryError!void {
     switch (statement.*) {
@@ -1131,7 +1146,8 @@ test "test multiple functions" {
     const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
     var p = try parser.Parser.init(allocator, l);
     const program = try p.parseProgram();
-    try scopeVariableResolutionPass(program, allocator);
+    const varResolver = try VarResolver.init(allocator);
+    try varResolver.resolve(program);
     _ = (try program.genTAC(allocator));
 }
 

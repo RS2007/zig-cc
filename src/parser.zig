@@ -59,7 +59,34 @@ pub const Parser = struct {
         std.debug.assert(returnType.type == lexer.TokenType.INT_TYPE or returnType.type == lexer.TokenType.VOID);
         const peekTwo = try self.l.peekTwoTokens(self.allocator);
         if (peekTwo[1].?.type != lexer.TokenType.LPAREN) {
-            return ParserError.Unimplemented;
+            const varName = try self.l.nextToken(self.allocator);
+            const externalDecl = try self.allocator.create(AST.ExternalDecl);
+            const declaration = try self.allocator.create(AST.Declaration);
+            declaration.* = .{
+                .name = self.l.buffer[varName.start .. varName.end + 1],
+                .expression = null,
+                .type = AST.Type.Integer,
+                // TODO: should support multiple names
+            };
+            externalDecl.* = .{
+                .VarDeclaration = declaration,
+            };
+            switch (peekTwo[1].?.type) {
+                .SEMICOLON => {
+                    return externalDecl;
+                },
+                .ASSIGN => {
+                    _ = try self.l.nextToken(self.allocator);
+                    const expression = try self.parseExpression(0);
+                    declaration.expression = expression;
+                    std.debug.assert(if ((try self.l.peekToken(self.allocator) != null)) (try self.l.peekToken(self.allocator)).?.type == lexer.TokenType.SEMICOLON else false);
+                    _ = try self.l.nextToken(self.allocator);
+                    return externalDecl;
+                },
+                else => {
+                    unreachable;
+                },
+            }
         }
         const fnNameToken = try self.l.nextToken(self.allocator);
         var argList = std.ArrayList(*AST.Arg).init(self.allocator);
@@ -757,7 +784,8 @@ test "test compound statement parsing" {
     const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
     var p = try Parser.init(allocator, l);
     const program = try p.parseProgram();
-    try AST.scopeVariableResolutionPass(program, allocator);
+    const varResolver = try AST.VarResolver.init(allocator);
+    try varResolver.resolve(program);
     std.log.warn("Compound statement: first statement: {any}\n", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[2].Statement.Compound.items[0]});
     std.log.warn("Declaration: of x: {s}\n", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[1].Declaration.name});
     std.log.warn("Compound statement: first statement decl varName: {s}\n", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[2].Statement.Compound.items[0].Declaration.name});
@@ -778,7 +806,8 @@ test "test while and dowhile" {
     const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
     var p = try Parser.init(allocator, l);
     const program = try p.parseProgram();
-    try AST.scopeVariableResolutionPass(program, allocator);
+    const varResolver = try AST.VarResolver.init(allocator);
+    try varResolver.resolve(program);
     std.log.warn("While statement: condition: {any}\n", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[1].Statement.While.condition});
     std.log.warn("While statement: body: {any}\n", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[1].Statement.While.body});
     std.log.warn("DoWhile statement: body: {any}\n", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[2].Statement.DoWhile.body});
@@ -798,7 +827,8 @@ test "test for statement" {
     const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
     var p = try Parser.init(allocator, l);
     const program = try p.parseProgram();
-    try AST.scopeVariableResolutionPass(program, allocator);
+    const varResolver = try AST.VarResolver.init(allocator);
+    try varResolver.resolve(program);
     std.log.warn("for init:{any} ", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[1].Statement.For.init});
     std.log.warn("for condition:{any} ", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[1].Statement.For.condition});
     std.log.warn("for post:{any} ", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[1].Statement.For.post});
@@ -818,7 +848,8 @@ test "parse multiple functions" {
     const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
     var p = try Parser.init(allocator, l);
     const program = try p.parseProgram();
-    try AST.scopeVariableResolutionPass(program, allocator);
+    const varResolver = try AST.VarResolver.init(allocator);
+    try varResolver.resolve(program);
     std.log.warn("Add function : {s}, body: {any}\n", .{
         program.externalDecls.items[0].FunctionDecl.name,
         program.externalDecls.items[0].FunctionDecl.blockItems.items[0].Statement.Return,
@@ -830,4 +861,28 @@ test "parse multiple functions" {
     for (program.externalDecls.items[1].FunctionDecl.blockItems.items[0].Statement.Return.expression.FunctionCall.args.items) |arg| {
         std.log.warn("Arg is {any}\n", .{arg});
     }
+}
+
+test "parse globals" {
+    const semantic = @import("semantic.zig");
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const programStr =
+        \\ int k = 3;
+        \\ int main(){
+        \\     return 3+k;
+        \\ }
+    ;
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try Parser.init(allocator, l);
+    const program = try p.parseProgram();
+    const varResolver = try AST.VarResolver.init(allocator);
+    try varResolver.resolve(program);
+    const typeChecker = try semantic.Typechecker.init(allocator);
+    if ((try typeChecker.check(program))) |typeError| {
+        std.log.warn("Type error: {any}\n", .{typeError});
+    }
+    std.log.warn("Globals0: {s}\n", .{program.externalDecls.items[0].VarDeclaration.name});
+    std.log.warn("Globals1: {s}\n", .{program.externalDecls.items[1].FunctionDecl.name});
 }

@@ -421,7 +421,8 @@ test "testing assembly generation - unary" {
     const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
     var p = try parser.Parser.init(allocator, l);
     var program = try p.parseProgram();
-    try ast.scopeVariableResolutionPass(program, allocator);
+    const varResolver = try ast.VarResolver.init(allocator);
+    try varResolver.resolve(program);
     try ast.loopLabelPass(program, allocator);
     const asmProgram = try (try program.genTAC(allocator)).codegen(allocator);
     try asmProgram.stringify(std.io.getStdErr().writer(), allocator);
@@ -435,7 +436,8 @@ test "testing assembly generation - binary" {
     const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
     var p = try parser.Parser.init(allocator, l);
     var program = try p.parseProgram();
-    try ast.scopeVariableResolutionPass(program, allocator);
+    const varResolver = try ast.VarResolver.init(allocator);
+    try varResolver.resolve(program);
     try ast.loopLabelPass(program, allocator);
     const asmProgram = try (try program.genTAC(allocator)).codegen(allocator);
     try asmProgram.stringify(std.io.getStdErr().writer(), allocator);
@@ -450,7 +452,8 @@ test "testing assembly generation - >= and <=" {
     var p = try parser.Parser.init(allocator, l);
     const program = try p.parseProgram();
 
-    try ast.scopeVariableResolutionPass(program, allocator);
+    const varResolver = try ast.VarResolver.init(allocator);
+    try varResolver.resolve(program);
     try ast.loopLabelPass(program, allocator);
     const asmProgram = try (try program.genTAC(allocator)).codegen(allocator);
     try asmProgram.stringify(std.io.getStdErr().writer(), allocator);
@@ -465,7 +468,8 @@ test "testing assembly generation - short circuiting with logical AND and OR" {
     var p = try parser.Parser.init(allocator, l);
     const program = try p.parseProgram();
 
-    try ast.scopeVariableResolutionPass(program, allocator);
+    const varResolver = try ast.VarResolver.init(allocator);
+    try varResolver.resolve(program);
     try ast.loopLabelPass(program, allocator);
     const asmProgram = try (try program.genTAC(allocator)).codegen(allocator);
     try asmProgram.stringify(std.io.getStdErr().writer(), allocator);
@@ -479,7 +483,8 @@ test "testing assembly generation - declarations" {
     const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
     var p = try parser.Parser.init(allocator, l);
     var program = try p.parseProgram();
-    try ast.scopeVariableResolutionPass(program, allocator);
+    const varResolver = try ast.VarResolver.init(allocator);
+    try varResolver.resolve(program);
     try ast.loopLabelPass(program, allocator);
     const asmProgram = try (try program.genTAC(allocator)).codegen(allocator);
     try asmProgram.stringify(std.io.getStdErr().writer(), allocator);
@@ -493,7 +498,8 @@ test "tac generation - if" {
     const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
     var p = try parser.Parser.init(allocator, l);
     const program = try p.parseProgram();
-    try ast.scopeVariableResolutionPass(program, allocator);
+    const varResolver = try ast.VarResolver.init(allocator);
+    try varResolver.resolve(program);
     try ast.loopLabelPass(program, allocator);
     const asmProgram = try (try program.genTAC(allocator)).codegen(allocator);
     try asmProgram.stringify(std.io.getStdErr().writer(), allocator);
@@ -507,7 +513,8 @@ test "tac generation - if nested" {
     const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
     var p = try parser.Parser.init(allocator, l);
     const program = try p.parseProgram();
-    try ast.scopeVariableResolutionPass(program, allocator);
+    const varResolver = try ast.VarResolver.init(allocator);
+    try varResolver.resolve(program);
     try ast.loopLabelPass(program, allocator);
     const asmProgram = try (try program.genTAC(allocator)).codegen(allocator);
     try asmProgram.stringify(std.io.getStdErr().writer(), allocator);
@@ -521,7 +528,8 @@ test "assembly generation with ternary" {
     const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
     var p = try parser.Parser.init(allocator, l);
     const program = try p.parseProgram();
-    try ast.scopeVariableResolutionPass(program, allocator);
+    const varResolver = try ast.VarResolver.init(allocator);
+    try varResolver.resolve(program);
     try ast.loopLabelPass(program, allocator);
     const asmProgram = try (try program.genTAC(allocator)).codegen(allocator);
     try asmProgram.stringify(std.io.getStdErr().writer(), allocator);
@@ -535,7 +543,8 @@ test "assembly generation with nested ternary" {
     const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
     var p = try parser.Parser.init(allocator, l);
     const program = try p.parseProgram();
-    try ast.scopeVariableResolutionPass(program, allocator);
+    const varResolver = try ast.VarResolver.init(allocator);
+    try varResolver.resolve(program);
     try ast.loopLabelPass(program, allocator);
     const asmProgram = try (try program.genTAC(allocator)).codegen(allocator);
     try asmProgram.stringify(std.io.getStdErr().writer(), allocator);
@@ -549,7 +558,8 @@ test "assembly generation with labelled statements and goto" {
     const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
     var p = try parser.Parser.init(allocator, l);
     const program = try p.parseProgram();
-    try ast.scopeVariableResolutionPass(program, allocator);
+    const varResolver = try ast.VarResolver.init(allocator);
+    try varResolver.resolve(program);
     try ast.loopLabelPass(program, allocator);
     const asmProgram = try (try program.genTAC(allocator)).codegen(allocator);
     try asmProgram.stringify(std.io.getStdErr().writer(), allocator);
@@ -563,7 +573,8 @@ test "testing assembly generation with compound statement parsing" {
     const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
     var p = try parser.Parser.init(allocator, l);
     const program = try p.parseProgram();
-    try ast.scopeVariableResolutionPass(program, allocator);
+    const varResolver = try ast.VarResolver.init(allocator);
+    try varResolver.resolve(program);
     const asmProgram = try (try program.genTAC(allocator)).codegen(allocator);
     try asmProgram.stringify(std.io.getStdErr().writer(), allocator);
 }
@@ -583,7 +594,8 @@ test "testing assembly generation with do and while loop" {
     const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
     var p = try parser.Parser.init(allocator, l);
     const program = try p.parseProgram();
-    try ast.scopeVariableResolutionPass(program, allocator);
+    const varResolver = try ast.VarResolver.init(allocator);
+    try varResolver.resolve(program);
     try ast.loopLabelPass(program, allocator);
     const asmProgram = try (try program.genTAC(allocator)).codegen(allocator);
     try asmProgram.stringify(std.io.getStdErr().writer(), allocator);
@@ -606,7 +618,8 @@ test "testing assembly generation loop with breaks and continue" {
     const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
     var p = try parser.Parser.init(allocator, l);
     const program = try p.parseProgram();
-    try ast.scopeVariableResolutionPass(program, allocator);
+    const varResolver = try ast.VarResolver.init(allocator);
+    try varResolver.resolve(program);
     try ast.loopLabelPass(program, allocator);
     const asmProgram = try (try program.genTAC(allocator)).codegen(allocator);
     try asmProgram.stringify(std.io.getStdErr().writer(), allocator);
@@ -634,7 +647,8 @@ test "nested while and do while loops with continue" {
     const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
     var p = try parser.Parser.init(allocator, l);
     const program = try p.parseProgram();
-    try ast.scopeVariableResolutionPass(program, allocator);
+    const varResolver = try ast.VarResolver.init(allocator);
+    try varResolver.resolve(program);
     try ast.loopLabelPass(program, allocator);
     const asmProgram = try (try program.genTAC(allocator)).codegen(allocator);
     try asmProgram.stringify(std.io.getStdErr().writer(), allocator);
@@ -654,7 +668,8 @@ test "test assembly generation for for loops" {
     const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
     var p = try parser.Parser.init(allocator, l);
     const program = try p.parseProgram();
-    try ast.scopeVariableResolutionPass(program, allocator);
+    const varResolver = try ast.VarResolver.init(allocator);
+    try varResolver.resolve(program);
     try ast.loopLabelPass(program, allocator);
     const asmProgram = try (try program.genTAC(allocator)).codegen(allocator);
     try asmProgram.stringify(std.io.getStdErr().writer(), allocator);
@@ -673,7 +688,8 @@ test "multiple functions and call" {
     const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
     var p = try parser.Parser.init(allocator, l);
     const program = try p.parseProgram();
-    try ast.scopeVariableResolutionPass(program, allocator);
+    const varResolver = try ast.VarResolver.init(allocator);
+    try varResolver.resolve(program);
     try ast.loopLabelPass(program, allocator);
     const asmProgram = try (try program.genTAC(allocator)).codegen(allocator);
     try asmProgram.stringify(std.io.getStdErr().writer(), allocator);
