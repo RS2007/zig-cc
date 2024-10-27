@@ -89,7 +89,6 @@ pub const Parser = struct {
             .FunctionDecl = functionDef,
         };
         while (peekToken != null and peekToken.?.type != lexer.TokenType.RBRACE) {
-            std.log.warn("Next peek token is {any} and {any}\n", .{ peekToken, self.l.currentToken });
             const blockItem = try self.parseBlockItem();
             try functionDef.blockItems.append(blockItem);
             peekToken = try self.l.peekToken(self.allocator);
@@ -215,7 +214,6 @@ pub const Parser = struct {
         switch ((try self.l.peekToken(self.allocator)).?.type) {
             .RETURN => {
                 _ = try self.l.nextToken(self.allocator);
-                std.log.warn("In return\n", .{});
                 const expr = try self.parseExpression(0);
                 try self.logger.info("Expr obtained from return: {any} and {any}\n", .{ expr, if (std.meta.activeTag(expr.*) == AST.ExpressionType.Unary) expr.Unary.exp else null });
                 const retStmt = try self.allocator.create(AST.Statement);
@@ -591,7 +589,6 @@ pub const Parser = struct {
 
     pub fn parseExpression(self: *Parser, precedence: u32) ParserError!*AST.Expression {
         var lhs = try self.parseFactor();
-        std.log.warn("LHS Obtained: {}\n", .{lhs});
         while (true) {
             const hasPeeked = try self.l.peekToken(self.allocator);
             if (hasPeeked) |peeked| {

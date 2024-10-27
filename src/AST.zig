@@ -825,7 +825,6 @@ pub fn expressionScopeVariableResolve(expression: *Expression, currentScope: u32
         .Integer => {},
         .Identifier => |identifier| {
             if (varMap.contains(identifier)) {
-                std.log.warn("Modified {s} in next scope\n", .{identifier});
                 expression.Identifier = try std.fmt.allocPrint(allocator, "{s}{d}", .{ identifier, varMap.get(identifier).? });
             }
         },
@@ -859,7 +858,6 @@ pub fn blockStatementScopeVariableResolve(blockItem: *BlockItem, currentScope: u
             try statementScopeVariableResolve(statement, currentScope, allocator, varMap);
         },
         .Declaration => |decl| {
-            std.log.warn("Putting {s} scope: {d}", .{ decl.name, currentScope });
             try varMap.put(decl.name, currentScope);
             blockItem.Declaration.name = try std.fmt.allocPrint(allocator, "{s}{d}", .{ decl.name, currentScope });
         },

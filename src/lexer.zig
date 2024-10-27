@@ -101,12 +101,10 @@ pub const Lexer = struct {
         lexer.skipWhitespace();
         const resetIndx = lexer.current;
         const resetToken = lexer.currentToken;
-        std.log.warn("Rest index is {} and reset token is {any}\n", .{ resetIndx, resetToken });
         const first = try lexer.nextToken(allocator);
         const second = try lexer.peekToken(allocator);
         lexer.current = resetIndx;
         lexer.currentToken = resetToken;
-        std.log.warn("lexer index is {} and lexer current token is {any}\n", .{ lexer.current, lexer.currentToken });
         var tokenList = try std.ArrayList(?*Token).initCapacity(allocator, 2);
         try tokenList.append(first);
         try tokenList.append(second);

@@ -16,7 +16,6 @@ pub const Program = struct {
     pub fn codegen(self: *Program, allocator: std.mem.Allocator) !*assembly.Program {
         var functions = std.ArrayList(*assembly.Function).init(allocator);
         for (self.function.items) |item| {
-            std.log.warn("We are at {s} and args length: {d}\n", .{ item.name, item.args.items.len });
             const func = try allocator.create(assembly.Function);
             func.* = .{
                 .name = item.name,
