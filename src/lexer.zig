@@ -42,6 +42,8 @@ pub const TokenType = enum {
     CONTINUE,
     COMMA,
     VOID,
+    STATIC,
+    EXTERN,
 };
 
 pub const Token = struct {
@@ -227,6 +229,8 @@ pub const Lexer = struct {
                     "continue",
                     "break",
                     "void",
+                    "static",
+                    "extern",
                 }, &[_]TokenType{
                     TokenType.INT_TYPE,
                     TokenType.RETURN,
@@ -239,6 +243,8 @@ pub const Lexer = struct {
                     TokenType.CONTINUE,
                     TokenType.BREAK,
                     TokenType.VOID,
+                    TokenType.STATIC,
+                    TokenType.EXTERN,
                 }, lexer, token);
             },
         }
@@ -384,6 +390,8 @@ pub const Lexer = struct {
                     "continue",
                     "break",
                     "void",
+                    "static",
+                    "extern",
                 }, &[_]TokenType{
                     TokenType.INT_TYPE,
                     TokenType.RETURN,
@@ -396,6 +404,8 @@ pub const Lexer = struct {
                     TokenType.CONTINUE,
                     TokenType.BREAK,
                     TokenType.VOID,
+                    TokenType.STATIC,
+                    TokenType.EXTERN,
                 }, lexer, token);
             },
         }
@@ -607,4 +617,16 @@ test "comma and void" {
     const voidTok = try lexer.nextToken(allocator);
     _ = try std.testing.expectEqual(comma.type, TokenType.COMMA);
     _ = try std.testing.expectEqual(voidTok.type, TokenType.VOID);
+}
+
+test "static and extern" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const buffer = "static extern";
+    const lexer = try Lexer.init(allocator, @as([]u8, @constCast(buffer)));
+    const staticTok = try lexer.nextToken(allocator);
+    const externTok = try lexer.nextToken(allocator);
+    _ = try std.testing.expectEqual(staticTok.type, TokenType.STATIC);
+    _ = try std.testing.expectEqual(externTok.type, TokenType.EXTERN);
 }

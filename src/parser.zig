@@ -1,8 +1,7 @@
 const std = @import("std");
 const lexer = @import("./lexer.zig");
 const AST = @import("./AST.zig");
-const Logger = @import("./Logger.zig");
-const MyLogger = Logger.Logger;
+//const logz = @import("logz");
 
 pub const MemoryError = error{
     OutOfMemory,
@@ -36,10 +35,9 @@ pub const ParserError = error{
 pub const Parser = struct {
     l: *lexer.Lexer,
     allocator: std.mem.Allocator,
-    logger: *MyLogger,
     pub fn init(allocator: std.mem.Allocator, l: *lexer.Lexer) MemoryError!*Parser {
         const parser = try allocator.create(Parser);
-        parser.* = Parser{ .l = l, .allocator = allocator, .logger = MyLogger.init(allocator) };
+        parser.* = Parser{ .l = l, .allocator = allocator };
         return parser;
     }
 
@@ -55,6 +53,11 @@ pub const Parser = struct {
     }
 
     pub fn parseExternalDecl(self: *Parser) ParserError!*AST.ExternalDecl {
+        // TODO: parse_if_qualifier
+        const qualifier = AST.Qualifier.from((try self.l.peekToken(self.allocator)).?.type);
+        if (qualifier != null) {
+            _ = try self.l.nextToken(self.allocator);
+        }
         const returnType = try self.l.nextToken(self.allocator);
         std.debug.assert(returnType.type == lexer.TokenType.INT_TYPE or returnType.type == lexer.TokenType.VOID);
         const peekTwo = try self.l.peekTwoTokens(self.allocator);
@@ -66,13 +69,15 @@ pub const Parser = struct {
                 .name = self.l.buffer[varName.start .. varName.end + 1],
                 .expression = null,
                 .type = AST.Type.Integer,
-                // TODO: should support multiple names
+                .storageClass = qualifier,
+                // TODO: should support other types
             };
             externalDecl.* = .{
                 .VarDeclaration = declaration,
             };
             switch (peekTwo[1].?.type) {
                 .SEMICOLON => {
+                    _ = try self.l.nextToken(self.allocator);
                     return externalDecl;
                 },
                 .ASSIGN => {
@@ -111,6 +116,7 @@ pub const Parser = struct {
             .blockItems = blockItems,
             .args = argList,
             .returnType = if (returnType.type == lexer.TokenType.INT_TYPE) AST.Type.Integer else AST.Type.Void,
+            .storageClass = qualifier,
         };
         functionDecl.* = .{
             .FunctionDecl = functionDef,
@@ -155,7 +161,7 @@ pub const Parser = struct {
         const blockItem = try self.allocator.create(AST.BlockItem);
         if (nextToken) |nextTok| {
             switch (nextTok.type) {
-                .INT_TYPE => {
+                .EXTERN, .STATIC, .INT_TYPE => {
                     blockItem.* = AST.BlockItem{
                         .Declaration = (try self.parseDeclaration()),
                     };
@@ -177,6 +183,43 @@ pub const Parser = struct {
     pub fn parseDeclaration(self: *Parser) ParserError!*AST.Declaration {
         const nextToken = try self.l.nextToken(self.allocator);
         switch (nextToken.type) {
+            .STATIC, .EXTERN => {
+                const qualifier = AST.Qualifier.from(nextToken.type);
+                const returnType = try self.l.nextToken(self.allocator);
+                std.debug.assert(returnType.type == lexer.TokenType.INT_TYPE or returnType.type == lexer.TokenType.VOID);
+                const identifier = try self.l.nextToken(self.allocator);
+                std.debug.assert(identifier.type == lexer.TokenType.IDENTIFIER);
+                const declaration = try self.allocator.create(AST.Declaration);
+
+                // declarations can be of the form:
+                // int x;
+                // int x = 3;
+                // int x = y = 3;
+                declaration.* = AST.Declaration{
+                    .name = self.l.buffer[identifier.start .. identifier.end + 1],
+                    .expression = null,
+                    .type = AST.Type.Integer,
+                    .storageClass = qualifier,
+                };
+                const peeked = try self.l.peekToken(self.allocator);
+                std.debug.assert(peeked != null);
+                switch ((peeked.?).type) {
+                    .SEMICOLON => {
+                        return declaration;
+                    },
+                    .ASSIGN => {
+                        _ = try self.l.nextToken(self.allocator);
+                        const expression = try self.parseExpression(0);
+                        declaration.expression = expression;
+                        std.debug.assert(if ((try self.l.peekToken(self.allocator) != null)) (try self.l.peekToken(self.allocator)).?.type == lexer.TokenType.SEMICOLON else false);
+                        return declaration;
+                    },
+                    else => {
+                        unreachable;
+                    },
+                }
+                return declaration;
+            },
             .INT_TYPE => {
                 const identifier = try self.l.nextToken(self.allocator);
                 std.debug.assert(identifier.type == lexer.TokenType.IDENTIFIER);
@@ -242,7 +285,6 @@ pub const Parser = struct {
             .RETURN => {
                 _ = try self.l.nextToken(self.allocator);
                 const expr = try self.parseExpression(0);
-                try self.logger.info("Expr obtained from return: {any} and {any}\n", .{ expr, if (std.meta.activeTag(expr.*) == AST.ExpressionType.Unary) expr.Unary.exp else null });
                 const retStmt = try self.allocator.create(AST.Statement);
                 retStmt.* = AST.Statement{
                     .Return = AST.Return{
@@ -250,7 +292,6 @@ pub const Parser = struct {
                     },
                 };
                 const peeked = try self.l.peekToken(self.allocator);
-                try self.logger.info("Peeked after return expression parse: {any}\n", .{peeked});
                 if (peeked != null and peeked.?.type == lexer.TokenType.SEMICOLON) {
                     _ = try self.l.nextToken(self.allocator);
                 }
@@ -258,7 +299,6 @@ pub const Parser = struct {
             },
             .SEMICOLON => {
                 _ = try self.l.nextToken(self.allocator);
-                try self.logger.info("Found a null stmt\n", .{});
                 const nullStmt = try self.allocator.create(AST.Statement);
                 nullStmt.* = AST.Statement{
                     .Null = {},
@@ -284,7 +324,6 @@ pub const Parser = struct {
                 return ifStmt;
             },
             .LBRACE => {
-                std.log.warn("LBrace Found", .{});
                 _ = try self.l.nextToken(self.allocator);
                 const blockItemsList = std.ArrayList(*AST.BlockItem).init(self.allocator);
                 const compoundStatement = try self.allocator.create(AST.Statement);
@@ -406,8 +445,6 @@ pub const Parser = struct {
             else => {
                 const twoToks = try self.l.peekTwoTokens(self.allocator);
                 if (twoToks[1]) |secondTok| {
-                    std.log.warn("First tok: {any}\n", .{twoToks[0].?});
-                    std.log.warn("Second tok: {any}\n", .{secondTok});
                     if (secondTok.type == lexer.TokenType.COLON) {
                         const identifier = try self.l.nextToken(self.allocator);
                         const colon = try self.l.nextToken(self.allocator);
@@ -624,12 +661,12 @@ pub const Parser = struct {
                 }
                 const hasPeekedPrecedence = getPrecedence(peeked.type);
                 if (hasPeekedPrecedence == null) {
-                    std.log.warn("parseExpression: exited cause of no precdence for token and token={any}\n", .{peeked});
+                    //logz.info().fmt("parseExpression", "exited cause of no precdence for token and token={any}\n", .{peeked}).log();
                     return lhs;
                 }
                 const peekedPrecedence = hasPeekedPrecedence.?;
                 if (precedence > peekedPrecedence) {
-                    std.log.warn("parseExpression: exited cause of precedence of token being greater", .{});
+                    //logz.info().fmt("parseExpression", "exited cause of precedence of token being greater", .{}).log();
                     return lhs;
                 }
                 const hasNextToken = self.l.nextToken(self.allocator) catch null;
@@ -871,7 +908,8 @@ test "parse globals" {
     const programStr =
         \\ int k = 3;
         \\ int main(){
-        \\     return 3+k;
+        \\     int b = 0; 
+        \\     return b+k;
         \\ }
     ;
     const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
@@ -883,6 +921,39 @@ test "parse globals" {
     if ((try typeChecker.check(program))) |typeError| {
         std.log.warn("Type error: {any}\n", .{typeError});
     }
-    std.log.warn("Globals0: {s}\n", .{program.externalDecls.items[0].VarDeclaration.name});
+    std.log.warn("Globals not renamed: {s}\n", .{program.externalDecls.items[0].VarDeclaration.name});
     std.log.warn("Globals1: {s}\n", .{program.externalDecls.items[1].FunctionDecl.name});
+    std.log.warn("Locals renamed: {s}\n", .{
+        program.externalDecls.items[1].FunctionDecl.blockItems.items[0].Declaration.name,
+    });
+}
+
+test "parse with storage classes" {
+    const semantic = @import("semantic.zig");
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const programStr =
+        \\ extern int k;
+        \\ static int main(){
+        \\     int b = 0; 
+        \\     return b+k;
+        \\ }
+    ;
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try Parser.init(allocator, l);
+    const program = try p.parseProgram();
+    const varResolver = try AST.VarResolver.init(allocator);
+    try varResolver.resolve(program);
+    const typeChecker = try semantic.Typechecker.init(allocator);
+    if ((try typeChecker.check(program))) |typeError| {
+        std.log.warn("Type error: {any}\n", .{typeError});
+    }
+    std.log.warn("Globals not renamed: {s}\n", .{program.externalDecls.items[0].VarDeclaration.name});
+    std.log.warn("Globals storageClass: {any}\n", .{program.externalDecls.items[0].VarDeclaration.storageClass});
+    std.log.warn("Globals1: {s}\n", .{program.externalDecls.items[1].FunctionDecl.name});
+    std.log.warn("Globals1 storageClass: {any}\n", .{program.externalDecls.items[1].FunctionDecl.storageClass});
+    std.log.warn("Locals renamed: {s}\n", .{
+        program.externalDecls.items[1].FunctionDecl.blockItems.items[0].Declaration.name,
+    });
 }

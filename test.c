@@ -1,3 +1,4 @@
+int add(int a, int b) { return a + b; }
 int func(int k) {
   int num = 1;
   int count = 0;

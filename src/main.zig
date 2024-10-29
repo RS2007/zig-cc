@@ -4,11 +4,26 @@ const ast = @import("./AST.zig");
 const parser = @import("./parser.zig");
 const assembly = @import("./Assembly.zig");
 const semantic = @import("./semantic.zig");
+const logz = @import("logz");
 
 pub fn main() !void {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     const allocator = arena.allocator();
     defer arena.deinit();
+    // setup a log file, return a writer
+    try logz.setup(allocator, .{
+        .level = .Info,
+        .pool_size = 100,
+        .buffer_size = 4096,
+        .large_buffer_count = 8,
+        .large_buffer_size = 16384,
+        .output = .{
+            .file = "log.txt",
+        },
+        .encoding = .logfmt,
+    });
+    defer logz.deinit();
+    logz.info().string("Key", "Hello World").log();
 
     // Access argv[1]
     const args = try std.process.argsAlloc(allocator);
@@ -36,11 +51,12 @@ pub fn main() !void {
     var p = try parser.Parser.init(allocator, l);
     var program = try p.parseProgram();
 
-    const varResolver = ast.VarResolver.init(allocator);
+    const varResolver = try ast.VarResolver.init(allocator);
     try varResolver.resolve(program); // Resolve scope by a variable renaming pass
-    const hasTypeError = try semantic.typechecker(program, allocator); // Check if there are type issues
+    const typeChecker = try semantic.Typechecker.init(allocator);
+    const hasTypeError = try typeChecker.check(program); // Check if there are type issues
     if (hasTypeError) |typeError| {
-        std.log.warn("\x1b[33mError\x1b[0m: {s}\n", .{typeError.errorPayload});
+        std.log.warn("\x1b[33mError\x1b[0m: {s}\n", .{typeError});
         std.os.linux.exit(-1);
     }
     try ast.loopLabelPass(program, allocator); // Labelling loops for break and continue

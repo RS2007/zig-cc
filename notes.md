@@ -207,3 +207,49 @@ Return(Unary(Negate,
 * handle globals    
 * global evaluator pass
 * 
+
+> [!NOTE]
+> Qualifier should always proceed the type in this C subset.
+
+* Storage specifier behaviour
+* static variable in file scope
+* static function in file scope
+* static variable in block scope
+
+* At file scope, the static specifier indicates that the 
+variable/function has internal linkage.
+* At block scope, static specifier indicates the storage
+duraction.
+* If a var is declared extern at a point where the exiting
+var already has an internal/external linkage, new declaration
+will have the same linkage as the existing one.
+
+
+### Errors
+* Conflicting declarations
+```c
+int main(){
+    extern int k;
+    return k;
+}
+static int k = 4;
+```
+* same variable can't have two different linkage types
+* no linkage available for extern, hence will be external
+* later it becomes internal
+```c
+
+```
+* no two entities can have the same type (redeclared as a different kind of
+symbol)
+```c
+int foo = 3;
+int foo(int);
+int main(){
+    return foo(3);
+}
+```
+* initializer for a static variable must be a constant expression 
+* no specifiers in for loop header or function arguments list
+
+

@@ -49,6 +49,18 @@ pub const ExternalDeclType = enum {
     VarDeclaration,
 };
 
+pub const Qualifier = enum {
+    STATIC,
+    EXTERN,
+    const Self = @This();
+    pub fn from(tokType: lexer.TokenType) ?Self {
+        return switch (tokType) {
+            .STATIC => Qualifier.STATIC,
+            .EXTERN => Qualifier.EXTERN,
+            else => null,
+        };
+    }
+};
 pub const ExternalDecl = union(ExternalDeclType) {
     FunctionDecl: *FunctionDef,
     VarDeclaration: *Declaration,
@@ -108,6 +120,7 @@ pub const Declaration = struct {
     name: []u8,
     expression: ?*Expression,
     type: Type,
+    storageClass: ?Qualifier = null,
 
     const Self = @This();
     pub fn genTACInstructions(self: Self, instructions: *std.ArrayList(*tac.Instruction), allocator: std.mem.Allocator) CodegenError!void {
@@ -197,6 +210,7 @@ pub const FunctionDef = struct {
     args: std.ArrayList(*Arg),
     blockItems: std.ArrayList(*BlockItem),
     returnType: Type,
+    storageClass: ?Qualifier,
 
     pub fn genTAC(functionDef: FunctionDef, instructions: *std.ArrayList(*tac.Instruction), allocator: std.mem.Allocator) CodegenError!void {
         for (functionDef.blockItems.items) |blockItem| {
@@ -820,15 +834,15 @@ pub const Expression = union(ExpressionType) {
     }
 };
 
-pub fn expressionScopeVariableResolve(self: *VarResolver, expression: *Expression, currentScope: u32, varMap: *std.StringHashMap(u32)) MemoryError!void {
+pub fn expressionScopeVariableResolve(self: *VarResolver, expression: *Expression, currentScope: u32, varMap: *std.StringHashMap(*VarResolveSymInfo)) VarResolveError!void {
     switch (expression.*) {
         .Integer => {},
         .Identifier => |identifier| {
             if (varMap.contains(identifier)) {
-                expression.Identifier = try std.fmt.allocPrint(self.allocator, "{s}{d}", .{ identifier, varMap.get(identifier).? });
+                expression.Identifier = varMap.get(identifier).?.newName;
             }
             if (self.globals.contains(identifier)) {
-                expression.Identifier = try std.fmt.allocPrint(self.allocator, "{s}", .{identifier});
+                expression.Identifier = self.globals.get(identifier).?.newName;
             }
         },
         .Assignment => |assignment| {
@@ -855,18 +869,55 @@ pub fn expressionScopeVariableResolve(self: *VarResolver, expression: *Expressio
     }
 }
 
-pub fn blockStatementScopeVariableResolve(self: *VarResolver, blockItem: *BlockItem, currentScope: u32, varMap: *std.StringHashMap(u32)) MemoryError!void {
+pub const VarResolveError = error{
+    ConflicingVarDeclaration,
+    OutOfMemory,
+};
+
+pub fn blockStatementScopeVariableResolve(self: *VarResolver, blockItem: *BlockItem, currentScope: u32, varMap: *std.StringHashMap(*VarResolveSymInfo)) VarResolveError!void {
     switch (blockItem.*) {
         .Statement => |statement| {
             try statementScopeVariableResolve(self, statement, currentScope, varMap);
         },
         .Declaration => |decl| {
-            try varMap.put(decl.name, currentScope);
-            blockItem.Declaration.name = try std.fmt.allocPrint(self.allocator, "{s}{d}", .{ decl.name, currentScope });
+            if (self.globals.get(decl.name)) |varResolved| {
+                // INFO: if there is no linkage for the resolved variable
+                // If it is global and the storage class is extern, that would
+                // give an error
+                // when is this false?
+                // 1.no linkage (local and it already exists in the map)
+                //  That means the earlier resolved one is also local, which is
+                //  conficting
+                // 2. not extern, and a global variable exists with the same
+                // name
+                //   This does not error in a lot of compilers, but we should
+                //   throw an error here, cause they are going to be distinct
+                //   variables
+
+                if (!(varResolved.hasLinkage and decl.storageClass == Qualifier.EXTERN))
+                    return VarResolveError.ConflicingVarDeclaration;
+            }
+
+            if (decl.storageClass == Qualifier.EXTERN) {
+                const sym = try self.allocator.create(VarResolveSymInfo);
+                sym.* = .{
+                    .hasLinkage = true,
+                    .newName = decl.name,
+                };
+                try varMap.put(decl.name, sym);
+            }
+            const sym = try self.allocator.create(VarResolveSymInfo);
+            sym.* = .{
+                .hasLinkage = false,
+                .newName = (try std.fmt.allocPrint(self.allocator, "{s}{d}", .{ decl.name, currentScope })),
+            };
+
+            try varMap.put(decl.name, sym);
+            blockItem.Declaration.name = sym.newName;
         },
     }
 }
-pub fn statementScopeVariableResolve(self: *VarResolver, statement: *Statement, currentScope: u32, varMap: *std.StringHashMap(u32)) MemoryError!void {
+pub fn statementScopeVariableResolve(self: *VarResolver, statement: *Statement, currentScope: u32, varMap: *std.StringHashMap(*VarResolveSymInfo)) VarResolveError!void {
     switch (statement.*) {
         .Compound => |compound| {
             for (compound.items) |blockItemCompound| {
@@ -910,28 +961,37 @@ pub fn statementScopeVariableResolve(self: *VarResolver, statement: *Statement, 
     }
 }
 
+pub const VarResolveSymInfo = struct {
+    newName: []u8,
+    hasLinkage: bool,
+};
 pub const VarResolver = struct {
-    globals: std.StringHashMap(void),
+    globals: std.StringHashMap(*VarResolveSymInfo),
     allocator: std.mem.Allocator,
     pub fn init(allocator: std.mem.Allocator) MemoryError!*VarResolver {
         const self = try allocator.create(VarResolver);
         self.* = .{
-            .globals = std.StringHashMap(void).init(allocator),
+            .globals = std.StringHashMap(*VarResolveSymInfo).init(allocator),
             .allocator = allocator,
         };
         return self;
     }
-    pub fn resolve(self: *VarResolver, program: *Program) MemoryError!void {
+    pub fn resolve(self: *VarResolver, program: *Program) VarResolveError!void {
         for (program.externalDecls.items) |externalDecl| {
             switch (externalDecl.*) {
                 .FunctionDecl => |functionDecl| {
-                    var varMap = std.StringHashMap(u32).init(self.allocator);
+                    var varMap = std.StringHashMap(*VarResolveSymInfo).init(self.allocator);
                     for (functionDecl.blockItems.items) |blockItem| {
                         try blockStatementScopeVariableResolve(self, blockItem, 0, &varMap);
                     }
                 },
                 .VarDeclaration => |decl| {
-                    try self.globals.put(decl.name, {});
+                    const varSymInfo = try self.allocator.create(VarResolveSymInfo);
+                    varSymInfo.* = VarResolveSymInfo{
+                        .newName = decl.name,
+                        .hasLinkage = true,
+                    };
+                    try self.globals.put(decl.name, varSymInfo);
                 },
             }
         }
@@ -1163,3 +1223,46 @@ test "test multiple functions" {
 //        \\     return x;
 //        \\ }
 //}
+//
+test "testing variable rename pass" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const programStr = "{ int k = 4; return k2+5;}";
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    const stmt = try p.parseStatement();
+    const varResolver = try VarResolver.init(allocator);
+    var varMap = std.StringHashMap(*VarResolveSymInfo).init(allocator);
+    try statementScopeVariableResolve(varResolver, stmt, 0, &varMap);
+}
+
+test "testing variable rename pass error" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const programStr =
+        \\ int k =4; 
+        \\ int main(){
+        \\     int k;
+        \\     return k;
+        \\ }
+    ;
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    const program = try p.parseProgram();
+    const varResolver = try VarResolver.init(allocator);
+    var hasErr = false; // TODO: Hacky, Fix this
+    varResolver.resolve(program) catch |err| {
+        switch (err) {
+            error.ConflicingVarDeclaration => {
+                std.debug.assert(true);
+                hasErr = true;
+            },
+            else => {
+                std.debug.assert(false);
+            },
+        }
+    };
+    std.debug.assert(hasErr);
+}

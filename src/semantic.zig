@@ -6,6 +6,7 @@
 
 const std = @import("std");
 const AST = @import("./AST.zig");
+//const logz = @import("logz");
 
 const SemanticError = error{
     VarNotDeclared,
@@ -326,9 +327,9 @@ fn typecheckExpr(self: *Typechecker, expr: *AST.Expression) TypeError!AST.Type {
     switch (expr.*) {
         .Assignment => |assignment| {
             const lhsType = try typecheckExpr(self, assignment.lhs);
-            std.log.warn("lhs type: {any}\n", .{lhsType});
+            //logz.info().fmt("lhs type", "{any}", .{lhsType}).log();
             const rhsType = try typecheckExpr(self, assignment.rhs);
-            std.log.warn("rhs type: {any}\n", .{rhsType});
+            //logz.info().fmt("rhs type", "{any}", .{rhsType}).log();
             if (lhsType != rhsType) {
                 std.log.warn("lhs type: {any} and rhs type: {any} not matching at assignment\n", .{ lhsType, rhsType });
                 return TypeError.TypeMismatch;
