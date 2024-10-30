@@ -834,36 +834,33 @@ pub const Expression = union(ExpressionType) {
     }
 };
 
-pub fn expressionScopeVariableResolve(self: *VarResolver, expression: *Expression, currentScope: u32, varMap: *std.StringHashMap(*VarResolveSymInfo)) VarResolveError!void {
+pub fn expressionScopeVariableResolve(self: *VarResolver, expression: *Expression, currentScope: u32) VarResolveError!void {
     switch (expression.*) {
         .Integer => {},
         .Identifier => |identifier| {
-            if (varMap.contains(identifier)) {
-                expression.Identifier = varMap.get(identifier).?.newName;
-            }
-            if (self.globals.contains(identifier)) {
-                expression.Identifier = self.globals.get(identifier).?.newName;
+            if (self.varMap.contains(identifier)) {
+                expression.Identifier = self.varMap.get(identifier).?.newName;
             }
         },
         .Assignment => |assignment| {
-            try expressionScopeVariableResolve(self, assignment.lhs, currentScope, varMap);
-            try expressionScopeVariableResolve(self, assignment.rhs, currentScope, varMap);
+            try expressionScopeVariableResolve(self, assignment.lhs, currentScope);
+            try expressionScopeVariableResolve(self, assignment.rhs, currentScope);
         },
         .Ternary => |ternary| {
-            try expressionScopeVariableResolve(self, ternary.condition, currentScope, varMap);
-            try expressionScopeVariableResolve(self, ternary.lhs, currentScope, varMap);
-            try expressionScopeVariableResolve(self, ternary.rhs, currentScope, varMap);
+            try expressionScopeVariableResolve(self, ternary.condition, currentScope);
+            try expressionScopeVariableResolve(self, ternary.lhs, currentScope);
+            try expressionScopeVariableResolve(self, ternary.rhs, currentScope);
         },
         .Unary => |unary| {
-            try expressionScopeVariableResolve(self, unary.exp, currentScope, varMap);
+            try expressionScopeVariableResolve(self, unary.exp, currentScope);
         },
         .Binary => |binary| {
-            try expressionScopeVariableResolve(self, binary.lhs, currentScope, varMap);
-            try expressionScopeVariableResolve(self, binary.rhs, currentScope, varMap);
+            try expressionScopeVariableResolve(self, binary.lhs, currentScope);
+            try expressionScopeVariableResolve(self, binary.rhs, currentScope);
         },
         .FunctionCall => |fnCall| {
             for (fnCall.args.items) |arg| {
-                try expressionScopeVariableResolve(self, arg, currentScope, varMap);
+                try expressionScopeVariableResolve(self, arg, currentScope);
             }
         },
     }
@@ -874,87 +871,118 @@ pub const VarResolveError = error{
     OutOfMemory,
 };
 
-pub fn blockStatementScopeVariableResolve(self: *VarResolver, blockItem: *BlockItem, currentScope: u32, varMap: *std.StringHashMap(*VarResolveSymInfo)) VarResolveError!void {
+pub fn blockStatementScopeVariableResolve(self: *VarResolver, blockItem: *BlockItem, currentScope: u32) VarResolveError!void {
     switch (blockItem.*) {
         .Statement => |statement| {
-            try statementScopeVariableResolve(self, statement, currentScope, varMap);
+            try statementScopeVariableResolve(self, statement, currentScope);
         },
         .Declaration => |decl| {
-            if (self.globals.get(decl.name)) |varResolved| {
+            if (self.varMap.get(decl.name)) |varResolved| {
                 // INFO: if there is no linkage for the resolved variable
                 // If it is global and the storage class is extern, that would
                 // give an error
                 // when is this false?
-                // 1.no linkage (local and it already exists in the map)
-                //  That means the earlier resolved one is also local, which is
+                // 1.no linkage (local and it already exists in the map) and
+                // is extern (conflicting)
+                // For reference this C program:
+                // int main(){
+                //    int k;
+                //    extern int k;
+                //    return k;
+                // }
+                //
+                // INFO: That means the earlier resolved one is also local, which is
                 //  conficting
-                // 2. not extern, and a global variable exists with the same
-                // name
+                // 2. not extern, and a variable exists with the same
+                // name in the current scope
                 //   This does not error in a lot of compilers, but we should
                 //   throw an error here, cause they are going to be distinct
                 //   variables
+                //
+                // INFO:
+                // 3. hasLinkage before in current scope and is extern now
+                // a double extern definition:
+                // int main(){
+                //     extern int k;
+                //     extern int k;
+                //     return k;
+                // }
+                // INFO:
+                // 4. No linkage and is not extern, duplicate definitions, throw
+                // an error
+                // Redefinition of variable, throw error
 
-                if (!(varResolved.hasLinkage and decl.storageClass == Qualifier.EXTERN))
+                std.log.warn("We are here with: {any} and {any}\n", .{
+                    varResolved,
+                    decl,
+                });
+                // zig fmt: off
+                if ((varResolved.level == currentScope)
+                    and !(varResolved.hasLinkage and (decl.storageClass == Qualifier.EXTERN)))
                     return VarResolveError.ConflicingVarDeclaration;
+                // zig fmt: on
             }
 
             if (decl.storageClass == Qualifier.EXTERN) {
                 const sym = try self.allocator.create(VarResolveSymInfo);
                 sym.* = .{
+                    .level = @intCast(currentScope),
                     .hasLinkage = true,
                     .newName = decl.name,
                 };
-                try varMap.put(decl.name, sym);
+                try self.varMap.put(decl.name, sym);
+                return;
             }
             const sym = try self.allocator.create(VarResolveSymInfo);
             sym.* = .{
+                .level = @intCast(currentScope),
                 .hasLinkage = false,
                 .newName = (try std.fmt.allocPrint(self.allocator, "{s}{d}", .{ decl.name, currentScope })),
             };
 
-            try varMap.put(decl.name, sym);
+            try self.varMap.put(decl.name, sym);
             blockItem.Declaration.name = sym.newName;
         },
     }
 }
-pub fn statementScopeVariableResolve(self: *VarResolver, statement: *Statement, currentScope: u32, varMap: *std.StringHashMap(*VarResolveSymInfo)) VarResolveError!void {
+pub fn statementScopeVariableResolve(self: *VarResolver, statement: *Statement, currentScope: u32) VarResolveError!void {
     switch (statement.*) {
         .Compound => |compound| {
             for (compound.items) |blockItemCompound| {
-                try blockStatementScopeVariableResolve(self, blockItemCompound, currentScope + 1, varMap);
+                try blockStatementScopeVariableResolve(self, blockItemCompound, currentScope + 1);
             }
         },
         .Null, .Label, .Goto => {},
         .If => |ifStmt| {
-            try expressionScopeVariableResolve(self, ifStmt.condition, currentScope, varMap);
-            try statementScopeVariableResolve(self, ifStmt.thenStmt, currentScope, varMap);
+            try expressionScopeVariableResolve(self, ifStmt.condition, currentScope);
+            try statementScopeVariableResolve(self, ifStmt.thenStmt, currentScope);
             if (ifStmt.elseStmt) |elseStmt| {
-                try statementScopeVariableResolve(self, elseStmt, currentScope, varMap);
+                try statementScopeVariableResolve(self, elseStmt, currentScope);
             }
         },
         .Return => |ret| {
-            try expressionScopeVariableResolve(self, ret.expression, currentScope, varMap);
+            try expressionScopeVariableResolve(self, ret.expression, currentScope);
         },
         .Expression => |expression| {
-            try expressionScopeVariableResolve(self, expression, currentScope, varMap);
+            try expressionScopeVariableResolve(self, expression, currentScope);
         },
         .DoWhile => |doWhile| {
-            try expressionScopeVariableResolve(self, doWhile.condition, currentScope, varMap);
-            try statementScopeVariableResolve(self, doWhile.body, currentScope, varMap);
+            try expressionScopeVariableResolve(self, doWhile.condition, currentScope);
+            try statementScopeVariableResolve(self, doWhile.body, currentScope);
         },
         .While => |whileStmt| {
-            try expressionScopeVariableResolve(self, whileStmt.condition, currentScope, varMap);
-            try statementScopeVariableResolve(self, whileStmt.body, currentScope, varMap);
+            try expressionScopeVariableResolve(self, whileStmt.condition, currentScope);
+            try statementScopeVariableResolve(self, whileStmt.body, currentScope);
         },
         .For => |forStmt| {
             if (std.mem.eql(u8, @tagName(forStmt.init.*), "Expression")) {
-                try expressionScopeVariableResolve(self, forStmt.init.Expression, currentScope, varMap);
+                try expressionScopeVariableResolve(self, forStmt.init.Expression, currentScope);
             }
             if (forStmt.condition) |condition|
-                try expressionScopeVariableResolve(self, condition, currentScope, varMap);
+                try expressionScopeVariableResolve(self, condition, currentScope);
             if (forStmt.post) |post|
-                try expressionScopeVariableResolve(self, post, currentScope, varMap);
-            try statementScopeVariableResolve(self, forStmt.body, currentScope, varMap);
+                try expressionScopeVariableResolve(self, post, currentScope);
+            try statementScopeVariableResolve(self, forStmt.body, currentScope);
         },
         .Break => {},
         .Continue => {},
@@ -962,16 +990,17 @@ pub fn statementScopeVariableResolve(self: *VarResolver, statement: *Statement, 
 }
 
 pub const VarResolveSymInfo = struct {
+    level: i32 = 0,
     newName: []u8,
     hasLinkage: bool,
 };
 pub const VarResolver = struct {
-    globals: std.StringHashMap(*VarResolveSymInfo),
+    varMap: std.StringHashMap(*VarResolveSymInfo),
     allocator: std.mem.Allocator,
     pub fn init(allocator: std.mem.Allocator) MemoryError!*VarResolver {
         const self = try allocator.create(VarResolver);
         self.* = .{
-            .globals = std.StringHashMap(*VarResolveSymInfo).init(allocator),
+            .varMap = std.StringHashMap(*VarResolveSymInfo).init(allocator),
             .allocator = allocator,
         };
         return self;
@@ -980,18 +1009,18 @@ pub const VarResolver = struct {
         for (program.externalDecls.items) |externalDecl| {
             switch (externalDecl.*) {
                 .FunctionDecl => |functionDecl| {
-                    var varMap = std.StringHashMap(*VarResolveSymInfo).init(self.allocator);
                     for (functionDecl.blockItems.items) |blockItem| {
-                        try blockStatementScopeVariableResolve(self, blockItem, 0, &varMap);
+                        try blockStatementScopeVariableResolve(self, blockItem, 0);
                     }
                 },
                 .VarDeclaration => |decl| {
                     const varSymInfo = try self.allocator.create(VarResolveSymInfo);
                     varSymInfo.* = VarResolveSymInfo{
+                        .level = -1,
                         .newName = decl.name,
                         .hasLinkage = true,
                     };
-                    try self.globals.put(decl.name, varSymInfo);
+                    try self.varMap.put(decl.name, varSymInfo);
                 },
             }
         }
@@ -1233,8 +1262,7 @@ test "testing variable rename pass" {
     var p = try parser.Parser.init(allocator, l);
     const stmt = try p.parseStatement();
     const varResolver = try VarResolver.init(allocator);
-    var varMap = std.StringHashMap(*VarResolveSymInfo).init(allocator);
-    try statementScopeVariableResolve(varResolver, stmt, 0, &varMap);
+    try statementScopeVariableResolve(varResolver, stmt, 0);
 }
 
 test "testing variable rename pass error" {
@@ -1252,15 +1280,39 @@ test "testing variable rename pass error" {
     var p = try parser.Parser.init(allocator, l);
     const program = try p.parseProgram();
     const varResolver = try VarResolver.init(allocator);
-    var hasErr = false; // TODO: Hacky, Fix this
+    varResolver.resolve(program) catch {
+        std.debug.assert(false);
+    };
+}
+
+test "testing with nested scopes and with an error" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const programStr =
+        \\ int k = 5;
+        \\ 
+        \\ int main(){
+        \\     {
+        \\ 	extern int k;
+        \\ 	int k;
+        \\     }
+        \\     return k;
+        \\ }
+    ;
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    const program = try p.parseProgram();
+    const varResolver = try VarResolver.init(allocator);
+    var hasErr = false;
     varResolver.resolve(program) catch |err| {
+        hasErr = true;
         switch (err) {
             error.ConflicingVarDeclaration => {
-                std.debug.assert(true);
-                hasErr = true;
+                std.log.warn("\x1b[31mConflicting var declaration\x1b[0m\n", .{});
             },
             else => {
-                std.debug.assert(false);
+                std.log.warn("\x1b[31mUnknown error\x1b[0m\n", .{});
             },
         }
     };
