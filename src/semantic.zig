@@ -8,6 +8,30 @@ const std = @import("std");
 const AST = @import("./AST.zig");
 //const logz = @import("logz");
 
+pub const SymAttributeKind = enum {
+    FunctionAttr,
+    StaticAttr,
+    LocalAttr,
+};
+
+pub const InitValueKind = enum {
+    Tentative, // Maybe initialized by a lter declaration
+    Initial, // Initiialized
+    NoInit, // No information can be made about the initialization
+};
+
+pub const InitValue = union(InitValueKind) {
+    Tentative: void,
+    Initial: u32,
+    NoInit: void,
+};
+
+pub const SymAttribute = union(SymAttributeKind) {
+    FunctionAttr: struct { defined: bool, global: bool },
+    StaticAttr: struct { init: InitValue, global: bool },
+    LocalAttr: void,
+};
+
 const SemanticError = error{
     VarNotDeclared,
     OutOfMemory,
@@ -15,7 +39,21 @@ const SemanticError = error{
     NoSpaceLeft,
 };
 
-const TypeError = error{ TypeMismatch, OutOfMemory, UnknownFunction, UnknownIdentifier };
+pub const TypeError = error{
+    TypeMismatch,
+    OutOfMemory,
+    UnknownFunction,
+    UnknownIdentifier,
+    GlobVarRedeclaredAsFn,
+    LinkageMismatch,
+    FnRedefined,
+    FnArgNumMismatch,
+    GlobalDeclarationNotInteger,
+    ExternVarDeclared,
+    FnRedeclaredAsVar,
+    ConflictingDeclarations,
+};
+
 const TypeCheckerError = error{OutOfMemory} || TypeError;
 
 pub const TypeErrorStruct = struct {
@@ -23,7 +61,7 @@ pub const TypeErrorStruct = struct {
     errorPayload: []u8,
 };
 
-pub const SymbolKind = enum {
+pub const TypeKind = enum {
     Function,
     Void,
     Integer,
@@ -33,12 +71,17 @@ pub const FnSymbol = struct {
     returnType: AST.Type,
 };
 
-pub const Symbol = union(SymbolKind) {
+pub const TypeInfo = union(TypeKind) {
     Function: FnSymbol,
     //INFO: For now we just keep the count,
     // later we will keep track of the types of the args
     Void,
     Integer,
+};
+
+pub const Symbol = struct {
+    typeInfo: TypeInfo,
+    attributes: SymAttribute,
 };
 
 pub const Typechecker = struct {
@@ -76,61 +119,206 @@ pub fn typecheckProgram(self: *Typechecker, program: *AST.Program) TypeCheckerEr
 
 pub fn typecheckExternalDecl(self: *Typechecker, externalDecl: *AST.ExternalDecl) TypeCheckerError!?*TypeErrorStruct {
     switch (externalDecl.*) {
+        // INFO: Function declarations should have the following checks:
+        // 1. Return statements should be same as fn return type
+        //     - This will be implemented later
+        // 2. Arguments length should be the same as fn args length
+        // 3. Function if declared earlier as static should not be
+        // redeclared as non-static (vice versa) ✅
+        // 4. Function if defined earlier, should not be redefined ✅
+        // 5. Global variables should not have the same name as the function ✅
+        // 6. Return type of the earlier declaration should not be
+        // different, and so is the arg length
+        //     - This will be implemented later
         .FunctionDecl => |functionDecl| {
+            if (self.symbolTable.get(functionDecl.name)) |sym| {
+                if (!std.mem.eql(u8, @tagName(sym.typeInfo), "Function")) {
+                    const typeError = try self.allocator.create(TypeErrorStruct);
+                    typeError.* = .{
+                        .errorType = TypeError.GlobVarRedeclaredAsFn,
+                        .errorPayload = (try std.fmt.allocPrint(self.allocator, "Global variable {s} redeclared as function\n", .{functionDecl.name})),
+                    };
+                    return typeError;
+                }
+                // zig fmt: off
+                if ((!sym.attributes.FunctionAttr.global and (functionDecl.storageClass != AST.Qualifier.STATIC))
+                    or (sym.attributes.FunctionAttr.global and (functionDecl.storageClass == AST.Qualifier.STATIC))) {
+                // zig fmt: on
+                    const typeError = try self.allocator.create(TypeErrorStruct);
+                    typeError.* = .{
+                        .errorType = TypeError.LinkageMismatch,
+                        .errorPayload = (try std.fmt.allocPrint(self.allocator, "Global variable {s} redeclared as non-static\n", .{functionDecl.name})),
+                    };
+                    return typeError;
+                }
+                // zig fmt: off
+                if ((functionDecl.blockItems.items.len != 0) and (sym.attributes.FunctionAttr.defined)) {
+                // zig fmt: on
+                    const typeError = try self.allocator.create(TypeErrorStruct);
+                    typeError.* = .{
+                        .errorType = TypeError.FnRedefined,
+                        .errorPayload = (try std.fmt.allocPrint(
+                            self.allocator,
+                            "Function redefinition of {s}\n",
+                            .{functionDecl.name},
+                        )),
+                    };
+                    return typeError;
+                }
+
+                if (functionDecl.args.items.len != sym.typeInfo.Function.argsLen) {
+                    const typeError = try self.allocator.create(TypeErrorStruct);
+                    typeError.* = .{
+                        .errorType = TypeError.FnArgNumMismatch,
+                        .errorPayload = (try std.fmt.allocPrint(
+                            self.allocator,
+                            "Function {s} has mismatching declarations\n",
+                            .{functionDecl.name},
+                        )),
+                    };
+                    return typeError;
+                }
+            }
             const fnSym = try self.allocator.create(Symbol);
             fnSym.* = .{
-                .Function = .{
-                    .argsLen = @intCast(functionDecl.args.items.len),
-                    .returnType = functionDecl.returnType,
+                .typeInfo = .{
+                    .Function = .{
+                        .argsLen = @intCast(functionDecl.args.items.len),
+                        .returnType = functionDecl.returnType,
+                    },
+                },
+                .attributes = .{
+                    .FunctionAttr = .{
+                        .defined = (functionDecl.blockItems.items.len != 0),
+                        .global = (functionDecl.storageClass != AST.Qualifier.STATIC),
+                    },
                 },
             };
-            try self.symbolTable.put(
-                functionDecl.name,
-                fnSym,
-            );
-            for (functionDecl.args.items) |arg| {
-                switch (arg.*) {
-                    .Void => {
-                        // do nothing
-                    },
-                    .NonVoidArg => |nonVoid| {
-                        std.debug.assert(nonVoid.type == AST.Type.Integer);
-                        const sym = try self.allocator.create(Symbol);
-                        sym.* = .Integer;
-                        try self.symbolTable.put(
-                            nonVoid.identifier,
-                            sym,
-                        );
-                    },
-                }
-                //try self.symbolTable.put();
-            }
-            for (functionDecl.blockItems.items) |blkItem| {
-                const blockTypeCheckResult = try typecheckBlkItem(self, blkItem);
-                if (blockTypeCheckResult) |blockTypeCheck| {
-                    return blockTypeCheck;
-                }
-            }
+            try self.symbolTable.put(functionDecl.name, fnSym);
         },
         .VarDeclaration => |varDecl| {
-            // There should be a global scope
-            std.debug.assert(varDecl.type == AST.Type.Integer);
-            const sym = try self.allocator.create(Symbol);
-            if (varDecl.expression != null) {
-                _ = typecheckExpr(self, varDecl.expression.?) catch |err| {
+            // INFO: Global/File scope variables
+            // 1. Check if the rhs expression is a number (reject everything)
+            //    - Later implement a global evaluator pass (AST -> glob
+            //    evaluator -> var resolve)
+            // 2. Check the storage class:
+            //    - Extern should not have an initialization expression, and it
+            //    should be assigned as `NoInitializer`
+            //    - Static,  if it does not have an init, should init to a
+            //    default value
+            // 3. If there is already a declaration with this name
+            //    - Not a function
+            //    - Change the attribute status if its extern
+            //    - if its static and the other extern, then throw an
+            //    error(check if global changed)
+            // 4. If all of this passes, and if the earlier decl had an
+            // initialization, throw an error, telling that there are
+            // conflicting global definitions.
+            // 5. If there is no initiliazer for the current case and the
+            // earlier value was not a constant, then assign tentative
+
+            var initializer: InitValue = .NoInit;
+            var global = false;
+            if (varDecl.expression) |expression| {
+                if (!std.mem.eql(u8, @tagName(expression.*), "Integer")) {
                     const typeErrorStruct = try self.allocator.create(TypeErrorStruct);
                     typeErrorStruct.* = .{
-                        .errorType = err,
-                        .errorPayload = (try std.fmt.allocPrint(self.allocator, "Type error at global declaration of {s}\n", .{varDecl.name})),
+                        .errorType = TypeError.GlobalDeclarationNotInteger,
+                        .errorPayload = (try std.fmt.allocPrint(
+                            self.allocator,
+                            "Global declarations only support integers for declaration of {s}\n",
+                            .{varDecl.name},
+                        )),
                     };
                     return typeErrorStruct;
-                };
+                }
+                initializer = .{ .Initial = expression.Integer };
+
+                if (varDecl.storageClass == AST.Qualifier.EXTERN) {
+                    const typeErrorStruct = try self.allocator.create(TypeErrorStruct);
+                    typeErrorStruct.* = .{
+                        .errorType = TypeError.ExternVarDeclared,
+                        .errorPayload = (try std.fmt.allocPrint(
+                            self.allocator,
+                            "Extern declarations cant have an assignment: {s}\n",
+                            .{varDecl.name},
+                        )),
+                    };
+                    return typeErrorStruct;
+                }
+            } else {
+                initializer = if (varDecl.storageClass == AST.Qualifier.EXTERN) .NoInit else .Tentative;
             }
-            sym.* = .Integer;
-            try self.symbolTable.put(
-                varDecl.name,
-                sym,
-            );
+
+            global = varDecl.storageClass != AST.Qualifier.STATIC;
+            if (self.symbolTable.get(varDecl.name)) |varSym| {
+                //INFO: Function redeclaration as variable handling
+                if (std.mem.eql(u8, @tagName(varSym.typeInfo), "Function")) {
+                    const typeErrorStruct = try self.allocator.create(TypeErrorStruct);
+                    typeErrorStruct.* = .{
+                        .errorType = TypeError.FnRedeclaredAsVar,
+                        .errorPayload = (try std.fmt.allocPrint(
+                            self.allocator,
+                            "Function redeclared as var: {s}\n",
+                            .{varDecl.name},
+                        )),
+                    };
+                    return typeErrorStruct;
+                }
+
+                //INFO: extern inherit scope (global/static)
+                if (varDecl.storageClass == AST.Qualifier.EXTERN) {
+                    // inherit global attr
+                    // inherit initial value
+                    // TODO: straighten this switch out once the asserts have
+                    // not been hit for some test cases
+                    switch (varSym.attributes) {
+                        .StaticAttr => |staticAttr| {
+                            global = staticAttr.global;
+                        },
+                        else => {
+                            unreachable;
+                        },
+                    }
+                } else {
+                    //INFO: if no extern, check whether earlier decl was
+                    //global/static. check if the new one is the same, else
+                    //throw
+                    // TODO: straighten this switch out once the asserts have
+                    // not been hit for some test cases
+                    switch (varSym.attributes) {
+                        .StaticAttr => |staticAttr| {
+                            if (staticAttr.global != global) {
+                                const typeErrorStruct = try self.allocator.create(TypeErrorStruct);
+                                typeErrorStruct.* = .{
+                                    .errorType = TypeError.ConflictingDeclarations,
+                                    .errorPayload = (try std.fmt.allocPrint(
+                                        self.allocator,
+                                        "Static and non-static(conflicting) declarations for {s}\n",
+                                        .{varDecl.name},
+                                    )),
+                                };
+                                return typeErrorStruct;
+                            }
+                        },
+                        else => {
+                            unreachable;
+                        },
+                    }
+                }
+            }
+
+            const sym = try self.allocator.create(Symbol);
+            sym.* = .{
+                .typeInfo = .Integer,
+                .attributes = .{
+                    .StaticAttr = .{
+                        .global = global,
+                        .init = initializer,
+                    },
+                },
+            };
+            try self.symbolTable.put(varDecl.name, sym);
         },
     }
     return null;
@@ -350,18 +538,18 @@ fn typecheckExpr(self: *Typechecker, expr: *AST.Expression) TypeError!AST.Type {
                 std.log.warn("Unknown function: {s}\n", .{fnCall.name});
                 return TypeError.UnknownFunction;
             };
-            if (fnCall.args.items.len != fnSymbol.Function.argsLen) {
-                std.log.warn("Expected {d} arguments but found {d} arguments in {s}\n", .{ fnSymbol.Function.argsLen, fnCall.args.items.len, fnCall.name });
+            if (fnCall.args.items.len != fnSymbol.typeInfo.Function.argsLen) {
+                std.log.warn("Expected {d} arguments but found {d} arguments in {s}\n", .{ fnSymbol.typeInfo.Function.argsLen, fnCall.args.items.len, fnCall.name });
                 return TypeError.TypeMismatch;
             }
-            return fnSymbol.Function.returnType;
+            return fnSymbol.typeInfo.Function.returnType;
         },
         .Identifier => |identifier| {
             const symbol = if (self.symbolTable.get(identifier)) |sym| sym else {
                 std.log.warn("Unknown identifier: {s}\n", .{identifier});
                 return TypeError.UnknownIdentifier;
             };
-            std.debug.assert(std.mem.eql(u8, @tagName(symbol.*), "Integer"));
+            std.debug.assert(std.mem.eql(u8, @tagName(symbol.typeInfo), "Integer"));
             return AST.Type.Integer;
         },
         .Integer => {
@@ -381,115 +569,6 @@ fn typecheckExpr(self: *Typechecker, expr: *AST.Expression) TypeError!AST.Type {
         },
     }
 }
-
-//pub fn typechecker(program: *AST.Program, allocator: std.mem.Allocator) !?*TypeErrorStruct {
-//    // INFO: Only typechecking requirement right now is function call return
-//    // INFO: Maintain a function metadata hashmap and query that to check if the return type match
-//    // Buildling a metadata map for functions.
-//    var fnMetaDataMap = std.StringHashMap(FnMetaData).init(allocator);
-//    for (program.externalDecls.items) |externalDecl| {
-//        switch (externalDecl.*) {
-//            .FunctionDecl => |fnDecl| {
-//                const localVarTypeMap = std.StringHashMap(AST.Type).init(allocator);
-//                try fnMetaDataMap.put(
-//                    fnDecl.name,
-//                    .{
-//                        .returnType = fnDecl.returnType,
-//                        .localVarTypeMap = @constCast(&localVarTypeMap),
-//                    },
-//                );
-//            },
-//            .VarDeclaration => {},
-//        }
-//    }
-//    for (program.externalDecls.items) |externalDecl| {
-//        switch (externalDecl.*) {
-//            .FunctionDecl => |fnDecl| {
-//                for (fnDecl.blockItems.items) |blkItem| {
-//                    switch (blkItem.*) {
-//                        .Declaration => |decl| {
-//                            try fnMetaDataMap.get(fnDecl.name).?.localVarTypeMap.put(
-//                                decl.name,
-//                                decl.type,
-//                            );
-//                        },
-//                        .Statement => {},
-//                    }
-//                }
-//            },
-//            .VarDeclaration => {},
-//        }
-//    }
-//    var iter = fnMetaDataMap.iterator();
-//    while (iter.next()) |entry| {
-//        std.log.warn("{s} : \n", .{entry.key_ptr.*});
-//        var varIter = entry.value_ptr.localVarTypeMap.iterator();
-//        while (varIter.next()) |varEntry| {
-//            std.log.warn("{s}: {any}\n", .{ varEntry.key_ptr.*, varEntry.value_ptr.* });
-//        }
-//    }
-//    for (program.externalDecls.items) |externalDecl| {
-//        switch (externalDecl.*) {
-//            .FunctionDecl => |fnDecl| {
-//                for (fnDecl.blockItems.items) |blkItem| {
-//                    switch (blkItem.*) {
-//                        .Statement => |stmt| {
-//                            // Check assignment statements
-//                            if (std.mem.eql(u8, @tagName(stmt.*), "Expression")) {
-//                                if (std.mem.eql(u8, @tagName(stmt.Expression.*), "Assignment")) {
-//                                    if (std.mem.eql(u8, @tagName(stmt.Expression.Assignment.rhs.*), "FunctionCall")) {
-//                                        std.debug.assert(std.mem.eql(u8, @tagName(stmt.Expression.Assignment.lhs.*), "Identifier"));
-//                                        const lhsType = fnMetaDataMap.get(fnDecl.name).?.localVarTypeMap.get(stmt.Expression.Assignment.lhs.Identifier).?;
-//                                        const rhsType = fnMetaDataMap.get(stmt.Expression.Assignment.rhs.FunctionCall.name).?.returnType;
-//                                        if (lhsType != rhsType) {
-//                                            const typeErrorStruct = try allocator.create(TypeErrorStruct);
-//                                            typeErrorStruct.* = .{
-//                                                .errorType = TypeError.TypeMismatch,
-//                                                .errorPayload = (try std.fmt.allocPrint(allocator, "Type mismatch: lhs type: {any} and rhs type: {any}\n", .{ lhsType, rhsType })),
-//                                            };
-//                                            return typeErrorStruct;
-//                                        }
-//                                    }
-//                                }
-//                            }
-//                            // Check return statements in the function and check the type
-//                            if (std.mem.eql(u8, @tagName(stmt.*), "Return")) {
-//                                if (std.mem.eql(u8, @tagName(stmt.Return.expression.*), "Identifier")) {
-//                                    const identifierType = fnMetaDataMap.get(fnDecl.name).?.localVarTypeMap.get(stmt.Return.expression.Identifier).?;
-//                                    if (identifierType != fnDecl.returnType) {
-//                                        const typeErrorStruct = try allocator.create(TypeErrorStruct);
-//                                        typeErrorStruct.* = .{
-//                                            .errorType = TypeError.TypeMismatch,
-//                                            .errorPayload = (try std.fmt.allocPrint(allocator, "Type mismatch: function supposed to return: {any} and found type in return: {any}\n", .{ fnDecl.returnType, identifierType })),
-//                                        };
-//                                        return typeErrorStruct;
-//                                    }
-//                                }
-//                            }
-//                        },
-//                        .Declaration => |decl| {
-//                            // Check declaration assignments
-//                            if (decl.expression) |expr| {
-//                                if (std.mem.eql(u8, @tagName(expr.*), "FunctionCall")) {
-//                                    if (decl.type != fnMetaDataMap.get(expr.FunctionCall.name).?.returnType) {
-//                                        const typeErrorStruct = try allocator.create(TypeErrorStruct);
-//                                        typeErrorStruct.* = .{
-//                                            .errorType = TypeError.TypeMismatch,
-//                                            .errorPayload = (try std.fmt.allocPrint(allocator, "Type mismatch: lhs type: {any} and rhs type: {any}\n", .{ decl.type, fnMetaDataMap.get(expr.FunctionCall.name).?.returnType })),
-//                                        };
-//                                        return typeErrorStruct;
-//                                    }
-//                                }
-//                            }
-//                        },
-//                    }
-//                }
-//            },
-//            .VarDeclaration => {},
-//        }
-//    }
-//    return null;
-//}
 
 pub fn resolveDeclaration(declaration: *AST.Declaration, varMap: *std.StringHashMap([]u8)) SemanticError!void {
     if (!varMap.contains(declaration.name)) {
@@ -717,4 +796,296 @@ test "typechecker-error-fn-not found" {
         std.log.warn("\x1b[31mError\x1b[0m: {s}\n", .{typeError});
     }
     try ast.loopLabelPass(program, allocator);
+}
+
+// INFO: Function declaration semantic errors:
+test "function if declared as static should not be redeclared as non static" {
+    const lexer = @import("./lexer.zig");
+    const parser = @import("./parser.zig");
+    const ast = @import("./AST.zig");
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const programStr =
+        \\ extern int add(int a,int b);
+        \\ static int add(int a, int b) {return a+b;}
+        \\ int main(){
+        \\     int c = add(2,3);
+        \\     return c;
+        \\ }
+    ;
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    const program = try p.parseProgram();
+    const varResolver = try ast.VarResolver.init(allocator);
+    try varResolver.resolve(program);
+    const typechecker = try Typechecker.init(allocator);
+    const hasTypeError = try typechecker.check(program);
+    var hasErr = false;
+    if (hasTypeError) |typeError| {
+        std.log.warn("\x1b[31mError\x1b[0m: {s}\n", .{typeError});
+        hasErr = true;
+    }
+    std.debug.assert(hasErr);
+}
+
+test "function redefinition" {
+    const lexer = @import("./lexer.zig");
+    const parser = @import("./parser.zig");
+    const ast = @import("./AST.zig");
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const programStr =
+        \\ int add(int a,int b){return a+b;}
+        \\ int add(int a, int b) {return a+b+3;}
+        \\ int main(){
+        \\     int c = add(2,3);
+        \\     return c;
+        \\ }
+    ;
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    const program = try p.parseProgram();
+    const varResolver = try ast.VarResolver.init(allocator);
+    try varResolver.resolve(program);
+    const typechecker = try Typechecker.init(allocator);
+    const hasTypeError = try typechecker.check(program);
+    var hasErr = false;
+    if (hasTypeError) |typeError| {
+        std.log.warn("\x1b[31mError\x1b[0m: {s}\n", .{typeError});
+        hasErr = true;
+    }
+    std.debug.assert(hasErr);
+}
+
+test "global var having same name as func" {
+    const lexer = @import("./lexer.zig");
+    const parser = @import("./parser.zig");
+    const ast = @import("./AST.zig");
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const programStr =
+        \\ int add = 5;
+        \\ int add(int a, int b) {return a+b+3;}
+        \\ int main(){
+        \\     int c = add(2,3);
+        \\     return c;
+        \\ }
+    ;
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    const program = try p.parseProgram();
+    const varResolver = try ast.VarResolver.init(allocator);
+    try varResolver.resolve(program);
+    const typechecker = try Typechecker.init(allocator);
+    const hasTypeError = try typechecker.check(program);
+    var hasErr = false;
+    if (hasTypeError) |typeError| {
+        std.log.warn("\x1b[31mError\x1b[0m: {s}\n", .{typeError});
+        hasErr = true;
+    }
+    std.debug.assert(hasErr);
+}
+
+test "global var declaration and definition having different argument numbers" {
+    const lexer = @import("./lexer.zig");
+    const parser = @import("./parser.zig");
+    const ast = @import("./AST.zig");
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const programStr =
+        \\ int add(int a, int b, int c);
+        \\ int add(int a, int b);
+        \\ int main(){
+        \\     int c = add(2,3);
+        \\     return c;
+        \\ }
+    ;
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    const program = try p.parseProgram();
+    const varResolver = try ast.VarResolver.init(allocator);
+    try varResolver.resolve(program);
+    const typechecker = try Typechecker.init(allocator);
+    const hasTypeError = try typechecker.check(program);
+    var hasErr = false;
+    if (hasTypeError) |typeError| {
+        std.log.warn("\x1b[31mError\x1b[0m: {s}\n", .{typeError});
+        hasErr = true;
+    }
+    std.debug.assert(hasErr);
+}
+
+// INFO: Global declaration semantic errors:
+test "global var declaration having non integer expression" {
+    const lexer = @import("./lexer.zig");
+    const parser = @import("./parser.zig");
+    const ast = @import("./AST.zig");
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const programStr =
+        \\ int add(int a, int b, int c){return a+b+c;}
+        \\ int k = add(2,3,4);
+        \\ int main(){
+        \\     return k;
+        \\ }
+    ;
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    const program = try p.parseProgram();
+    const varResolver = try ast.VarResolver.init(allocator);
+    try varResolver.resolve(program);
+    const typechecker = try Typechecker.init(allocator);
+    const hasTypeError = try typechecker.check(program);
+    var hasErr = false;
+    if (hasTypeError) |typeError| {
+        std.log.warn("\x1b[31mError\x1b[0m: {s}\n", .{typeError});
+        hasErr = true;
+    }
+    std.debug.assert(hasErr);
+}
+
+test "extern shouldnt have an init value" {
+    const lexer = @import("./lexer.zig");
+    const parser = @import("./parser.zig");
+    const ast = @import("./AST.zig");
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const programStr =
+        \\ extern int k = 5;
+        \\ int main(){
+        \\     return k;
+        \\ }
+    ;
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    const program = try p.parseProgram();
+    const varResolver = try ast.VarResolver.init(allocator);
+    try varResolver.resolve(program);
+    const typechecker = try Typechecker.init(allocator);
+    const hasTypeError = try typechecker.check(program);
+    var hasErr = false;
+    if (hasTypeError) |typeError| {
+        std.log.warn("\x1b[31mError\x1b[0m: {s}\n", .{typeError});
+        hasErr = true;
+    }
+    std.debug.assert(hasErr);
+}
+
+test "extern declarations after static" {
+    const lexer = @import("./lexer.zig");
+    const parser = @import("./parser.zig");
+    const ast = @import("./AST.zig");
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const programStr =
+        \\ static int k = 5;
+        \\ extern int k;
+        \\ int main(){
+        \\     return k;
+        \\ }
+    ;
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    const program = try p.parseProgram();
+    const varResolver = try ast.VarResolver.init(allocator);
+    try varResolver.resolve(program);
+    const typechecker = try Typechecker.init(allocator);
+    const hasTypeError = try typechecker.check(program);
+    var hasErr = false;
+    if (hasTypeError) |typeError| {
+        std.log.warn("\x1b[31mError\x1b[0m: {s}\n", .{typeError});
+        hasErr = true;
+    }
+    std.debug.assert(!hasErr);
+}
+test "static declarations after extern" {
+    const lexer = @import("./lexer.zig");
+    const parser = @import("./parser.zig");
+    const ast = @import("./AST.zig");
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const programStr =
+        \\ extern int k;
+        \\ static int k = 5;
+        \\ int main(){
+        \\     return k;
+        \\ }
+    ;
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    const program = try p.parseProgram();
+    const varResolver = try ast.VarResolver.init(allocator);
+    try varResolver.resolve(program);
+    const typechecker = try Typechecker.init(allocator);
+    const hasTypeError = try typechecker.check(program);
+    var hasErr = false;
+    if (hasTypeError) |typeError| {
+        std.log.warn("\x1b[31mError\x1b[0m: {s}\n", .{typeError});
+        hasErr = true;
+    }
+    std.debug.assert(hasErr);
+}
+test "just extern" {
+    const lexer = @import("./lexer.zig");
+    const parser = @import("./parser.zig");
+    const ast = @import("./AST.zig");
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const programStr =
+        \\ extern int k;
+        \\ int main(){
+        \\     return k;
+        \\ }
+    ;
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    const program = try p.parseProgram();
+    const varResolver = try ast.VarResolver.init(allocator);
+    try varResolver.resolve(program);
+    const typechecker = try Typechecker.init(allocator);
+    const hasTypeError = try typechecker.check(program);
+    const externVarAttrs = typechecker.symbolTable.get("k").?.attributes;
+    if (hasTypeError) |typeError| {
+        std.log.warn("\x1b[31mError\x1b[0m: {s}\n", .{typeError});
+        std.debug.assert(false);
+    }
+    std.debug.assert(externVarAttrs.StaticAttr.global);
+    std.debug.assert(std.mem.eql(u8, @tagName(externVarAttrs.StaticAttr.init), "NoInit"));
+}
+test "static and global declarations" {
+    const lexer = @import("./lexer.zig");
+    const parser = @import("./parser.zig");
+    const ast = @import("./AST.zig");
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const programStr =
+        \\ static int k = 5;
+        \\ int k = 7;
+        \\ int main(){
+        \\     return k;
+        \\ }
+    ;
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    const program = try p.parseProgram();
+    const varResolver = try ast.VarResolver.init(allocator);
+    try varResolver.resolve(program);
+    const typechecker = try Typechecker.init(allocator);
+    const hasTypeError = try typechecker.check(program);
+    var hasErr = false;
+    if (hasTypeError) |typeError| {
+        std.log.warn("\x1b[31mError\x1b[0m: {s}\n", .{typeError});
+        hasErr = true;
+    }
+    std.debug.assert(hasErr);
 }

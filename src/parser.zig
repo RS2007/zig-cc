@@ -106,7 +106,6 @@ pub const Parser = struct {
             }
         }
         std.debug.assert((try self.l.nextToken(self.allocator)).type == lexer.TokenType.RPAREN);
-        std.debug.assert((try self.l.nextToken(self.allocator)).type == lexer.TokenType.LBRACE);
         const blockItems = std.ArrayList(*AST.BlockItem).init(self.allocator);
         var peekToken = try self.l.peekToken(self.allocator);
         const functionDecl = try self.allocator.create(AST.ExternalDecl);
@@ -121,6 +120,11 @@ pub const Parser = struct {
         functionDecl.* = .{
             .FunctionDecl = functionDef,
         };
+        if ((try self.l.peekToken(self.allocator)).?.type == lexer.TokenType.SEMICOLON) {
+            _ = try self.l.nextToken(self.allocator);
+            return functionDecl;
+        }
+        std.debug.assert((try self.l.nextToken(self.allocator)).type == lexer.TokenType.LBRACE);
         while (peekToken != null and peekToken.?.type != lexer.TokenType.RBRACE) {
             const blockItem = try self.parseBlockItem();
             try functionDef.blockItems.append(blockItem);
