@@ -195,6 +195,12 @@ pub fn typecheckExternalDecl(self: *Typechecker, externalDecl: *AST.ExternalDecl
                 },
             };
             try self.symbolTable.put(functionDecl.name, fnSym);
+            for (functionDecl.blockItems.items) |blk| {
+                const hasTypeErr = try typecheckBlkItem(self, blk);
+                if (hasTypeErr) |typeErr| {
+                    return typeErr;
+                }
+            }
         },
         .VarDeclaration => |varDecl| {
             // INFO: Global/File scope variables
@@ -237,7 +243,7 @@ pub fn typecheckExternalDecl(self: *Typechecker, externalDecl: *AST.ExternalDecl
                 if (varDecl.storageClass == AST.Qualifier.EXTERN) {
                     const typeErrorStruct = try self.allocator.create(TypeErrorStruct);
                     typeErrorStruct.* = .{
-                        .errorType = TypeError.ExternVarDeclared,
+                        .errorType = (TypeError.ExternVarDeclared),
                         .errorPayload = (try std.fmt.allocPrint(
                             self.allocator,
                             "Extern declarations cant have an assignment: {s}\n",
@@ -354,7 +360,7 @@ fn typecheckBlkItem(self: *Typechecker, blkItem: *AST.BlockItem) TypeCheckerErro
 
             const sym = try self.allocator.create(Symbol);
             std.debug.assert(decl.type == AST.Type.Integer);
-            sym.* = .Integer;
+            sym.typeInfo = .Integer;
             try self.symbolTable.put(decl.name, sym);
         },
         .Statement => |stmt| {
@@ -486,6 +492,28 @@ fn typecheckStmt(self: *Typechecker, stmt: *AST.Statement) TypeCheckerError!?*Ty
 fn typecheckForInit(self: *Typechecker, forInit: *AST.ForInit) TypeCheckerError!?*TypeErrorStruct {
     switch (forInit.*) {
         .Declaration => |decl| {
+            // INFO: cases when var is extern, static or local
+            // Only locals are localAttrs
+            //
+            // if var is static: static variables live beyond their scope, since
+            // they are in bss. There is an initialization, if the var is
+            // already seen in a call, they are not reinitialized.
+            // Non static initializers are not allowed for static local
+            // variables
+            // An example program:
+            // void recurse(int n){
+            //    static int k = 0;
+            //    printf("%d\n",n);
+            //    if (k < n){
+            //            recurse(n-1);
+            //    }}
+            //  int main() {
+            //        recurse(10);}
+            // Output: prints from 10 to 0
+            //
+            // if var is extern: look if there is a declaration outside
+
+            // Typecheck the expression
             if (decl.expression) |declExpression| {
                 _ = typecheckExpr(self, declExpression) catch |err| {
                     const typeErrorStruct = try self.allocator.create(TypeErrorStruct);
@@ -495,9 +523,84 @@ fn typecheckForInit(self: *Typechecker, forInit: *AST.ForInit) TypeCheckerError!
                     };
                     return typeErrorStruct;
                 };
-                std.debug.assert(decl.type == AST.Type.Integer);
+            }
+
+            // handle qualifiers
+            if (decl.storageClass) |storageClass| {
+                switch (storageClass) {
+                    .EXTERN => {
+                        if (decl.expression) |_| {
+                            const typeErrorStruct = try self.allocator.create(TypeErrorStruct);
+                            typeErrorStruct.* = .{ .errorType = TypeError.ExternVarDeclared, .errorPayload = (try std.fmt.allocPrint(
+                                self.allocator,
+                                "Extern variable {s} defined\n",
+                                .{decl.name},
+                            )) };
+                            return typeErrorStruct;
+                        }
+                        if (self.symbolTable.get(decl.name)) |olderSym| {
+                            if (std.mem.eql(u8, @tagName(olderSym.typeInfo), "Function")) {
+                                const typeErrorStruct = try self.allocator.create(TypeErrorStruct);
+                                typeErrorStruct.* = .{
+                                    .errorType = TypeError.FnRedeclaredAsVar,
+                                    .errorPayload = (try std.fmt.allocPrint(
+                                        self.allocator,
+                                        "Function {s} redefined as a variable\n",
+                                        .{decl.name},
+                                    )),
+                                };
+                            }
+                        } else {
+                            const sym = try self.allocator.create(Symbol);
+                            sym.* = .{ .typeInfo = .Integer, .attributes = .{ .StaticAttr = .{
+                                .global = true,
+                                .init = .NoInit,
+                            } } };
+                            try self.symbolTable.put(decl.name, sym);
+                        }
+                    },
+                    .STATIC => {
+                        if (decl.expression) |expr| {
+                            if (!std.mem.eql(u8, @tagName(expr.*), "Integer")) {
+                                const typeErrorStruct = try self.allocator.create(TypeErrorStruct);
+                                typeErrorStruct.* = .{
+                                    .errorType = TypeError.GlobalDeclarationNotInteger,
+                                    .errorPayload = (try std.fmt.allocPrint(
+                                        self.allocator,
+                                        "Static variable {s} must have a constant initializer\n",
+                                        .{decl.name},
+                                    )),
+                                };
+                                return typeErrorStruct;
+                            }
+                            const sym = try self.allocator.create(Symbol);
+                            sym.* = .{
+                                .typeInfo = .Integer,
+                                .attributes = .{ .StaticAttr = .{
+                                    .init = .{ .Initial = expr.Integer },
+                                    .global = true,
+                                } },
+                            };
+                        } else {
+                            const sym = try self.allocator.create(Symbol);
+                            sym.* = .{
+                                .typeInfo = .Integer,
+                                .attributes = .{ .StaticAttr = .{
+                                    .init = .{ .Initial = 0 },
+                                    .global = false,
+                                } },
+                            };
+                            try self.symbolTable.put(decl.name, sym);
+                        }
+                    },
+                }
+            } else {
+                // No decl
                 const sym = try self.allocator.create(Symbol);
-                sym.* = .Integer;
+                sym.* = .{
+                    .typeInfo = .Integer,
+                    .attributes = .LocalAttr,
+                };
                 try self.symbolTable.put(decl.name, sym);
             }
         },
