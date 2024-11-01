@@ -4,18 +4,6 @@ const parser = @import("./parser.zig");
 const tac = @import("./TAC.zig");
 const semantic = @import("./semantic.zig");
 
-//<program> ::= <function>
-//
-//<function> ::= "int" <identifier> "(" "void" ")" "{" <statement> "}"
-//
-//<statement> ::= "return" <exp> ";"
-//
-//<exp> ::= <int>
-//
-//<identifier> ::= ? An identifier token ?
-//
-//<int> ::= ? A constant token ?
-
 pub const MemoryError = error{
     OutOfMemory,
 };
@@ -140,10 +128,6 @@ pub const Declaration = struct {
             instr.* = tac.Instruction{ .Copy = tac.Copy{ .src = rhs, .dest = lhs } };
             try instructions.append(instr);
         }
-        //const varInst = try allocator.create(tac.Instruction);
-        //const cpInstr = try allocator.create(tac.Instruction);
-        //try instructions.append();
-        //try instructions.append();
     }
 };
 
@@ -901,7 +885,7 @@ pub fn expressionScopeVariableResolve(self: *VarResolver, expression: *Expressio
     switch (expression.*) {
         .Integer => {},
         .Identifier => |identifier| {
-            if (self.varMap.get(identifier)) |resolvedSym| {
+            if (self.lookup(identifier)) |resolvedSym| {
                 expression.Identifier = resolvedSym.newName;
             }
         },
@@ -940,7 +924,7 @@ pub fn blockStatementScopeVariableResolve(self: *VarResolver, blockItem: *BlockI
             try statementScopeVariableResolve(self, statement, currentScope);
         },
         .Declaration => |decl| {
-            if (self.varMap.get(decl.name)) |varResolved| {
+            if (self.lookup(decl.name)) |varResolved| {
                 // INFO: if there is no linkage for the resolved variable
                 // If it is global and the storage class is extern, that would
                 // give an error
@@ -993,7 +977,7 @@ pub fn blockStatementScopeVariableResolve(self: *VarResolver, blockItem: *BlockI
                     .hasLinkage = true,
                     .newName = decl.name,
                 };
-                try self.varMap.put(decl.name, sym);
+                try self.varMap.getLast().put(decl.name, sym);
                 return;
             }
             const sym = try self.allocator.create(VarResolveSymInfo);
@@ -1003,7 +987,7 @@ pub fn blockStatementScopeVariableResolve(self: *VarResolver, blockItem: *BlockI
                 .newName = (try std.fmt.allocPrint(self.allocator, "{s}{d}", .{ decl.name, currentScope })),
             };
 
-            try self.varMap.put(decl.name, sym);
+            try self.varMap.getLast().put(decl.name, sym);
             blockItem.Declaration.name = sym.newName;
             if (decl.expression) |expression| {
                 try expressionScopeVariableResolve(self, expression, currentScope);
@@ -1015,7 +999,10 @@ pub fn statementScopeVariableResolve(self: *VarResolver, statement: *Statement, 
     switch (statement.*) {
         .Compound => |compound| {
             for (compound.items) |blockItemCompound| {
+                var newScope = std.StringHashMap(*VarResolveSymInfo).init(self.allocator);
+                try self.varMap.append(&newScope);
                 try blockStatementScopeVariableResolve(self, blockItemCompound, currentScope + 1);
+                _ = self.varMap.pop();
             }
         },
         .Null, .Label, .Goto => {},
@@ -1060,18 +1047,36 @@ pub const VarResolveSymInfo = struct {
     newName: []u8,
     hasLinkage: bool,
 };
+
 pub const VarResolver = struct {
-    varMap: std.StringHashMap(*VarResolveSymInfo),
+    varMap: std.ArrayList(*std.StringHashMap(*VarResolveSymInfo)),
     allocator: std.mem.Allocator,
+    const Self = @This();
     pub fn init(allocator: std.mem.Allocator) MemoryError!*VarResolver {
         const self = try allocator.create(VarResolver);
         self.* = .{
-            .varMap = std.StringHashMap(*VarResolveSymInfo).init(allocator),
+            .varMap = std.ArrayList(*std.StringHashMap(*VarResolveSymInfo)).init(allocator),
             .allocator = allocator,
         };
         return self;
     }
+
+    pub fn lookup(self: *Self, name: []u8) ?*VarResolveSymInfo {
+        var i: usize = @intCast(self.varMap.items.len);
+        if (i == 0) return null;
+        i -= 1;
+        while (true) {
+            if (self.varMap.items[i].get(name)) |resolved| {
+                return resolved;
+            }
+            if (i == 0) break;
+            i -= 1;
+        }
+        return null;
+    }
     pub fn resolve(self: *VarResolver, program: *Program) VarResolveError!void {
+        var globalScope = std.StringHashMap(*VarResolveSymInfo).init(self.allocator);
+        try self.varMap.append(&globalScope);
         for (program.externalDecls.items) |externalDecl| {
             switch (externalDecl.*) {
                 .FunctionDecl => |functionDecl| {
@@ -1086,7 +1091,7 @@ pub const VarResolver = struct {
                         .newName = decl.name,
                         .hasLinkage = true,
                     };
-                    try self.varMap.put(decl.name, varSymInfo);
+                    try self.varMap.getLast().put(decl.name, varSymInfo);
                 },
             }
         }

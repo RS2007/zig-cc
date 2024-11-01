@@ -4,11 +4,12 @@ const lexer = @import("./lexer.zig");
 const parser = @import("./parser.zig");
 const semantic = @import("./semantic.zig");
 
-// TODO: This test fails check it later
 test "static storage codegenaration" {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     const allocator = arena.allocator();
     defer arena.deinit();
+    const cFileWriter = (try std.fs.cwd().createFile("./cFiles/C/staticStorage.c", .{})).writer();
+    const sFileWriter = (try std.fs.cwd().createFile("./cFiles/S/staticStorage.s", .{})).writer();
     const programStr =
         \\ int recurse(int n){
         \\         static int accum = 0;
@@ -38,5 +39,6 @@ test "static storage codegenaration" {
     }
     try ast.loopLabelPass(program, allocator);
     const asmProgram = try (try program.genTAC(typechecker.symbolTable, allocator)).codegen(allocator);
-    try asmProgram.stringify(std.io.getStdErr().writer(), allocator);
+    try asmProgram.stringify(sFileWriter, allocator);
+    try cFileWriter.writeAll(programStr);
 }

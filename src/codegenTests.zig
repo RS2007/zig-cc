@@ -415,6 +415,8 @@ test "multiple functions and call" {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     const allocator = arena.allocator();
     defer arena.deinit();
+    const cFileWriter = (try std.fs.cwd().createFile("./cFiles/C/multipleFuncs.c", .{})).writer();
+    const sFileWriter = (try std.fs.cwd().createFile("./cFiles/S/multipleFuncs.s", .{})).writer();
     const programStr =
         \\ int add(int x, int y, int z) { return x+y+z;}
         \\ int main(){
@@ -434,15 +436,16 @@ test "multiple functions and call" {
     }
     try ast.loopLabelPass(program, allocator);
     const asmProgram = try (try program.genTAC(typechecker.symbolTable, allocator)).codegen(allocator);
-    const cfile = try std.fs.cwd().createFile("./cFiles/sup.s", .{});
-    try asmProgram.stringify(std.io.getStdErr().writer(), allocator);
-    try asmProgram.stringify(cfile.writer(), allocator);
+    try asmProgram.stringify(sFileWriter, allocator);
+    try cFileWriter.writeAll(programStr);
 }
 
 test "global variable codegeneration" {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     const allocator = arena.allocator();
     defer arena.deinit();
+    const cFileWriter = (try std.fs.cwd().createFile("./cFiles/C/globalVar.c", .{})).writer();
+    const sFileWriter = (try std.fs.cwd().createFile("./cFiles/S/globalVar.s", .{})).writer();
     const programStr =
         \\ int four = 4; 
         \\ int main(){
@@ -462,15 +465,16 @@ test "global variable codegeneration" {
     }
     try ast.loopLabelPass(program, allocator);
     const asmProgram = try (try program.genTAC(typechecker.symbolTable, allocator)).codegen(allocator);
-    const cfile = try std.fs.cwd().createFile("./cFiles/global1.s", .{});
-    try asmProgram.stringify(std.io.getStdErr().writer(), allocator);
-    try asmProgram.stringify(cfile.writer(), allocator);
+    try asmProgram.stringify(sFileWriter, allocator);
+    try cFileWriter.writeAll(programStr);
 }
 
 test "global variable codegenaration with multiple funcs" {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     const allocator = arena.allocator();
     defer arena.deinit();
+    const cFileWriter = (try std.fs.cwd().createFile("./cFiles/C/globalVarMulFunc.c", .{})).writer();
+    const sFileWriter = (try std.fs.cwd().createFile("./cFiles/S/globalVarMulFunc.s", .{})).writer();
     const programStr =
         \\ int four = 4; 
         \\ int add(int x, int y){ return x+y; }
@@ -491,7 +495,6 @@ test "global variable codegenaration with multiple funcs" {
     }
     try ast.loopLabelPass(program, allocator);
     const asmProgram = try (try program.genTAC(typechecker.symbolTable, allocator)).codegen(allocator);
-    const cfile = try std.fs.cwd().createFile("./cFiles/global1.s", .{});
-    try asmProgram.stringify(std.io.getStdErr().writer(), allocator);
-    try asmProgram.stringify(cfile.writer(), allocator);
+    try asmProgram.stringify(sFileWriter, allocator);
+    try cFileWriter.writeAll(programStr);
 }
