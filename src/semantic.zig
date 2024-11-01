@@ -195,6 +195,15 @@ pub fn typecheckExternalDecl(self: *Typechecker, externalDecl: *AST.ExternalDecl
                 },
             };
             try self.symbolTable.put(functionDecl.name, fnSym);
+
+            for (functionDecl.args.items) |arg| {
+                const argSym = try self.allocator.create(Symbol);
+                argSym.* = .{
+                    .typeInfo = .Integer,
+                    .attributes = .LocalAttr,
+                };
+                try self.symbolTable.put(arg.NonVoidArg.identifier, argSym);
+            }
             for (functionDecl.blockItems.items) |blk| {
                 const hasTypeErr = try typecheckBlkItem(self, blk);
                 if (hasTypeErr) |typeErr| {
@@ -798,6 +807,10 @@ pub fn varResolutionPass(allocator: std.mem.Allocator, node: *AST.Program) Seman
         switch (externalDecl.*) {
             .FunctionDecl => |functionDecl| {
                 const varMap = std.StringHashMap([]u8).init(allocator);
+                for (functionDecl.args.items) |arg| {
+                    std.debug.assert(std.mem.eql(u8, @tagName(arg.NonVoidArg), "NonVoidArg"));
+                    try varMap.put(arg.NonVoidArg.identifier, @constCast(arg.NonVoidArg.identifier));
+                }
                 for (functionDecl.blockItems.items) |blockItem| {
                     try resolveBlockItem(blockItem, @constCast(&varMap), allocator);
                 }

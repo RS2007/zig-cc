@@ -65,7 +65,7 @@ pub const ExternalDecl = union(ExternalDeclType) {
     FunctionDecl: *FunctionDef,
     VarDeclaration: *Declaration,
     const Self = @This();
-    pub fn genTAC(externalDecl: *Self, allocator: std.mem.Allocator) CodegenError!*tac.FunctionDef {
+    pub fn genTAC(externalDecl: *Self, allocator: std.mem.Allocator) CodegenError!?*tac.FunctionDef {
         switch (externalDecl.*) {
             .FunctionDecl => |functionDecl| {
                 const tacFunctionDef = try allocator.create(tac.FunctionDef);
@@ -75,6 +75,8 @@ pub const ExternalDecl = union(ExternalDeclType) {
                     .name = functionDecl.name,
                     .args = std.ArrayList([]u8).init(allocator),
                     .instructions = instructions,
+                    //TODO: Change this later
+                    .global = true,
                 };
                 for (functionDecl.args.items) |arg| {
                     try tacFunctionDef.args.append(arg.NonVoidArg.identifier);
@@ -82,7 +84,7 @@ pub const ExternalDecl = union(ExternalDeclType) {
                 return tacFunctionDef;
             },
             .VarDeclaration => {
-                unreachable();
+                return null;
             },
         }
     }
@@ -169,16 +171,71 @@ pub const ExpressionType = enum {
     FunctionCall,
 };
 
+fn convertSymToTAC(tacProgram: *tac.Program, symbolTable: std.StringHashMap(*semantic.Symbol)) MemoryError!void {
+    var symbolTableIter = symbolTable.iterator();
+    while (symbolTableIter.next()) |iterator| {
+        const key = iterator.key_ptr.*;
+        const value = iterator.value_ptr.*;
+        const tacTopLevelDecl = try symbolTable.allocator.create(tac.TopLevel);
+        switch (value.*.attributes) {
+            .StaticAttr => |staticAttr| {
+                switch (staticAttr.init) {
+                    .Initial => |initial| {
+                        const staticVar = try symbolTable.allocator.create(tac.StaticVar);
+                        staticVar.* = .{
+                            .name = @constCast(key),
+                            .global = staticAttr.global,
+                            .init = initial,
+                        };
+                        tacTopLevelDecl.* = .{
+                            .StaticVar = staticVar,
+                        };
+                        try tacProgram.topLevelDecls.append(tacTopLevelDecl);
+                    },
+                    .NoInit => {},
+                    .Tentative => {
+                        const staticVar = try symbolTable.allocator.create(tac.StaticVar);
+                        staticVar.* = .{
+                            .name = @constCast(key),
+                            .global = staticAttr.global,
+                            .init = 0,
+                        };
+                        tacTopLevelDecl.* = .{
+                            .StaticVar = staticVar,
+                        };
+                        try tacProgram.topLevelDecls.append(tacTopLevelDecl);
+                    },
+                }
+            },
+            else => {},
+        }
+    }
+}
+
 pub const Program = struct {
     externalDecls: std.ArrayList(*ExternalDecl),
 
-    pub fn genTAC(program: *Program, allocator: std.mem.Allocator) CodegenError!*tac.Program {
+    pub fn genTAC(
+        program: *Program,
+        symbolTable: std.StringHashMap(*semantic.Symbol),
+        allocator: std.mem.Allocator,
+    ) CodegenError!*tac.Program {
         const tacProgram = try allocator.create(tac.Program);
-        tacProgram.function = std.ArrayList(*tac.FunctionDef).init(allocator);
+        tacProgram.* = .{
+            .topLevelDecls = std.ArrayList(*tac.TopLevel).init(allocator),
+            .symbolTable = symbolTable,
+        };
+        try convertSymToTAC(tacProgram, symbolTable);
         for (program.externalDecls.items) |externalDecl| {
             const functionDef = try externalDecl.genTAC(allocator);
-            // TODO: Not handling global variables
-            try tacProgram.function.append(functionDef);
+            if (functionDef) |resolvedFnDef| {
+                // TODO: Not handling global variables
+                const tacTopLevelDecl = try allocator.create(tac.TopLevel);
+                tacTopLevelDecl.* = .{
+                    .Function = resolvedFnDef,
+                };
+                try tacProgram.topLevelDecls.append(tacTopLevelDecl);
+            }
         }
         return tacProgram;
     }
@@ -1077,9 +1134,7 @@ pub fn blockItemLoopLabelPass(blockItem: *BlockItem, loopId: u32, allocator: std
 pub fn loopLabelPass(program: *Program, allocator: std.mem.Allocator) MemoryError!void {
     for (program.externalDecls.items) |externalDecl| {
         switch (externalDecl.*) {
-            .VarDeclaration => {
-                unreachable();
-            },
+            .VarDeclaration => {},
             .FunctionDecl => |functionDecl| {
                 for (functionDecl.blockItems.items) |blockItem| {
                     // TODO: Fine for testing basic functionality, but counter to be a pointer

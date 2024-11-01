@@ -3,43 +3,81 @@ const ast = @import("./AST.zig");
 const assembly = @import("./Assembly.zig");
 const lexer = @import("./lexer.zig");
 const parser = @import("./parser.zig");
+const semantic = @import("./semantic.zig");
 
 pub const FunctionDef = struct {
     name: []u8,
+    global: bool,
     args: std.ArrayList([]u8),
     //TODO: should I be putting type information here? We only have ints for now, so names are fine (FOR NOW)
     instructions: std.ArrayList(*Instruction),
 };
 
+pub const StaticVar = struct {
+    name: []u8,
+    global: bool,
+    init: u32,
+};
+
 pub const Program = struct {
-    function: std.ArrayList(*FunctionDef),
+    topLevelDecls: std.ArrayList(*TopLevel),
+    symbolTable: std.StringHashMap(*semantic.Symbol),
     pub fn codegen(self: *Program, allocator: std.mem.Allocator) !*assembly.Program {
-        var functions = std.ArrayList(*assembly.Function).init(allocator);
-        for (self.function.items) |item| {
-            const func = try allocator.create(assembly.Function);
-            func.* = .{
-                .name = item.name,
-                .instructions = std.ArrayList(*assembly.Instruction).init(allocator),
-                .args = item.args,
-            };
-            const registers = [_]assembly.Reg{ assembly.Reg.EDI, assembly.Reg.ESI, assembly.Reg.EDX, assembly.Reg.ECX, assembly.Reg.R8, assembly.Reg.R9 };
-            for (item.args.items, 0..) |arg, i| {
-                const movInstructoin = try allocator.create(assembly.Instruction);
-                movInstructoin.* = assembly.Instruction{ .Mov = assembly.MovInst{
-                    .src = assembly.Operand{ .Reg = registers[i] },
-                    .dest = assembly.Operand{ .Pseudo = arg },
-                } };
-                try func.instructions.append(movInstructoin);
-            }
-            for (item.instructions.items) |instruction| {
-                try instruction.codegen(&func.instructions, allocator);
-            }
-            try functions.append(func);
-        }
+        const topLevelDecls = std.ArrayList(*assembly.TopLevelDecl).init(allocator);
         const asmProgram = try allocator.create(assembly.Program);
-        asmProgram.* = assembly.Program{ .functions = functions };
+        asmProgram.* = assembly.Program{ .topLevelDecls = topLevelDecls };
+        for (self.topLevelDecls.items) |topLevelDecl| {
+            const asmTopLevelDecl = try allocator.create(assembly.TopLevelDecl);
+            switch (topLevelDecl.*) {
+                .StaticVar => |statItem| {
+                    const staticVar = try allocator.create(assembly.StaticVar);
+                    staticVar.* = .{
+                        .name = statItem.name,
+                        .global = statItem.global,
+                        .init = statItem.init,
+                    };
+                    asmTopLevelDecl.* = .{
+                        .StaticVar = staticVar,
+                    };
+                    try asmProgram.topLevelDecls.append(asmTopLevelDecl);
+                },
+                .Function => |fnItem| {
+                    const func = try allocator.create(assembly.Function);
+                    func.* = .{
+                        .name = fnItem.name,
+                        .instructions = std.ArrayList(*assembly.Instruction).init(allocator),
+                        .args = fnItem.args,
+                    };
+                    const registers = [_]assembly.Reg{ assembly.Reg.EDI, assembly.Reg.ESI, assembly.Reg.EDX, assembly.Reg.ECX, assembly.Reg.R8, assembly.Reg.R9 };
+                    for (fnItem.args.items, 0..) |arg, i| {
+                        const movInstructoin = try allocator.create(assembly.Instruction);
+                        movInstructoin.* = assembly.Instruction{ .Mov = assembly.MovInst{
+                            .src = assembly.Operand{ .Reg = registers[i] },
+                            .dest = assembly.Operand{ .Pseudo = arg },
+                        } };
+                        try func.instructions.append(movInstructoin);
+                    }
+                    for (fnItem.instructions.items) |instruction| {
+                        try instruction.codegen(self.symbolTable, &func.instructions, allocator);
+                    }
+                    asmTopLevelDecl.* = .{
+                        .Function = func,
+                    };
+                    try asmProgram.topLevelDecls.append(asmTopLevelDecl);
+                },
+            }
+        }
         return asmProgram;
     }
+};
+
+pub const TopLevelType = enum {
+    Function,
+    StaticVar,
+};
+pub const TopLevel = union(TopLevelType) {
+    Function: *FunctionDef,
+    StaticVar: *StaticVar,
 };
 
 pub const InstructionType = enum {
@@ -133,10 +171,10 @@ pub const Instruction = union(InstructionType) {
     JumpIfNotZero: Jmp,
     Label: []u8,
     FunctionCall: FunctionCall,
-    pub fn codegen(instruction: *Instruction, instructions: *std.ArrayList(*assembly.Instruction), allocator: std.mem.Allocator) ast.CodegenError!void {
+    pub fn codegen(instruction: *Instruction, symbolTable: std.StringHashMap(*semantic.Symbol), instructions: *std.ArrayList(*assembly.Instruction), allocator: std.mem.Allocator) ast.CodegenError!void {
         switch (instruction.*) {
             .Return => |ret| {
-                const val = try ret.val.codegen(allocator);
+                const val = try ret.val.codegen(symbolTable, allocator);
                 const movInst = try allocator.create(assembly.Instruction);
                 movInst.* = assembly.Instruction{ .Mov = assembly.MovInst{
                     .src = val,
@@ -148,8 +186,8 @@ pub const Instruction = union(InstructionType) {
                 try instructions.append(retInst);
             },
             .Unary => |unary| {
-                const dest = try unary.dest.codegen(allocator);
-                const src = try unary.src.codegen(allocator);
+                const dest = try unary.dest.codegen(symbolTable, allocator);
+                const src = try unary.src.codegen(symbolTable, allocator);
                 const movInst = try allocator.create(assembly.Instruction);
                 const unaryInst = try allocator.create(assembly.Instruction);
                 movInst.* = assembly.Instruction{
@@ -180,9 +218,9 @@ pub const Instruction = union(InstructionType) {
                 try instructions.append(unaryInst);
             },
             .Binary => |binary| {
-                const storeDest = try binary.dest.codegen(allocator);
-                const left = try binary.left.codegen(allocator);
-                const right = try binary.right.codegen(allocator);
+                const storeDest = try binary.dest.codegen(symbolTable, allocator);
+                const left = try binary.left.codegen(symbolTable, allocator);
+                const right = try binary.right.codegen(symbolTable, allocator);
                 switch (binary.op) {
                     .ADD, .SUBTRACT, .MULTIPLY => {
                         const movLeftToDest = try allocator.create(assembly.Instruction);
@@ -277,8 +315,8 @@ pub const Instruction = union(InstructionType) {
             },
             .Copy => |cp| {
                 const cpInstr = try allocator.create(assembly.Instruction);
-                const src = try cp.src.codegen(allocator);
-                const dest = try cp.dest.codegen(allocator);
+                const src = try cp.src.codegen(symbolTable, allocator);
+                const dest = try cp.dest.codegen(symbolTable, allocator);
                 cpInstr.* = assembly.Instruction{ .Mov = assembly.MovInst{
                     .src = src,
                     .dest = dest,
@@ -295,7 +333,7 @@ pub const Instruction = union(InstructionType) {
             .JumpIfZero => |jmp| {
                 const movToTemp = try allocator.create(assembly.Instruction);
                 const checkZero = try allocator.create(assembly.Instruction);
-                const val = try jmp.condition.codegen(allocator);
+                const val = try jmp.condition.codegen(symbolTable, allocator);
                 movToTemp.* = assembly.Instruction{ .Mov = assembly.MovInst{
                     .src = val,
                     .dest = assembly.Operand{ .Reg = assembly.Reg.R10 },
@@ -318,7 +356,7 @@ pub const Instruction = union(InstructionType) {
             .JumpIfNotZero => |jmp| {
                 const movToTemp = try allocator.create(assembly.Instruction);
                 const checkZero = try allocator.create(assembly.Instruction);
-                const val = try jmp.condition.codegen(allocator);
+                const val = try jmp.condition.codegen(symbolTable, allocator);
                 movToTemp.* = assembly.Instruction{ .Mov = assembly.MovInst{
                     .src = val,
                     .dest = assembly.Operand{ .Reg = assembly.Reg.R10 },
@@ -350,7 +388,7 @@ pub const Instruction = union(InstructionType) {
                 if (fnCall.args.items.len < 6) {
                     for (fnCall.args.items, 0..) |arg, i| {
                         const movArgToReg = try allocator.create(assembly.Instruction);
-                        const assemblyArg = try arg.codegen(allocator);
+                        const assemblyArg = try arg.codegen(symbolTable, allocator);
                         movArgToReg.* = assembly.Instruction{
                             .Mov = assembly.MovInst{
                                 .src = assemblyArg,
@@ -367,7 +405,7 @@ pub const Instruction = union(InstructionType) {
                     };
                     try instructions.append(call);
                     const movReturnToReg = try allocator.create(assembly.Instruction);
-                    const asmDest = try fnCall.dest.codegen(allocator);
+                    const asmDest = try fnCall.dest.codegen(symbolTable, allocator);
                     movReturnToReg.* = assembly.Instruction{
                         .Mov = assembly.MovInst{
                             .dest = asmDest,
@@ -393,7 +431,7 @@ pub const ValType = enum {
 pub const Val = union(ValType) {
     Constant: u32,
     Variable: []u8,
-    pub fn codegen(val: *Val, allocator: std.mem.Allocator) ast.CodegenError!assembly.Operand {
+    pub fn codegen(val: *Val, symbolTable: std.StringHashMap(*semantic.Symbol), allocator: std.mem.Allocator) ast.CodegenError!assembly.Operand {
         switch (val.*) {
             .Constant => |constant| {
                 const operand = try allocator.create(assembly.Operand);
@@ -404,6 +442,21 @@ pub const Val = union(ValType) {
             },
             .Variable => |variable| {
                 const operand = try allocator.create(assembly.Operand);
+                if (symbolTable.get(variable)) |sym| {
+                    switch (sym.attributes) {
+                        .StaticAttr => {
+                            operand.* = assembly.Operand{
+                                .Data = variable,
+                            };
+                        },
+                        else => {
+                            operand.* = assembly.Operand{
+                                .Pseudo = variable,
+                            };
+                        },
+                    }
+                    return operand.*;
+                }
                 operand.* = assembly.Operand{
                     .Pseudo = variable,
                 };
@@ -670,9 +723,17 @@ test "test assembly generation for for loops" {
     const program = try p.parseProgram();
     const varResolver = try ast.VarResolver.init(allocator);
     try varResolver.resolve(program);
+    const typechecker = try semantic.Typechecker.init(allocator);
+    const hasTypeErr = try typechecker.check(program);
+    if (hasTypeErr) |typeError| {
+        std.log.warn("\x1b[33mError\x1b[0m: {s}\n", .{typeError});
+        std.debug.assert(false);
+    }
     try ast.loopLabelPass(program, allocator);
-    const asmProgram = try (try program.genTAC(allocator)).codegen(allocator);
+    const asmProgram = try (try program.genTAC(typechecker.symbolTable, allocator)).codegen(allocator);
+    const sFile = try std.fs.cwd().createFile("./cFiles/sup2.s", .{});
     try asmProgram.stringify(std.io.getStdErr().writer(), allocator);
+    try asmProgram.stringify(sFile.writer(), allocator);
 }
 //
 test "multiple functions and call" {
@@ -690,20 +751,72 @@ test "multiple functions and call" {
     const program = try p.parseProgram();
     const varResolver = try ast.VarResolver.init(allocator);
     try varResolver.resolve(program);
+    const typechecker = try semantic.Typechecker.init(allocator);
+    const hasTypeErr = try typechecker.check(program);
+    if (hasTypeErr) |typeError| {
+        std.log.warn("\x1b[33mError\x1b[0m: {s}\n", .{typeError});
+        std.debug.assert(false);
+    }
     try ast.loopLabelPass(program, allocator);
-    const asmProgram = try (try program.genTAC(allocator)).codegen(allocator);
+    const asmProgram = try (try program.genTAC(typechecker.symbolTable, allocator)).codegen(allocator);
+    const cfile = try std.fs.cwd().createFile("./cFiles/sup.s", .{});
     try asmProgram.stringify(std.io.getStdErr().writer(), allocator);
+    try asmProgram.stringify(cfile.writer(), allocator);
+}
 
-    //try assembly.replacePseudoRegs(&asmInstructions, allocator);
-    //const fixedAsmInstructions = try assembly.fixupInstructions(&asmInstructions, allocator);
-    //std.log.warn("POST PSEUDO REPLACEMENT AND STACK TO STACK MOVES", .{});
-    //var mem: [2048]u8 = std.mem.zeroes([2048]u8);
-    //var buf = @as([]u8, &mem);
-    //const header = try std.fmt.bufPrint(buf, ".globl main\nmain:\npush %rbp", .{});
-    //buf = buf[header.len..];
-    //for (fixedAsmInstructions.items) |asmInst| {
-    //    const printedSlice = try std.fmt.bufPrint(buf, "\n{s}", .{try asmInst.stringify(allocator)});
-    //    buf = buf[printedSlice.len..];
-    //}
-    //std.log.warn("\n\x1b[33m{s}\x1b[0m", .{mem});
+test "global variable codegeneration" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const programStr =
+        \\ int four = 4; 
+        \\ int main(){
+        \\     return four; 
+        \\ }
+    ;
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    const program = try p.parseProgram();
+    const varResolver = try ast.VarResolver.init(allocator);
+    try varResolver.resolve(program);
+    const typechecker = try semantic.Typechecker.init(allocator);
+    const hasTypeErr = try typechecker.check(program);
+    if (hasTypeErr) |typeError| {
+        std.log.warn("\x1b[33mError\x1b[0m: {s}\n", .{typeError});
+        std.debug.assert(false);
+    }
+    try ast.loopLabelPass(program, allocator);
+    const asmProgram = try (try program.genTAC(typechecker.symbolTable, allocator)).codegen(allocator);
+    const cfile = try std.fs.cwd().createFile("./cFiles/global1.s", .{});
+    try asmProgram.stringify(std.io.getStdErr().writer(), allocator);
+    try asmProgram.stringify(cfile.writer(), allocator);
+}
+
+test "global variable codegenaration with multiple funcs" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const programStr =
+        \\ int four = 4; 
+        \\ int add(int x, int y){ return x+y; }
+        \\ int main(){
+        \\     return add(four, 5); 
+        \\ }
+    ;
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    const program = try p.parseProgram();
+    const varResolver = try ast.VarResolver.init(allocator);
+    try varResolver.resolve(program);
+    const typechecker = try semantic.Typechecker.init(allocator);
+    const hasTypeErr = try typechecker.check(program);
+    if (hasTypeErr) |typeError| {
+        std.log.warn("\x1b[33mError\x1b[0m: {s}\n", .{typeError});
+        std.debug.assert(false);
+    }
+    try ast.loopLabelPass(program, allocator);
+    const asmProgram = try (try program.genTAC(typechecker.symbolTable, allocator)).codegen(allocator);
+    const cfile = try std.fs.cwd().createFile("./cFiles/global1.s", .{});
+    try asmProgram.stringify(std.io.getStdErr().writer(), allocator);
+    try asmProgram.stringify(cfile.writer(), allocator);
 }

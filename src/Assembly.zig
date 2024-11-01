@@ -7,7 +7,7 @@ inline fn abs(src: i32) u32 {
 }
 
 pub const Program = struct {
-    functions: std.ArrayList(*Function),
+    topLevelDecls: std.ArrayList(*TopLevelDecl),
     const Self = @This();
     pub fn stringify(self: *Self, writer: std.fs.File.Writer, allocator: std.mem.Allocator) !void {
         try writer.writeAll(
@@ -16,16 +16,34 @@ pub const Program = struct {
             \\
         );
         try writer.writeAll(".globl main\n");
-        for (self.functions.items) |function| {
-            try replacePseudoRegs(function, allocator);
-            const fixedAsmInstructions = try fixupInstructions(&function.instructions, allocator);
-            function.instructions = fixedAsmInstructions;
-            //TODO: Probably return the string and not print it here
-            const fnString = try function.stringify(allocator);
-            try writer.writeAll(fnString);
-            try writer.writeAll("\n");
+        for (self.topLevelDecls.items) |topLevelDecl| {
+            switch (topLevelDecl.*) {
+                .Function => |function| {
+                    try replacePseudoRegs(function, allocator);
+                    const fixedAsmInstructions = try fixupInstructions(&function.instructions, allocator);
+                    function.instructions = fixedAsmInstructions;
+                    const fnString = try function.stringify(allocator);
+                    try writer.writeAll(fnString);
+                    try writer.writeAll("\n");
+                },
+                .StaticVar => |staticVar| {
+                    const staticVarString = try staticVar.stringify(allocator);
+                    try writer.writeAll(staticVarString);
+                    try writer.writeAll("\n");
+                },
+            }
         }
     }
+};
+
+pub const TopLevelDeclType = enum {
+    Function,
+    StaticVar,
+};
+
+pub const TopLevelDecl = union(TopLevelDeclType) {
+    Function: *Function,
+    StaticVar: *StaticVar,
 };
 
 pub const Function = struct {
@@ -34,20 +52,61 @@ pub const Function = struct {
     instructions: std.ArrayList(*Instruction),
     const Self = @This();
     pub fn stringify(self: *Self, allocator: std.mem.Allocator) ast.CodegenError![]u8 {
-        const buf = try allocator.alloc(u8, 2048);
-        var bufPtr = buf;
-        const fnLabelOffset = try std.fmt.bufPrint(bufPtr, "{s}:\n", .{self.name});
-        bufPtr = bufPtr[fnLabelOffset.len..];
-        const fnPrologue = try std.fmt.bufPrint(bufPtr, "push %rbp", .{});
-        bufPtr = bufPtr[fnPrologue.len..];
+        var buf = std.ArrayList(u8).init(allocator);
+        const fnLabelOffset = try std.fmt.allocPrint(allocator, ".section .text\n {s}:\n", .{self.name});
+        try buf.appendSlice(fnLabelOffset);
+
+        const fnPrologue = try std.fmt.allocPrint(allocator, "push %rbp\nmov %rsp, %rbp", .{});
+        try buf.appendSlice(fnPrologue);
 
         //TODO: probably should add the mov instruction here, but omitting for
         //now
         for (self.instructions.items) |asmInst| {
-            const printedSlice = try std.fmt.bufPrint(bufPtr, "\n{s}", .{try asmInst.stringify(allocator)});
-            bufPtr = bufPtr[printedSlice.len..];
+            const printedSlice = try std.fmt.allocPrint(allocator, "\n{s}", .{try asmInst.stringify(allocator)});
+            try buf.appendSlice(printedSlice);
         }
-        return buf;
+        return buf.toOwnedSlice();
+    }
+};
+
+pub const StaticVar = struct {
+    name: []u8,
+    global: bool,
+    init: u32 = 0,
+    const Self = @This();
+    pub fn stringify(self: *Self, allocator: std.mem.Allocator) ![]u8 {
+        // TODO: Hack for now, whenever a glob is encountered, emit the data
+        // section directive
+        // And for functions always start with a .text directive
+        var buf = std.ArrayList(u8).init(allocator);
+        if (self.global) {
+            if (self.init == 0) {
+                const code = try std.fmt.allocPrint(
+                    allocator,
+                    \\ .global {s}
+                    \\ .bss
+                    \\ .align 4
+                    \\ {s}:
+                    \\ .zero 4
+                ,
+                    .{ self.name, self.name },
+                );
+                try buf.appendSlice(code);
+            } else {
+                const code = try std.fmt.allocPrint(
+                    allocator,
+                    \\ .data
+                    \\ .global {s}
+                    \\ .align 4
+                    \\ {s}:
+                    \\ .long {d}
+                ,
+                    .{ self.name, self.name, self.init },
+                );
+                try buf.appendSlice(code);
+            }
+        }
+        return buf.toOwnedSlice();
     }
 };
 
@@ -136,12 +195,13 @@ pub const CondCode = enum {
     }
 };
 
-pub const OperandType = enum { Imm, Reg, Pseudo, Stack };
+pub const OperandType = enum { Imm, Reg, Pseudo, Data, Stack };
 
 pub const Operand = union(OperandType) {
     Imm: u32,
     Reg: Reg,
     Pseudo: []u8,
+    Data: []u8,
     Stack: i32,
     pub fn stringify(operand: *Operand, allocator: std.mem.Allocator) ast.CodegenError![]u8 {
         switch (operand.*) {
@@ -153,6 +213,9 @@ pub const Operand = union(OperandType) {
             },
             .Stack => |stackOff| {
                 return (try std.fmt.allocPrint(allocator, "-0x{x}(%rbp)", .{abs(stackOff)}));
+            },
+            .Data => |data| {
+                return (try std.fmt.allocPrint(allocator, "{s}(%rip)", .{data}));
             },
             else => |op| {
                 std.log.warn("Operand stringify: op={s}\n", .{op.Pseudo});
@@ -265,7 +328,7 @@ pub const Instruction = union(InstructionType) {
                 }
             },
             .AllocateStack => |allocStack| {
-                return (try std.fmt.allocPrint(allocator, "mov %rsp,%rbp\nsub $0x{x},%rsp", .{allocStack}));
+                return (try std.fmt.allocPrint(allocator, "sub $0x{x},%rsp", .{allocStack}));
             },
             .Ret => {
                 return (try std.fmt.allocPrint(allocator, "leaveq\nretq", .{}));
@@ -548,6 +611,9 @@ pub fn replacePseudoRegs(function: *Function, allocator: std.mem.Allocator) ast.
                         );
                         inst.Idiv = Operand{ .Reg = Reg.R10 };
                     },
+                    .Data => {
+                        unreachable;
+                    },
                     .Stack => {
                         unreachable;
                     },
@@ -610,12 +676,14 @@ pub fn replacePseudoRegs(function: *Function, allocator: std.mem.Allocator) ast.
             },
         }
     }
-    const allocateStackInst = try allocator.create(Instruction);
-    allocateStackInst.* = Instruction{
-        .AllocateStack = @as(u32, abs(topOfStack)),
-    };
-    try function.instructions.insert(
-        0,
-        allocateStackInst,
-    );
+    if (topOfStack != 0) {
+        const allocateStackInst = try allocator.create(Instruction);
+        allocateStackInst.* = Instruction{
+            .AllocateStack = @as(u32, abs(topOfStack)),
+        };
+        try function.instructions.insert(
+            0,
+            allocateStackInst,
+        );
+    }
 }

@@ -57,10 +57,10 @@ Return(Unary(Negate,
 - [x] Gotos and labelled
 - [x] Compound statements
 - [x] Loops
-- [ ] Functions
-  - [ ] Typechecker(void lexing + writing a pass)
-  - [ ] Unit tests for error messages (parser + semantic analysis level)
-- [ ] Storage specifiers
+- [x] Functions
+  - [x] Typechecker(void lexing + writing a pass)
+  - [x] Unit tests for error messages (parser + semantic analysis level)
+- [x] Storage specifiers
 - [ ] long
 - [ ] uint
 - [ ] floating point
