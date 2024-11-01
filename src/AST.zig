@@ -885,6 +885,7 @@ pub fn expressionScopeVariableResolve(self: *VarResolver, expression: *Expressio
         .Integer => {},
         .Identifier => |identifier| {
             if (self.lookup(identifier)) |resolvedSym| {
+                std.log.warn("resolved sym: {s} = {any}\n", .{ identifier, resolvedSym });
                 expression.Identifier = resolvedSym.newName;
             }
         },
@@ -982,6 +983,7 @@ pub fn blockStatementScopeVariableResolve(self: *VarResolver, blockItem: *BlockI
                 .newName = (try std.fmt.allocPrint(self.allocator, "{s}{d}", .{ decl.name, currentScope })),
             };
 
+            std.log.warn("Pushing in {s} = {any}\n", .{ decl.name, sym });
             try self.varMap.getLast().put(decl.name, sym);
             blockItem.Declaration.name = sym.newName;
             if (decl.expression) |expression| {
@@ -1062,6 +1064,7 @@ pub const VarResolver = struct {
             if (self.varMap.items[i].get(name)) |resolved| {
                 return resolved;
             }
+            if (i == 0) break; // This is required cause integer overflows
             i -= 1;
         }
         return null;
@@ -1072,12 +1075,12 @@ pub const VarResolver = struct {
         for (program.externalDecls.items) |externalDecl| {
             switch (externalDecl.*) {
                 .FunctionDecl => |functionDecl| {
+                    var scope = std.StringHashMap(*VarResolveSymInfo).init(self.allocator);
+                    try self.varMap.append(&scope);
                     for (functionDecl.blockItems.items) |blockItem| {
-                        var scope = std.StringHashMap(*VarResolveSymInfo).init(self.allocator);
-                        try self.varMap.append(&scope);
                         try blockStatementScopeVariableResolve(self, blockItem, 1);
-                        _ = self.varMap.pop();
                     }
+                    _ = self.varMap.pop();
                 },
                 .VarDeclaration => |decl| {
                     const varSymInfo = try self.allocator.create(VarResolveSymInfo);

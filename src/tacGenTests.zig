@@ -47,7 +47,7 @@ test "test while and do while" {
     const typechecker = try semantic.Typechecker.init(allocator);
     const hasTypeErr = try typechecker.check(program);
     if (hasTypeErr) |typeErr| {
-        std.log.warn("Type error: {any}\n", .{typeErr});
+        std.log.warn("Type error: {s}\n", .{typeErr});
         std.debug.assert(false);
     }
     _ = (try program.genTAC(typechecker.symbolTable, allocator));
