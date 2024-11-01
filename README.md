@@ -10,3 +10,29 @@ zig build
 ./zig-out/bin/zig-cc <c-file-path> # generates assembly to stdout
 ```
 - providing `tacDump` as `argv[2]` for zig-cc will dump the TAC structs into a file.
+
+## Current Progress:
+- Can compile these programs:
+```c
+int recurse(int n){
+        static int accum = 0;
+        static int k = 0;
+        if(k < n){
+                k = k +1;
+                accum = accum + k;
+                recurse(n);
+        }
+        return accum;
+}
+
+int main(){
+    return recurse(10);
+}
+```
+```c
+int four = 4; 
+int add(int x, int y){ return x+y; }
+int main(){
+    return add(four, 5); 
+}
+```
