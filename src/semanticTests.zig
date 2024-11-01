@@ -1,10 +1,90 @@
+const lexer = @import("./lexer.zig");
+const parser = @import("./parser.zig");
+const ast = @import("./AST.zig");
 const std = @import("std");
 const semantic = @import("./semantic.zig");
 
+test "testing variable rename pass" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const programStr = "{ int k = 4; return k2+5;}";
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    const stmt = try p.parseStatement();
+    const varResolver = try ast.VarResolver.init(allocator);
+    try ast.statementScopeVariableResolve(varResolver, stmt, 0);
+}
+
+test "testing variable rename pass error" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const programStr =
+        \\ int k =4; 
+        \\ int main(){
+        \\     int k;
+        \\     return k;
+        \\ }
+    ;
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    const program = try p.parseProgram();
+    const varResolver = try ast.VarResolver.init(allocator);
+    varResolver.resolve(program) catch {
+        std.debug.assert(false);
+    };
+}
+
+test "testing with nested scopes and with an error" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const programStr =
+        \\ int k = 5;
+        \\ 
+        \\ int main(){
+        \\     {
+        \\ 	extern int k;
+        \\ 	int k;
+        \\     }
+        \\     return k;
+        \\ }
+    ;
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    const program = try p.parseProgram();
+    const varResolver = try ast.VarResolver.init(allocator);
+    var hasErr = false;
+    varResolver.resolve(program) catch |err| {
+        hasErr = true;
+        switch (err) {
+            error.ConflicingVarDeclaration => {
+                std.log.warn("\x1b[31mConflicting var declaration\x1b[0m\n", .{});
+            },
+            else => {
+                std.log.warn("\x1b[31mUnknown error\x1b[0m\n", .{});
+            },
+        }
+    };
+    std.debug.assert(hasErr);
+}
+
+test "Declarations" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const programStr = "int main(){ int x = 2; int y = -x; return ~y; }";
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    const program = try p.parseProgram();
+    try semantic.varResolutionPass(allocator, program);
+    //const stdout = std.io.getStdOut().writer();
+    //try prettyPrintAST(Node{ .Program = program }, stdout, 0);
+    std.log.warn("{any}", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[2].Statement.Return.expression.Unary.exp});
+}
+
 test "typechecker-error-fnCall-1" {
-    const lexer = @import("./lexer.zig");
-    const parser = @import("./parser.zig");
-    const ast = @import("./AST.zig");
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     const allocator = arena.allocator();
     defer arena.deinit();
@@ -29,9 +109,6 @@ test "typechecker-error-fnCall-1" {
 }
 
 test "typechecker-error-fn-not found" {
-    const lexer = @import("./lexer.zig");
-    const parser = @import("./parser.zig");
-    const ast = @import("./AST.zig");
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     const allocator = arena.allocator();
     defer arena.deinit();
@@ -57,9 +134,6 @@ test "typechecker-error-fn-not found" {
 
 // INFO: Function declaration semantic errors:
 test "function if declared as static should not be redeclared as non static" {
-    const lexer = @import("./lexer.zig");
-    const parser = @import("./parser.zig");
-    const ast = @import("./AST.zig");
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     const allocator = arena.allocator();
     defer arena.deinit();
@@ -87,9 +161,6 @@ test "function if declared as static should not be redeclared as non static" {
 }
 
 test "function redefinition" {
-    const lexer = @import("./lexer.zig");
-    const parser = @import("./parser.zig");
-    const ast = @import("./AST.zig");
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     const allocator = arena.allocator();
     defer arena.deinit();
@@ -117,9 +188,6 @@ test "function redefinition" {
 }
 
 test "global var having same name as func" {
-    const lexer = @import("./lexer.zig");
-    const parser = @import("./parser.zig");
-    const ast = @import("./AST.zig");
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     const allocator = arena.allocator();
     defer arena.deinit();
@@ -147,9 +215,6 @@ test "global var having same name as func" {
 }
 
 test "global var declaration and definition having different argument numbers" {
-    const lexer = @import("./lexer.zig");
-    const parser = @import("./parser.zig");
-    const ast = @import("./AST.zig");
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     const allocator = arena.allocator();
     defer arena.deinit();
@@ -178,9 +243,6 @@ test "global var declaration and definition having different argument numbers" {
 
 // INFO: Global declaration semantic errors:
 test "global var declaration having non integer expression" {
-    const lexer = @import("./lexer.zig");
-    const parser = @import("./parser.zig");
-    const ast = @import("./AST.zig");
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     const allocator = arena.allocator();
     defer arena.deinit();
@@ -207,9 +269,6 @@ test "global var declaration having non integer expression" {
 }
 
 test "extern shouldnt have an init value" {
-    const lexer = @import("./lexer.zig");
-    const parser = @import("./parser.zig");
-    const ast = @import("./AST.zig");
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     const allocator = arena.allocator();
     defer arena.deinit();
@@ -235,9 +294,6 @@ test "extern shouldnt have an init value" {
 }
 
 test "extern declarations after static" {
-    const lexer = @import("./lexer.zig");
-    const parser = @import("./parser.zig");
-    const ast = @import("./AST.zig");
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     const allocator = arena.allocator();
     defer arena.deinit();
@@ -263,9 +319,6 @@ test "extern declarations after static" {
     std.debug.assert(!hasErr);
 }
 test "static declarations after extern" {
-    const lexer = @import("./lexer.zig");
-    const parser = @import("./parser.zig");
-    const ast = @import("./AST.zig");
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     const allocator = arena.allocator();
     defer arena.deinit();
@@ -291,9 +344,6 @@ test "static declarations after extern" {
     std.debug.assert(hasErr);
 }
 test "just extern" {
-    const lexer = @import("./lexer.zig");
-    const parser = @import("./parser.zig");
-    const ast = @import("./AST.zig");
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     const allocator = arena.allocator();
     defer arena.deinit();
@@ -319,9 +369,6 @@ test "just extern" {
     std.debug.assert(std.mem.eql(u8, @tagName(externVarAttrs.StaticAttr.init), "NoInit"));
 }
 test "static and global declarations" {
-    const lexer = @import("./lexer.zig");
-    const parser = @import("./parser.zig");
-    const ast = @import("./AST.zig");
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     const allocator = arena.allocator();
     defer arena.deinit();
@@ -348,9 +395,6 @@ test "static and global declarations" {
 }
 
 test "extern inheriting init value from older linkage" {
-    const lexer = @import("./lexer.zig");
-    const parser = @import("./parser.zig");
-    const ast = @import("./AST.zig");
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     const allocator = arena.allocator();
     defer arena.deinit();
@@ -378,9 +422,6 @@ test "extern inheriting init value from older linkage" {
 }
 
 test "multiple global inheriting init value from older linkage" {
-    const lexer = @import("./lexer.zig");
-    const parser = @import("./parser.zig");
-    const ast = @import("./AST.zig");
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     const allocator = arena.allocator();
     defer arena.deinit();
@@ -408,9 +449,6 @@ test "multiple global inheriting init value from older linkage" {
 }
 
 test "tentative init values" {
-    const lexer = @import("./lexer.zig");
-    const parser = @import("./parser.zig");
-    const ast = @import("./AST.zig");
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     const allocator = arena.allocator();
     defer arena.deinit();

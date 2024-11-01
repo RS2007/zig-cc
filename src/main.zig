@@ -60,18 +60,25 @@ pub fn main() !void {
         std.os.linux.exit(-1);
     }
     try ast.loopLabelPass(program, allocator); // Labelling loops for break and continue
-    const tacProgram = try program.genTAC(allocator);
+    const tacProgram = try program.genTAC(typeChecker.symbolTable, allocator);
 
     if (shouldDumpTac != null and std.mem.eql(u8, shouldDumpTac.?, "tacDump")) {
         _ = try std.fs.cwd().createFile("tacDump", .{});
         const tacDump = try std.fs.cwd().openFile("tacDump", std.fs.File.OpenFlags{ .mode = .read_write });
         defer tacDump.close();
         const tacDumpWriter = tacDump.writer();
-        for (tacProgram.function.items) |tacFn| {
-            try tacDumpWriter.writeAll(tacFn.name);
-            try tacDumpWriter.writeAll("\n\n");
-            for (tacFn.instructions.items) |tacFnInst| {
-                try tacDumpWriter.writeAll(try std.fmt.allocPrint(allocator, "{any}\n", .{tacFnInst}));
+        for (tacProgram.topLevelDecls.items) |topLevelDecl| {
+            switch (topLevelDecl.*) {
+                .Function => |tacFn| {
+                    try tacDumpWriter.writeAll(tacFn.name);
+                    try tacDumpWriter.writeAll("\n\n");
+                    for (tacFn.instructions.items) |tacFnInst| {
+                        try tacDumpWriter.writeAll(try std.fmt.allocPrint(allocator, "{any}\n", .{tacFnInst}));
+                    }
+                },
+                .StaticVar => |statVar| {
+                    try tacDumpWriter.writeAll(try std.fmt.allocPrint(allocator, "Var with name: {s}, global: {any} and init: {any}\n", .{ statVar.name, statVar.global, statVar.init }));
+                },
             }
         }
     }

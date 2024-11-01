@@ -79,33 +79,21 @@ pub const StaticVar = struct {
         // section directive
         // And for functions always start with a .text directive
         var buf = std.ArrayList(u8).init(allocator);
-        if (self.global) {
-            if (self.init == 0) {
-                const code = try std.fmt.allocPrint(
-                    allocator,
-                    \\ .global {s}
-                    \\ .bss
-                    \\ .align 4
-                    \\ {s}:
-                    \\ .zero 4
-                ,
-                    .{ self.name, self.name },
-                );
-                try buf.appendSlice(code);
-            } else {
-                const code = try std.fmt.allocPrint(
-                    allocator,
-                    \\ .data
-                    \\ .global {s}
-                    \\ .align 4
-                    \\ {s}:
-                    \\ .long {d}
-                ,
-                    .{ self.name, self.name, self.init },
-                );
-                try buf.appendSlice(code);
-            }
-        }
+        const code = try std.fmt.allocPrint(allocator,
+            \\ {s} {s}
+            \\ {s}
+            \\ .align 4
+            \\ {s}:
+            \\ {s} 4
+        , .{
+            if (self.global) ".globl" else ".local",
+            self.name,
+            if (self.init == 0) ".bss" else ".data",
+            self.name,
+            if (self.init == 0) ".zero" else ".long",
+        });
+        try buf.appendSlice(code);
+
         return buf.toOwnedSlice();
     }
 };
@@ -384,10 +372,16 @@ pub fn fixupInstructions(instructions: *std.ArrayList(*Instruction), allocator: 
                     .Stack => {
                         isSrcStack = true;
                     },
+                    .Data => {
+                        isSrcStack = true;
+                    },
                     else => {},
                 }
                 switch (mov.dest) {
                     .Stack => {
+                        isDestStack = true;
+                    },
+                    .Data => {
                         isDestStack = true;
                     },
                     else => {},
@@ -437,7 +431,8 @@ pub fn fixupInstructions(instructions: *std.ArrayList(*Instruction), allocator: 
                     }
                     continue;
                 }
-                if (std.mem.eql(u8, @tagName(binary.lhs), "Stack") and std.mem.eql(u8, @tagName(binary.rhs), "Stack")) {
+
+                if ((std.mem.eql(u8, @tagName(binary.lhs), "Stack") or std.mem.eql(u8, @tagName(binary.lhs), "Data")) and (std.mem.eql(u8, @tagName(binary.rhs), "Stack") or std.mem.eql(u8, @tagName(binary.rhs), "Data"))) {
                     const cpInstruction = try allocator.create(Instruction);
                     cpInstruction.* = Instruction{
                         .Mov = .{
