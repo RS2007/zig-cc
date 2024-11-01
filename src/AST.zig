@@ -165,7 +165,6 @@ fn convertSymToTAC(tacProgram: *tac.Program, symbolTable: std.StringHashMap(*sem
     while (symbolTableIter.next()) |iterator| {
         const key = iterator.key_ptr.*;
         const value = iterator.value_ptr.*;
-        std.log.warn("Key: {s} and value: {any}\n", .{ key, value });
         const tacTopLevelDecl = try symbolTable.allocator.create(tac.TopLevel);
         switch (value.*.attributes) {
             .StaticAttr => |staticAttr| {
@@ -959,10 +958,6 @@ pub fn blockStatementScopeVariableResolve(self: *VarResolver, blockItem: *BlockI
                 // an error
                 // Redefinition of variable, throw error
 
-                std.log.warn("We are here with: {any} and {any}\n", .{
-                    varResolved,
-                    decl,
-                });
                 // zig fmt: off
                 if ((varResolved.level == currentScope)
                     and !(varResolved.hasLinkage and (decl.storageClass == Qualifier.EXTERN)))
@@ -998,12 +993,12 @@ pub fn blockStatementScopeVariableResolve(self: *VarResolver, blockItem: *BlockI
 pub fn statementScopeVariableResolve(self: *VarResolver, statement: *Statement, currentScope: u32) VarResolveError!void {
     switch (statement.*) {
         .Compound => |compound| {
+            var newScope = std.StringHashMap(*VarResolveSymInfo).init(self.allocator);
+            try self.varMap.append(&newScope);
             for (compound.items) |blockItemCompound| {
-                var newScope = std.StringHashMap(*VarResolveSymInfo).init(self.allocator);
-                try self.varMap.append(&newScope);
                 try blockStatementScopeVariableResolve(self, blockItemCompound, currentScope + 1);
-                _ = self.varMap.pop();
             }
+            _ = self.varMap.pop();
         },
         .Null, .Label, .Goto => {},
         .If => |ifStmt| {
@@ -1062,14 +1057,11 @@ pub const VarResolver = struct {
     }
 
     pub fn lookup(self: *Self, name: []u8) ?*VarResolveSymInfo {
-        var i: usize = @intCast(self.varMap.items.len);
-        if (i == 0) return null;
-        i -= 1;
-        while (true) {
+        var i: usize = self.varMap.items.len - 1;
+        while (i >= 0) {
             if (self.varMap.items[i].get(name)) |resolved| {
                 return resolved;
             }
-            if (i == 0) break;
             i -= 1;
         }
         return null;
@@ -1081,13 +1073,16 @@ pub const VarResolver = struct {
             switch (externalDecl.*) {
                 .FunctionDecl => |functionDecl| {
                     for (functionDecl.blockItems.items) |blockItem| {
-                        try blockStatementScopeVariableResolve(self, blockItem, 0);
+                        var scope = std.StringHashMap(*VarResolveSymInfo).init(self.allocator);
+                        try self.varMap.append(&scope);
+                        try blockStatementScopeVariableResolve(self, blockItem, 1);
+                        _ = self.varMap.pop();
                     }
                 },
                 .VarDeclaration => |decl| {
                     const varSymInfo = try self.allocator.create(VarResolveSymInfo);
                     varSymInfo.* = VarResolveSymInfo{
-                        .level = -1,
+                        .level = 0,
                         .newName = decl.name,
                         .hasLinkage = true,
                     };
