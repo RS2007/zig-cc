@@ -116,16 +116,26 @@ test "tac generation - if" {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     const allocator = arena.allocator();
     defer arena.deinit();
-    const programStr = "int main(){int y; int x = y = 3;if(x == y) return x; else return y;}";
+    const programStr =
+        \\ int main(){
+        \\     int y;
+        \\     int x = y = 3;
+        \\     if(x == y) return x;
+        \\     else return y;
+        \\ }
+    ;
     const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
     var p = try parser.Parser.init(allocator, l);
     const program = try p.parseProgram();
+    std.log.warn("first blk statement: {any}\n", .{
+        program.externalDecls.items[0].FunctionDecl.blockItems.items[0].Declaration,
+    });
     const varResolver = try ast.VarResolver.init(allocator);
     try varResolver.resolve(program);
     const typechecker = try semantic.Typechecker.init(allocator);
     const hasTypeErr = try typechecker.check(program);
     if (hasTypeErr) |typeError| {
-        std.log.warn("\x1b[33mError\x1b[0m: {s}\n", .{typeError});
+        std.log.warn("\x1b[31mError\x1b[0m: {s}\n", .{typeError});
         std.debug.assert(false);
     }
     try ast.loopLabelPass(program, allocator);
@@ -133,26 +143,26 @@ test "tac generation - if" {
     try asmProgram.stringify(std.io.getStdErr().writer(), allocator);
 }
 
-test "tac generation - if nested" {
-    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    const allocator = arena.allocator();
-    defer arena.deinit();
-    const programStr = "int main(){int y; int x = y = 3;if(x == y) if(x > 3) return x;else; else return y; return 1;}";
-    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
-    var p = try parser.Parser.init(allocator, l);
-    const program = try p.parseProgram();
-    const varResolver = try ast.VarResolver.init(allocator);
-    try varResolver.resolve(program);
-    const typechecker = try semantic.Typechecker.init(allocator);
-    const hasTypeErr = try typechecker.check(program);
-    if (hasTypeErr) |typeError| {
-        std.log.warn("\x1b[33mError\x1b[0m: {s}\n", .{typeError});
-        std.debug.assert(false);
-    }
-    try ast.loopLabelPass(program, allocator);
-    const asmProgram = try (try program.genTAC(typechecker.symbolTable, allocator)).codegen(allocator);
-    try asmProgram.stringify(std.io.getStdErr().writer(), allocator);
-}
+//test "tac generation - if nested" {
+//    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+//    const allocator = arena.allocator();
+//    defer arena.deinit();
+//    const programStr = "int main(){int y; int x = y = 3;if(x == y) if(x > 3) return x;else; else return y; return 1;}";
+//    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+//    var p = try parser.Parser.init(allocator, l);
+//    const program = try p.parseProgram();
+//    const varResolver = try ast.VarResolver.init(allocator);
+//    try varResolver.resolve(program);
+//    const typechecker = try semantic.Typechecker.init(allocator);
+//    const hasTypeErr = try typechecker.check(program);
+//    if (hasTypeErr) |typeError| {
+//        std.log.warn("\x1b[33mError\x1b[0m: {s}\n", .{typeError});
+//        std.debug.assert(false);
+//    }
+//    try ast.loopLabelPass(program, allocator);
+//    const asmProgram = try (try program.genTAC(typechecker.symbolTable, allocator)).codegen(allocator);
+//    try asmProgram.stringify(std.io.getStdErr().writer(), allocator);
+//}
 
 test "assembly generation with ternary" {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);

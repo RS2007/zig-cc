@@ -999,6 +999,9 @@ pub fn blockStatementScopeVariableResolve(self: *VarResolver, blockItem: *BlockI
 
             try self.varMap.put(decl.name, sym);
             blockItem.Declaration.name = sym.newName;
+            if (decl.expression) |expression| {
+                try expressionScopeVariableResolve(self, expression, currentScope);
+            }
         },
     }
 }
