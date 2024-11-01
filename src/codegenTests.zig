@@ -7,6 +7,8 @@ const semantic = @import("./semantic.zig");
 test "testing assembly generation - unary" {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     const allocator = arena.allocator();
+    const cFileWriter = (try std.fs.cwd().createFile("./cFiles/C/unary.c", .{})).writer();
+    const sFileWriter = (try std.fs.cwd().createFile("./cFiles/S/unary.s", .{})).writer();
     defer arena.deinit();
     const programStr = "int main(){ return ~(-2); }";
     const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
@@ -22,13 +24,16 @@ test "testing assembly generation - unary" {
     }
     try ast.loopLabelPass(program, allocator);
     const asmProgram = try (try program.genTAC(typechecker.symbolTable, allocator)).codegen(allocator);
-    try asmProgram.stringify(std.io.getStdErr().writer(), allocator);
+    try asmProgram.stringify(sFileWriter, allocator);
+    try cFileWriter.writeAll(programStr);
 }
 
 test "testing assembly generation - binary" {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     const allocator = arena.allocator();
     defer arena.deinit();
+    const cFileWriter = (try std.fs.cwd().createFile("./cFiles/C/binary.c", .{})).writer();
+    const sFileWriter = (try std.fs.cwd().createFile("./cFiles/S/binary.s", .{})).writer();
     const programStr = "int main(){ return (2*3)%5+6; }";
     const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
     var p = try parser.Parser.init(allocator, l);
@@ -43,13 +48,16 @@ test "testing assembly generation - binary" {
     }
     try ast.loopLabelPass(program, allocator);
     const asmProgram = try (try program.genTAC(typechecker.symbolTable, allocator)).codegen(allocator);
-    try asmProgram.stringify(std.io.getStdErr().writer(), allocator);
+    try asmProgram.stringify(sFileWriter, allocator);
+    try cFileWriter.writeAll(programStr);
 }
 
 test "testing assembly generation - >= and <=" {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     const allocator = arena.allocator();
     defer arena.deinit();
+    const cFileWriter = (try std.fs.cwd().createFile("./cFiles/C/gele.c", .{})).writer();
+    const sFileWriter = (try std.fs.cwd().createFile("./cFiles/S/gele.s", .{})).writer();
     const programStr = "int main(){ return 2 >= 3 + 1 <= 5; }";
     const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
     var p = try parser.Parser.init(allocator, l);
@@ -65,13 +73,16 @@ test "testing assembly generation - >= and <=" {
     }
     try ast.loopLabelPass(program, allocator);
     const asmProgram = try (try program.genTAC(typechecker.symbolTable, allocator)).codegen(allocator);
-    try asmProgram.stringify(std.io.getStdErr().writer(), allocator);
+    try asmProgram.stringify(sFileWriter, allocator);
+    try cFileWriter.writeAll(programStr);
 }
 
 test "testing assembly generation - short circuiting with logical AND and OR" {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     const allocator = arena.allocator();
     defer arena.deinit();
+    const cFileWriter = (try std.fs.cwd().createFile("./cFiles/C/logAndOr.c", .{})).writer();
+    const sFileWriter = (try std.fs.cwd().createFile("./cFiles/S/logAndOr.s", .{})).writer();
     const programStr = "int main(){ return 2 && ( 3 || 4 ) ; }";
     const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
     var p = try parser.Parser.init(allocator, l);
@@ -87,13 +98,16 @@ test "testing assembly generation - short circuiting with logical AND and OR" {
     }
     try ast.loopLabelPass(program, allocator);
     const asmProgram = try (try program.genTAC(typechecker.symbolTable, allocator)).codegen(allocator);
-    try asmProgram.stringify(std.io.getStdErr().writer(), allocator);
+    try asmProgram.stringify(sFileWriter, allocator);
+    try cFileWriter.writeAll(programStr);
 }
 
 test "testing assembly generation - declarations" {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     const allocator = arena.allocator();
     defer arena.deinit();
+    const cFileWriter = (try std.fs.cwd().createFile("./cFiles/C/declaration.c", .{})).writer();
+    const sFileWriter = (try std.fs.cwd().createFile("./cFiles/S/declaration.s", .{})).writer();
     const programStr = "int main(){ int x = 2; int y = 3 || 4; return x && y; }";
     const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
     var p = try parser.Parser.init(allocator, l);
@@ -108,14 +122,16 @@ test "testing assembly generation - declarations" {
     }
     try ast.loopLabelPass(program, allocator);
     const asmProgram = try (try program.genTAC(typechecker.symbolTable, allocator)).codegen(allocator);
-    try asmProgram.stringify(std.io.getStdErr().writer(), allocator);
+    try asmProgram.stringify(sFileWriter, allocator);
+    try cFileWriter.writeAll(programStr);
 }
 
-// INFO: Failing
 test "tac generation - if" {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     const allocator = arena.allocator();
     defer arena.deinit();
+    const cFileWriter = (try std.fs.cwd().createFile("./cFiles/C/if.c", .{})).writer();
+    const sFileWriter = (try std.fs.cwd().createFile("./cFiles/S/if.s", .{})).writer();
     const programStr =
         \\ int main(){
         \\     int y;
@@ -140,35 +156,17 @@ test "tac generation - if" {
     }
     try ast.loopLabelPass(program, allocator);
     const asmProgram = try (try program.genTAC(typechecker.symbolTable, allocator)).codegen(allocator);
-    try asmProgram.stringify(std.io.getStdErr().writer(), allocator);
+    try asmProgram.stringify(sFileWriter, allocator);
+    try cFileWriter.writeAll(programStr);
 }
 
-//test "tac generation - if nested" {
-//    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-//    const allocator = arena.allocator();
-//    defer arena.deinit();
-//    const programStr = "int main(){int y; int x = y = 3;if(x == y) if(x > 3) return x;else; else return y; return 1;}";
-//    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
-//    var p = try parser.Parser.init(allocator, l);
-//    const program = try p.parseProgram();
-//    const varResolver = try ast.VarResolver.init(allocator);
-//    try varResolver.resolve(program);
-//    const typechecker = try semantic.Typechecker.init(allocator);
-//    const hasTypeErr = try typechecker.check(program);
-//    if (hasTypeErr) |typeError| {
-//        std.log.warn("\x1b[33mError\x1b[0m: {s}\n", .{typeError});
-//        std.debug.assert(false);
-//    }
-//    try ast.loopLabelPass(program, allocator);
-//    const asmProgram = try (try program.genTAC(typechecker.symbolTable, allocator)).codegen(allocator);
-//    try asmProgram.stringify(std.io.getStdErr().writer(), allocator);
-//}
-
-test "assembly generation with ternary" {
+test "tac generation - if nested" {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     const allocator = arena.allocator();
     defer arena.deinit();
-    const programStr = "int main(){int y = 4; int x = 3; return x == 3?x:y}";
+    const cFileWriter = (try std.fs.cwd().createFile("./cFiles/C/ifNested.c", .{})).writer();
+    const sFileWriter = (try std.fs.cwd().createFile("./cFiles/S/ifNested.s", .{})).writer();
+    const programStr = "int main(){int y; int x = y = 3;if(x == y) if(x > 3) return x;else; else return y; return 1;}";
     const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
     var p = try parser.Parser.init(allocator, l);
     const program = try p.parseProgram();
@@ -182,13 +180,40 @@ test "assembly generation with ternary" {
     }
     try ast.loopLabelPass(program, allocator);
     const asmProgram = try (try program.genTAC(typechecker.symbolTable, allocator)).codegen(allocator);
-    try asmProgram.stringify(std.io.getStdErr().writer(), allocator);
+    try asmProgram.stringify(sFileWriter, allocator);
+    try cFileWriter.writeAll(programStr);
+}
+
+test "assembly generation with ternary" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const cFileWriter = (try std.fs.cwd().createFile("./cFiles/C/ternary.c", .{})).writer();
+    const sFileWriter = (try std.fs.cwd().createFile("./cFiles/S/ternary.s", .{})).writer();
+    const programStr = "int main(){int y = 4; int x = 3; return x == 3?x:y;}";
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    const program = try p.parseProgram();
+    const varResolver = try ast.VarResolver.init(allocator);
+    try varResolver.resolve(program);
+    const typechecker = try semantic.Typechecker.init(allocator);
+    const hasTypeErr = try typechecker.check(program);
+    if (hasTypeErr) |typeError| {
+        std.log.warn("\x1b[33mError\x1b[0m: {s}\n", .{typeError});
+        std.debug.assert(false);
+    }
+    try ast.loopLabelPass(program, allocator);
+    const asmProgram = try (try program.genTAC(typechecker.symbolTable, allocator)).codegen(allocator);
+    try asmProgram.stringify(sFileWriter, allocator);
+    try cFileWriter.writeAll(programStr);
 }
 
 test "assembly generation with nested ternary" {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     const allocator = arena.allocator();
     defer arena.deinit();
+    const cFileWriter = (try std.fs.cwd().createFile("./cFiles/C/nestedTernary.c", .{})).writer();
+    const sFileWriter = (try std.fs.cwd().createFile("./cFiles/S/nestedTernary.s", .{})).writer();
     const programStr = "int main(){int y = 4; int x = 3; return x == 3?y == 4?x+y:x-y:0;}";
     const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
     var p = try parser.Parser.init(allocator, l);
@@ -203,13 +228,16 @@ test "assembly generation with nested ternary" {
     }
     try ast.loopLabelPass(program, allocator);
     const asmProgram = try (try program.genTAC(typechecker.symbolTable, allocator)).codegen(allocator);
-    try asmProgram.stringify(std.io.getStdErr().writer(), allocator);
+    try asmProgram.stringify(sFileWriter, allocator);
+    try cFileWriter.writeAll(programStr);
 }
 
 test "assembly generation with labelled statements and goto" {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     const allocator = arena.allocator();
     defer arena.deinit();
+    const cFileWriter = (try std.fs.cwd().createFile("./cFiles/C/labelledGoto.c", .{})).writer();
+    const sFileWriter = (try std.fs.cwd().createFile("./cFiles/S/labelledGoto.s", .{})).writer();
     const programStr = "int main(){int y = 4; int x = 3; y = 69;goto sup; supTwo:return x+y;sup:return x-y;}";
     const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
     var p = try parser.Parser.init(allocator, l);
@@ -224,13 +252,16 @@ test "assembly generation with labelled statements and goto" {
     }
     try ast.loopLabelPass(program, allocator);
     const asmProgram = try (try program.genTAC(typechecker.symbolTable, allocator)).codegen(allocator);
-    try asmProgram.stringify(std.io.getStdErr().writer(), allocator);
+    try asmProgram.stringify(sFileWriter, allocator);
+    try cFileWriter.writeAll(programStr);
 }
 
 test "testing assembly generation with compound statement parsing" {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     const allocator = arena.allocator();
     defer arena.deinit();
+    const cFileWriter = (try std.fs.cwd().createFile("./cFiles/C/compoundStatement.c", .{})).writer();
+    const sFileWriter = (try std.fs.cwd().createFile("./cFiles/S/compoundStatement.s", .{})).writer();
     const programStr = "int main(){int y = 4; int x = 2; {int x = 3;} return x+y;}";
     const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
     var p = try parser.Parser.init(allocator, l);
@@ -244,13 +275,16 @@ test "testing assembly generation with compound statement parsing" {
         std.debug.assert(false);
     }
     const asmProgram = try (try program.genTAC(typechecker.symbolTable, allocator)).codegen(allocator);
-    try asmProgram.stringify(std.io.getStdErr().writer(), allocator);
+    try asmProgram.stringify(sFileWriter, allocator);
+    try cFileWriter.writeAll(programStr);
 }
 
 test "testing assembly generation with do and while loop" {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     const allocator = arena.allocator();
     defer arena.deinit();
+    const cFileWriter = (try std.fs.cwd().createFile("./cFiles/C/doWhile.c", .{})).writer();
+    const sFileWriter = (try std.fs.cwd().createFile("./cFiles/S/doWhile.s", .{})).writer();
     const programStr =
         \\ int main(){
         \\     int x = 0;
@@ -272,13 +306,16 @@ test "testing assembly generation with do and while loop" {
     }
     try ast.loopLabelPass(program, allocator);
     const asmProgram = try (try program.genTAC(typechecker.symbolTable, allocator)).codegen(allocator);
-    try asmProgram.stringify(std.io.getStdErr().writer(), allocator);
+    try asmProgram.stringify(sFileWriter, allocator);
+    try cFileWriter.writeAll(programStr);
 }
 
 test "testing assembly generation loop with breaks and continue" {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     const allocator = arena.allocator();
     defer arena.deinit();
+    const cFileWriter = (try std.fs.cwd().createFile("./cFiles/C/breakContinue.c", .{})).writer();
+    const sFileWriter = (try std.fs.cwd().createFile("./cFiles/S/breakContinue.s", .{})).writer();
     const programStr =
         \\ int main(){
         \\     int x = 0;
@@ -302,13 +339,16 @@ test "testing assembly generation loop with breaks and continue" {
     }
     try ast.loopLabelPass(program, allocator);
     const asmProgram = try (try program.genTAC(typechecker.symbolTable, allocator)).codegen(allocator);
-    try asmProgram.stringify(std.io.getStdErr().writer(), allocator);
+    try asmProgram.stringify(sFileWriter, allocator);
+    try cFileWriter.writeAll(programStr);
 }
 
 test "nested while and do while loops with continue" {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     const allocator = arena.allocator();
     defer arena.deinit();
+    const cFileWriter = (try std.fs.cwd().createFile("./cFiles/C/nestedWhileDoWhile.c", .{})).writer();
+    const sFileWriter = (try std.fs.cwd().createFile("./cFiles/S/nestedWhileDoWhile.s", .{})).writer();
     const programStr =
         \\ int main() {
         \\   int num = 1;
@@ -337,13 +377,16 @@ test "nested while and do while loops with continue" {
     }
     try ast.loopLabelPass(program, allocator);
     const asmProgram = try (try program.genTAC(typechecker.symbolTable, allocator)).codegen(allocator);
-    try asmProgram.stringify(std.io.getStdErr().writer(), allocator);
+    try asmProgram.stringify(sFileWriter, allocator);
+    try cFileWriter.writeAll(programStr);
 }
 
 test "test assembly generation for for loops" {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     const allocator = arena.allocator();
     defer arena.deinit();
+    const cFileWriter = (try std.fs.cwd().createFile("./cFiles/C/forLoop.c", .{})).writer();
+    const sFileWriter = (try std.fs.cwd().createFile("./cFiles/S/forLoop.s", .{})).writer();
     const programStr =
         \\ int main(){
         \\     int y = 0;
@@ -364,9 +407,8 @@ test "test assembly generation for for loops" {
     }
     try ast.loopLabelPass(program, allocator);
     const asmProgram = try (try program.genTAC(typechecker.symbolTable, allocator)).codegen(allocator);
-    const sFile = try std.fs.cwd().createFile("./cFiles/sup2.s", .{});
-    try asmProgram.stringify(std.io.getStdErr().writer(), allocator);
-    try asmProgram.stringify(sFile.writer(), allocator);
+    try asmProgram.stringify(sFileWriter, allocator);
+    try cFileWriter.writeAll(programStr);
 }
 //
 test "multiple functions and call" {

@@ -20,7 +20,7 @@ pub const MemoryError = error{
     OutOfMemory,
 };
 
-const TempGenerator = struct {
+pub const TempGenerator = struct {
     state: u32,
 
     pub fn genTemp(self: *TempGenerator, allocator: std.mem.Allocator) CodegenError![]u8 {
@@ -901,8 +901,8 @@ pub fn expressionScopeVariableResolve(self: *VarResolver, expression: *Expressio
     switch (expression.*) {
         .Integer => {},
         .Identifier => |identifier| {
-            if (self.varMap.contains(identifier)) {
-                expression.Identifier = self.varMap.get(identifier).?.newName;
+            if (self.varMap.get(identifier)) |resolvedSym| {
+                expression.Identifier = resolvedSym.newName;
             }
         },
         .Assignment => |assignment| {

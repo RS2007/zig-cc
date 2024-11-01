@@ -1,6 +1,6 @@
 zig-out/
 zig-cache/
-*.s
+**/*.s
 test
 *.log
 TODO.md
