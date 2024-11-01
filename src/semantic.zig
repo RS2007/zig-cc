@@ -806,9 +806,9 @@ pub fn varResolutionPass(allocator: std.mem.Allocator, node: *AST.Program) Seman
     for (node.externalDecls.items) |externalDecl| {
         switch (externalDecl.*) {
             .FunctionDecl => |functionDecl| {
-                const varMap = std.StringHashMap([]u8).init(allocator);
+                var varMap = std.StringHashMap([]u8).init(allocator);
                 for (functionDecl.args.items) |arg| {
-                    std.debug.assert(std.mem.eql(u8, @tagName(arg.NonVoidArg), "NonVoidArg"));
+                    std.debug.assert(std.mem.eql(u8, @tagName(arg.*), "NonVoidArg"));
                     try varMap.put(arg.NonVoidArg.identifier, @constCast(arg.NonVoidArg.identifier));
                 }
                 for (functionDecl.blockItems.items) |blockItem| {
