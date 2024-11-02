@@ -428,8 +428,13 @@ pub const ValType = enum {
     Variable,
 };
 
+pub const Constant = union(enum) {
+    Integer: u32,
+    Long: u64,
+};
+
 pub const Val = union(ValType) {
-    Constant: u32,
+    Constant: Constant,
     Variable: []u8,
     pub fn codegen(val: *Val, symbolTable: std.StringHashMap(*semantic.Symbol), allocator: std.mem.Allocator) ast.CodegenError!assembly.Operand {
         switch (val.*) {

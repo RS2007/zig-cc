@@ -59,7 +59,6 @@ pub const Parser = struct {
             _ = try self.l.nextToken(self.allocator);
         }
         const returnType = try self.l.nextToken(self.allocator);
-        std.debug.assert(returnType.type == lexer.TokenType.INT_TYPE or returnType.type == lexer.TokenType.VOID);
         const peekTwo = try self.l.peekTwoTokens(self.allocator);
         if (peekTwo[1].?.type != lexer.TokenType.LPAREN) {
             const varName = try self.l.nextToken(self.allocator);
@@ -68,7 +67,7 @@ pub const Parser = struct {
             declaration.* = .{
                 .name = self.l.buffer[varName.start .. varName.end + 1],
                 .expression = null,
-                .type = AST.Type.Integer,
+                .type = AST.Type.from(returnType.type),
                 .storageClass = qualifier,
                 // TODO: should support other types
             };
@@ -114,7 +113,7 @@ pub const Parser = struct {
             .name = self.l.buffer[fnNameToken.start .. fnNameToken.end + 1],
             .blockItems = blockItems,
             .args = argList,
-            .returnType = if (returnType.type == lexer.TokenType.INT_TYPE) AST.Type.Integer else AST.Type.Void,
+            .returnType = AST.Type.from(returnType.type),
             .storageClass = qualifier,
         };
         functionDecl.* = .{
@@ -144,6 +143,13 @@ pub const Parser = struct {
                 _ = try self.l.nextToken(self.allocator);
                 const argName = try self.l.nextToken(self.allocator);
                 arg.* = .{ .NonVoidArg = .{ .type = AST.Type.Integer, .identifier = self.l.buffer[argName.start .. argName.end + 1] } };
+                return arg;
+            },
+            .LONG_TYPE => {
+                const arg = try self.allocator.create(AST.Arg);
+                _ = try self.l.nextToken(self.allocator);
+                const argName = try self.l.nextToken(self.allocator);
+                arg.* = .{ .NonVoidArg = .{ .type = AST.Type.Long, .identifier = self.l.buffer[argName.start .. argName.end + 1] } };
                 return arg;
             },
             //.VOID => {
@@ -190,7 +196,7 @@ pub const Parser = struct {
             .STATIC, .EXTERN => {
                 const qualifier = AST.Qualifier.from(nextToken.type);
                 const returnType = try self.l.nextToken(self.allocator);
-                std.debug.assert(returnType.type == lexer.TokenType.INT_TYPE or returnType.type == lexer.TokenType.VOID);
+                std.debug.assert(returnType.type == lexer.TokenType.INT_TYPE or returnType.type == lexer.TokenType.VOID or returnType.type == lexer.TokenType.LONG_TYPE);
                 const identifier = try self.l.nextToken(self.allocator);
                 std.debug.assert(identifier.type == lexer.TokenType.IDENTIFIER);
                 const declaration = try self.allocator.create(AST.Declaration);
@@ -202,7 +208,7 @@ pub const Parser = struct {
                 declaration.* = AST.Declaration{
                     .name = self.l.buffer[identifier.start .. identifier.end + 1],
                     .expression = null,
-                    .type = AST.Type.Integer,
+                    .type = AST.Type.from(returnType.type),
                     .storageClass = qualifier,
                 };
                 const peeked = try self.l.peekToken(self.allocator);
@@ -215,7 +221,8 @@ pub const Parser = struct {
                         _ = try self.l.nextToken(self.allocator);
                         const expression = try self.parseExpression(0);
                         declaration.expression = expression;
-                        std.debug.assert(if ((try self.l.peekToken(self.allocator) != null)) (try self.l.peekToken(self.allocator)).?.type == lexer.TokenType.SEMICOLON else false);
+                        const peekedSemicolon = try self.l.peekToken(self.allocator);
+                        std.debug.assert(peekedSemicolon.?.type == lexer.TokenType.SEMICOLON);
                         return declaration;
                     },
                     else => {
@@ -224,7 +231,7 @@ pub const Parser = struct {
                 }
                 return declaration;
             },
-            .INT_TYPE => {
+            .INT_TYPE, .LONG_TYPE => {
                 const identifier = try self.l.nextToken(self.allocator);
                 std.debug.assert(identifier.type == lexer.TokenType.IDENTIFIER);
                 const declaration = try self.allocator.create(AST.Declaration);
@@ -236,7 +243,7 @@ pub const Parser = struct {
                 declaration.* = AST.Declaration{
                     .name = self.l.buffer[identifier.start .. identifier.end + 1],
                     .expression = null,
-                    .type = AST.Type.Integer,
+                    .type = AST.Type.from(nextToken.type),
                 };
                 const peeked = try self.l.peekToken(self.allocator);
                 std.debug.assert(peeked != null);
@@ -248,7 +255,8 @@ pub const Parser = struct {
                         _ = try self.l.nextToken(self.allocator);
                         const expression = try self.parseExpression(0);
                         declaration.expression = expression;
-                        std.debug.assert(if ((try self.l.peekToken(self.allocator) != null)) (try self.l.peekToken(self.allocator)).?.type == lexer.TokenType.SEMICOLON else false);
+                        const peekedSemicolon = try self.l.peekToken(self.allocator);
+                        std.debug.assert(peekedSemicolon.?.type == lexer.TokenType.SEMICOLON);
                         return declaration;
                     },
                     else => {
@@ -490,11 +498,22 @@ pub const Parser = struct {
     pub fn parseFactor(self: *Parser) ParserError!*AST.Expression {
         const peekToken = (try self.l.peekToken(self.allocator)).?;
         switch (peekToken.type) {
+            .LONG => {
+                const currToken = try self.l.nextToken(self.allocator);
+                const integerNode = try self.allocator.create(AST.Expression);
+                const suffixRemovedSlice = if (self.l.buffer[currToken.end - 1] == 'L') self.l.buffer[currToken.start .. currToken.end - 1] else self.l.buffer[currToken.start..currToken.end];
+                integerNode.* = AST.Expression{ .Constant = AST.Constant{
+                    .Long = try std.fmt.parseInt(u64, suffixRemovedSlice, 10),
+                } };
+                return integerNode;
+            },
             .INTEGER => {
                 const currToken = try self.l.nextToken(self.allocator);
                 const integerNode = try self.allocator.create(AST.Expression);
                 integerNode.* = AST.Expression{
-                    .Integer = try std.fmt.parseInt(u32, self.l.buffer[currToken.start..currToken.end], 10),
+                    .Constant = AST.Constant{
+                        .Integer = try std.fmt.parseInt(u32, self.l.buffer[currToken.start .. currToken.end + 1], 10),
+                    },
                 };
                 return integerNode;
             },

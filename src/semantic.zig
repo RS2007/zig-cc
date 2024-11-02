@@ -65,6 +65,16 @@ pub const TypeKind = enum {
     Function,
     Void,
     Integer,
+    Long,
+
+    const Self = @This();
+    pub fn from(self: AST.Type) Self {
+        return switch (self) {
+            .Integer => .Integer,
+            .Void => .Void,
+            .Long => .Long,
+        };
+    }
 };
 pub const FnSymbol = struct {
     argsLen: u32,
@@ -77,6 +87,7 @@ pub const TypeInfo = union(TypeKind) {
     // later we will keep track of the types of the args
     Void,
     Integer,
+    Long,
 };
 
 pub const Symbol = struct {
@@ -199,7 +210,12 @@ pub fn typecheckExternalDecl(self: *Typechecker, externalDecl: *AST.ExternalDecl
             for (functionDecl.args.items) |arg| {
                 const argSym = try self.allocator.create(Symbol);
                 argSym.* = .{
-                    .typeInfo = .Integer,
+                    .typeInfo = switch (TypeKind.from(arg.NonVoidArg.type)) {
+                        .Void => unreachable,
+                        .Integer => .Integer,
+                        .Long => .Long,
+                        .Function => unreachable,
+                    },
                     .attributes = .LocalAttr,
                 };
                 try self.symbolTable.put(arg.NonVoidArg.identifier, argSym);
@@ -235,7 +251,7 @@ pub fn typecheckExternalDecl(self: *Typechecker, externalDecl: *AST.ExternalDecl
             var initializer: InitValue = .NoInit;
             var global = false;
             if (varDecl.expression) |expression| {
-                if (!std.mem.eql(u8, @tagName(expression.*), "Integer")) {
+                if (!std.mem.eql(u8, @tagName(expression.*), "Constant")) {
                     const typeErrorStruct = try self.allocator.create(TypeErrorStruct);
                     typeErrorStruct.* = .{
                         .errorType = TypeError.GlobalDeclarationNotInteger,
@@ -247,7 +263,9 @@ pub fn typecheckExternalDecl(self: *Typechecker, externalDecl: *AST.ExternalDecl
                     };
                     return typeErrorStruct;
                 }
-                initializer = .{ .Initial = expression.Integer };
+
+                // TODO: accomodate longs
+                initializer = .{ .Initial = expression.Constant.Integer };
 
                 if (varDecl.storageClass == AST.Qualifier.EXTERN) {
                     const typeErrorStruct = try self.allocator.create(TypeErrorStruct);
@@ -431,10 +449,11 @@ fn typecheckBlkItem(self: *Typechecker, blkItem: *AST.BlockItem) TypeCheckerErro
                                 return typeErrorStruct;
                             }
                             const sym = try self.allocator.create(Symbol);
+                            // TODO: accomodate longs
                             sym.* = .{
                                 .typeInfo = .Integer,
                                 .attributes = .{ .StaticAttr = .{
-                                    .init = .{ .Initial = expr.Integer },
+                                    .init = .{ .Initial = expr.Constant.Integer },
                                     .global = true,
                                 } },
                             };
@@ -666,8 +685,11 @@ fn typecheckExpr(self: *Typechecker, expr: *AST.Expression) TypeError!AST.Type {
             std.debug.assert(std.mem.eql(u8, @tagName(symbol.typeInfo), "Integer"));
             return AST.Type.Integer;
         },
-        .Integer => {
-            return AST.Type.Integer;
+        .Constant => |constant| {
+            return switch (constant) {
+                .Integer => AST.Type.Integer,
+                .Long => AST.Type.Long,
+            };
         },
         .Unary => |unary| {
             _ = try typecheckExpr(self, unary.exp);
@@ -706,7 +728,7 @@ pub fn resolveExpression(expression: *AST.Expression, varMap: *std.StringHashMap
             try resolveExpression(binary.lhs, varMap);
             try resolveExpression(binary.rhs, varMap);
         },
-        .Integer => {},
+        .Constant => {},
         .Identifier => {
             if (varMap.get(expression.Identifier)) |resolvedVar| {
                 expression.Identifier = resolvedVar;

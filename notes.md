@@ -252,4 +252,3 @@ int main(){
 * initializer for a static variable must be a constant expression 
 * no specifiers in for loop header or function arguments list
 
-

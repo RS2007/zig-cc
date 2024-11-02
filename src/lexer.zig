@@ -44,6 +44,8 @@ pub const TokenType = enum {
     VOID,
     STATIC,
     EXTERN,
+    LONG_TYPE,
+    LONG,
 };
 
 pub const Token = struct {
@@ -83,7 +85,10 @@ pub const Lexer = struct {
         return token;
     }
 
-    inline fn createDoubleWidthToken(comptime lookAheadChars: []const u8, comptime returnToks: []const TokenType, fallBackTok: TokenType, allocator: std.mem.Allocator, lexer: *Lexer) LexerError!*Token {
+    inline fn createDoubleWidthToken(comptime lookAheadChars: []const u8, comptime returnToks: []const TokenType, fallBackTok: TokenType, allocator: std.mem.Allocator, lexer: *Lexer) LexerError!?*Token {
+        if (lexer.current + 1 >= lexer.buffer.len) {
+            return null;
+        }
         var token = try allocator.create(Token);
         inline for (lookAheadChars, returnToks) |lookAheadChar, returnTok| {
             if (lexer.buffer[lexer.current + 1] == lookAheadChar) {
@@ -136,7 +141,7 @@ pub const Lexer = struct {
 
     pub fn peekToken(lexer: *Lexer, allocator: std.mem.Allocator) LexerError!?*Token {
         lexer.skipWhitespace();
-        if (lexer.current + 1 >= lexer.buffer.len) {
+        if (lexer.current >= lexer.buffer.len) {
             return null;
         }
         switch (lexer.buffer[lexer.current]) {
@@ -202,10 +207,13 @@ pub const Lexer = struct {
                     var token = try allocator.create(Token);
                     const initialPtr = lexer.current;
                     var finalPtr = lexer.current;
-                    while (finalPtr < lexer.buffer.len and std.ascii.isDigit(lexer.buffer[lexer.current])) {
+                    while (finalPtr < lexer.buffer.len and std.ascii.isDigit(lexer.buffer[finalPtr])) {
                         finalPtr += 1;
                     }
-                    token.type = TokenType.INTEGER;
+                    if ((finalPtr < lexer.buffer.len) and lexer.buffer[finalPtr] == 'L') {
+                        token.type = TokenType.LONG;
+                        finalPtr += 1;
+                    } else token.type = TokenType.INTEGER;
                     token.start = initialPtr;
                     token.end = finalPtr;
                     return token;
@@ -231,6 +239,7 @@ pub const Lexer = struct {
                     "void",
                     "static",
                     "extern",
+                    "long",
                 }, &[_]TokenType{
                     TokenType.INT_TYPE,
                     TokenType.RETURN,
@@ -245,6 +254,7 @@ pub const Lexer = struct {
                     TokenType.VOID,
                     TokenType.STATIC,
                     TokenType.EXTERN,
+                    TokenType.LONG_TYPE,
                 }, lexer, token);
             },
         }
@@ -372,9 +382,12 @@ pub const Lexer = struct {
                     while (lexer.current < lexer.buffer.len and std.ascii.isDigit(lexer.buffer[lexer.current])) {
                         lexer.current += 1;
                     }
-                    token.type = TokenType.INTEGER;
+                    if ((lexer.current < lexer.buffer.len) and (lexer.buffer[lexer.current] == 'L')) {
+                        token.type = TokenType.LONG;
+                        lexer.current += 1;
+                    } else token.type = TokenType.INTEGER;
                     token.start = initialPtr;
-                    token.end = lexer.current;
+                    token.end = lexer.current - 1;
                     lexer.currentToken = token;
                     return token;
                 }
@@ -392,6 +405,7 @@ pub const Lexer = struct {
                     "void",
                     "static",
                     "extern",
+                    "long",
                 }, &[_]TokenType{
                     TokenType.INT_TYPE,
                     TokenType.RETURN,
@@ -406,6 +420,7 @@ pub const Lexer = struct {
                     TokenType.VOID,
                     TokenType.STATIC,
                     TokenType.EXTERN,
+                    TokenType.LONG_TYPE,
                 }, lexer, token);
             },
         }

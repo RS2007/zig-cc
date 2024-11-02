@@ -33,8 +33,8 @@ test "testing lexer basic" {
     _ = try std.testing.expectEqual(fourthToken.*, lexer.Token{ .type = lexer.TokenType.RPAREN, .start = 9, .end = 9 });
     _ = try std.testing.expectEqual(fifthToken.*, lexer.Token{ .type = lexer.TokenType.LBRACE, .start = 10, .end = 10 });
     _ = try std.testing.expectEqual(sixthToken.*, lexer.Token{ .type = lexer.TokenType.RETURN, .start = 12, .end = 17 });
-    _ = try std.testing.expectEqual(seventhToken.*, lexer.Token{ .type = lexer.TokenType.INTEGER, .start = 19, .end = 21 });
-    _ = try std.testing.expectEqual(try std.fmt.parseInt(u32, l.buffer[seventhToken.*.start..seventhToken.*.end], 10), 42);
+    _ = try std.testing.expectEqual(seventhToken.*, lexer.Token{ .type = lexer.TokenType.INTEGER, .start = 19, .end = 20 });
+    _ = try std.testing.expectEqual(try std.fmt.parseInt(u32, l.buffer[seventhToken.*.start .. seventhToken.*.end + 1], 10), 42);
     _ = try std.testing.expectEqual(eighthToken.*, lexer.Token{ .type = lexer.TokenType.SEMICOLON, .start = 21, .end = 21 });
     _ = try std.testing.expectEqual(ninthToken.*, lexer.Token{ .type = lexer.TokenType.RBRACE, .start = 23, .end = 23 });
     _ = try std.testing.expect(std.mem.eql(u8, l.buffer[ninthToken.*.start .. ninthToken.*.end + 1], "}"));
@@ -220,6 +220,20 @@ test "static and extern" {
     _ = try std.testing.expectEqual(externTok.type, lexer.TokenType.EXTERN);
 }
 
+test "long lexing" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    const programStr = "long 102L";
+    var l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    const longType = try l.nextToken(allocator);
+    const longPeeked = try l.peekToken(allocator);
+    const long = try l.nextToken(allocator);
+    _ = try std.testing.expectEqual(lexer.TokenType.LONG_TYPE, longType.type);
+    _ = try std.testing.expectEqual(lexer.TokenType.LONG, longPeeked.?.type);
+    _ = try std.testing.expectEqual(lexer.TokenType.LONG, long.type);
+}
+
 test "testing basic parser" {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     const allocator = arena.allocator();
@@ -240,7 +254,7 @@ test "parse factor" {
     var p2 = try parser.Parser.init(allocator, l2);
     const factor2 = try p2.parseFactor();
     _ = try std.testing.expectEqual(factor2.Unary.unaryOp, ast.UnaryOp.NEGATE);
-    _ = try std.testing.expectEqual(factor2.Unary.exp.Integer, 42);
+    _ = try std.testing.expectEqual(factor2.Unary.exp.Constant.Integer, 42);
 }
 
 test "parsing expression with precedence" {
@@ -279,7 +293,7 @@ test "precedence with >= and <=" {
     std.log.warn("Binary lhs: \x1b[34m{any}\x1b[0m", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[0].Statement.Return.expression.Binary.lhs});
     std.log.warn("\x1b[34m{any}\x1b[0m", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[0].Statement.Return.expression.Binary.lhs.Binary.lhs});
     std.log.warn("\x1b[34m{any}\x1b[0m", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[0].Statement.Return.expression.Binary.lhs.Binary.rhs});
-    std.log.warn("\x1b[34m{any}\x1b[0m", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[0].Statement.Return.expression.Binary.rhs.Integer});
+    std.log.warn("\x1b[34m{any}\x1b[0m", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[0].Statement.Return.expression.Binary.rhs.Constant.Integer});
 }
 
 test "parsing declarations and statements" {
@@ -503,4 +517,31 @@ test "Negation and bitwise complement codegeneration" {
     var p = try parser.Parser.init(allocator, l);
     const program = try p.parseProgram();
     std.log.warn("{}", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[0].Statement.Return.expression.Unary.exp});
+}
+
+test "parsing long declarations" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const statement = "long k = 32L;";
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(statement)));
+    const p = try parser.Parser.init(allocator, l);
+    const declaration = try p.parseDeclaration();
+    _ = try std.testing.expectEqual(declaration.type, ast.Type.Long);
+    _ = try std.testing.expectEqualStrings(declaration.name, "k");
+    _ = try std.testing.expectEqual(declaration.expression.?.Constant.Long, 32);
+}
+
+test "parse function args as long" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const functionStr = "long add(long a, long b){ return a+b; }";
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(functionStr)));
+    const p = try parser.Parser.init(allocator, l);
+    const decl = try p.parseExternalDecl();
+    _ = try std.testing.expectEqual(decl.FunctionDecl.args.items[0].NonVoidArg.type, ast.Type.Long);
+    _ = try std.testing.expectEqualStrings(decl.FunctionDecl.args.items[0].NonVoidArg.identifier, "a");
+    _ = try std.testing.expectEqual(decl.FunctionDecl.args.items[1].NonVoidArg.type, ast.Type.Long);
+    _ = try std.testing.expectEqualStrings(decl.FunctionDecl.args.items[1].NonVoidArg.identifier, "b");
 }

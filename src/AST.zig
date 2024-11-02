@@ -151,7 +151,7 @@ pub const StatementType = enum {
     For,
 };
 pub const ExpressionType = enum {
-    Integer,
+    Constant,
     Unary,
     Binary,
     Ternary,
@@ -233,7 +233,21 @@ pub const Return = struct {
     expression: *Expression,
 };
 
-pub const Type = enum { Integer, Void };
+pub const Type = enum {
+    Integer,
+    Void,
+    Long,
+
+    const Self = @This();
+    pub fn from(tokenType: lexer.TokenType) Self {
+        return switch (tokenType) {
+            .INT_TYPE => .Integer,
+            .VOID => .Void,
+            .LONG_TYPE => .Long,
+            else => unreachable,
+        };
+    }
+};
 
 pub const NonVoidArg = struct {
     type: Type,
@@ -632,8 +646,17 @@ pub const FunctionCall = struct {
     args: std.ArrayList(*Expression),
 };
 
-pub const Expression = union(ExpressionType) {
+pub const ConstantKind = enum {
+    Integer,
+    Long,
+};
+pub const Constant = union(ConstantKind) {
     Integer: u32,
+    Long: u64,
+};
+
+pub const Expression = union(ExpressionType) {
+    Constant: Constant,
     Unary: Unary,
     Binary: Binary,
     Ternary: Ternary,
@@ -882,7 +905,7 @@ pub const Expression = union(ExpressionType) {
 
 pub fn expressionScopeVariableResolve(self: *VarResolver, expression: *Expression, currentScope: u32) VarResolveError!void {
     switch (expression.*) {
-        .Integer => {},
+        .Constant => {},
         .Identifier => |identifier| {
             if (self.lookup(identifier)) |resolvedSym| {
                 std.log.warn("resolved sym: {s} = {any}\n", .{ identifier, resolvedSym });
@@ -1149,8 +1172,6 @@ pub fn loopLabelPass(program: *Program, allocator: std.mem.Allocator) MemoryErro
             .VarDeclaration => {},
             .FunctionDecl => |functionDecl| {
                 for (functionDecl.blockItems.items) |blockItem| {
-                    // TODO: Fine for testing basic functionality, but counter to be a pointer
-                    // to integer and should be mutated by these label function calls
                     try blockItemLoopLabelPass(blockItem, 0, allocator);
                 }
             },
