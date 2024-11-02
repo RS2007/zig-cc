@@ -666,10 +666,15 @@ pub const Expression = union(ExpressionType) {
 
     pub fn genTACInstructions(expression: *Expression, instructions: *std.ArrayList(*tac.Instruction), allocator: std.mem.Allocator) CodegenError!*tac.Val {
         switch (expression.*) {
-            .Integer => |integer| {
-                const val = try allocator.create(tac.Val);
-                val.* = tac.Val{ .Constant = integer };
-                return val;
+            .Constant => |constant| {
+                switch (constant) {
+                    .Integer => |integer| {
+                        const val = try allocator.create(tac.Val);
+                        val.* = tac.Val{ .Constant = .{ .Integer = integer } };
+                        return val;
+                    },
+                    else => unreachable,
+                }
             },
             .Unary => |unary| {
                 switch (unary.unaryOp) {
@@ -709,9 +714,9 @@ pub const Expression = union(ExpressionType) {
             },
             .Binary => |binary| {
                 const one = try allocator.create(tac.Val);
-                one.* = tac.Val{ .Constant = 1 };
+                one.* = tac.Val{ .Constant = .{ .Integer = 1 } };
                 const zero = try allocator.create(tac.Val);
-                zero.* = tac.Val{ .Constant = 0 };
+                zero.* = tac.Val{ .Constant = .{ .Integer = 0 } };
                 if (binary.op == BinOp.LOGIC_AND or binary.op == BinOp.LOGIC_OR) {
                     const valLeft = try binary.lhs.genTACInstructions(instructions, allocator);
                     const storeTemp = try allocator.create(tac.Val);

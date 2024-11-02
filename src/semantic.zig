@@ -436,7 +436,7 @@ fn typecheckBlkItem(self: *Typechecker, blkItem: *AST.BlockItem) TypeCheckerErro
                     .STATIC => {
                         if (decl.expression) |expr| {
                             std.log.warn("Pushing in this decl: {s}\n", .{decl.name});
-                            if (!std.mem.eql(u8, @tagName(expr.*), "Integer")) {
+                            if (!std.mem.eql(u8, @tagName(expr.*), "Constant")) {
                                 const typeErrorStruct = try self.allocator.create(TypeErrorStruct);
                                 typeErrorStruct.* = .{
                                     .errorType = TypeError.GlobalDeclarationNotInteger,

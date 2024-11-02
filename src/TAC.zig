@@ -440,8 +440,9 @@ pub const Val = union(ValType) {
         switch (val.*) {
             .Constant => |constant| {
                 const operand = try allocator.create(assembly.Operand);
+                std.debug.assert(std.mem.eql(u8, @tagName(constant), "Integer"));
                 operand.* = assembly.Operand{
-                    .Imm = constant,
+                    .Imm = constant.Integer,
                 };
                 return operand.*;
             },
