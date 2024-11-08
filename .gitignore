@@ -1,6 +1,7 @@
 zig-out/
 zig-cache/
 **/*.s
+cFiles/**/*.c
 test
 *.log
 TODO.md

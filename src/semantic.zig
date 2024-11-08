@@ -20,9 +20,22 @@ pub const InitValueKind = enum {
     NoInit, // No information can be made about the initialization
 };
 
+pub const ConstantKind = enum {
+    Integer,
+    Long,
+};
+
+pub const Constant = struct {
+    type: AST.Type,
+    value: union(enum) {
+        Integer: u32,
+        Long: u64,
+    },
+};
+
 pub const InitValue = union(InitValueKind) {
     Tentative: void,
-    Initial: u32,
+    Initial: Constant,
     NoInit: void,
 };
 
@@ -250,7 +263,10 @@ pub fn typecheckExternalDecl(self: *Typechecker, externalDecl: *AST.ExternalDecl
 
             var initializer: InitValue = .NoInit;
             var global = false;
+
+            // INFO: Has expression
             if (varDecl.expression) |expression| {
+                // INFO: Should be constant initialized
                 if (!std.mem.eql(u8, @tagName(expression.*), "Constant")) {
                     const typeErrorStruct = try self.allocator.create(TypeErrorStruct);
                     typeErrorStruct.* = .{
@@ -264,9 +280,11 @@ pub fn typecheckExternalDecl(self: *Typechecker, externalDecl: *AST.ExternalDecl
                     return typeErrorStruct;
                 }
 
+                // INFO: Assign the expression value to the decl
                 // TODO: accomodate longs
-                initializer = .{ .Initial = expression.Constant.Integer };
+                initializer = .{ .Initial = .{ .type = .Integer, .value = .{ .Integer = expression.Constant.value.Integer } } };
 
+                // INFO: Extern decls no assignment check
                 if (varDecl.storageClass == AST.Qualifier.EXTERN) {
                     const typeErrorStruct = try self.allocator.create(TypeErrorStruct);
                     typeErrorStruct.* = .{
@@ -280,6 +298,11 @@ pub fn typecheckExternalDecl(self: *Typechecker, externalDecl: *AST.ExternalDecl
                     return typeErrorStruct;
                 }
             } else {
+                // INFO: Extern is not initialized (a case exists where there is
+                // an older declaration, but that is handled later when the
+                // symbol is found in the symbol table)
+                // INFO: Tentative is given to others (later get initialized to a value by a declaration)
+                // or is declared as 0 (if persists as tentative)
                 initializer = if (varDecl.storageClass == AST.Qualifier.EXTERN) .NoInit else .Tentative;
             }
 
@@ -344,6 +367,8 @@ pub fn typecheckExternalDecl(self: *Typechecker, externalDecl: *AST.ExternalDecl
                 if (std.mem.eql(u8, @tagName(varSym.attributes.StaticAttr.init), "Initial") 
                     and !std.mem.eql(u8, @tagName(initializer), "Initial")) {
                 // zig fmt: on
+                    // INFO: If initialized again choose that value, by exiting out of
+                    // this block
                     initializer = varSym.attributes.StaticAttr.init;
                 }
             }
@@ -389,6 +414,7 @@ fn typecheckBlkItem(self: *Typechecker, blkItem: *AST.BlockItem) TypeCheckerErro
 
             // Typecheck the expression
             if (decl.expression) |declExpression| {
+                // INFO: Type error witin expression
                 _ = typecheckExpr(self, declExpression) catch |err| {
                     const typeErrorStruct = try self.allocator.create(TypeErrorStruct);
                     typeErrorStruct.* = .{
@@ -397,6 +423,22 @@ fn typecheckBlkItem(self: *Typechecker, blkItem: *AST.BlockItem) TypeCheckerErro
                     };
                     return typeErrorStruct;
                 };
+                decl.expression = try convert(self.allocator, decl.expression.?, decl.type);
+                std.debug.assert(if (decl.expression == null) true else decl.expression.?.getType() == decl.type);
+
+                //INFO: Checking type equality
+                //if (decl.type != exprType) {
+                //    const typeErrorStruct = try self.allocator.create(TypeErrorStruct);
+                //    typeErrorStruct.* = .{
+                //        .errorType = TypeError.TypeMismatch,
+                //        .errorPayload = (try std.fmt.allocPrint(
+                //            self.allocator,
+                //            "Type mismatch at declaration of {s}, got lhs to be {any} and rhs to be {any}\n",
+                //            .{ decl.name, decl.type, exprType },
+                //        )),
+                //    };
+                //    return typeErrorStruct;
+                //}
             }
 
             // handle qualifiers
@@ -435,7 +477,8 @@ fn typecheckBlkItem(self: *Typechecker, blkItem: *AST.BlockItem) TypeCheckerErro
                     },
                     .STATIC => {
                         if (decl.expression) |expr| {
-                            std.log.warn("Pushing in this decl: {s}\n", .{decl.name});
+                            //@compileLog("Typename: " ++ @typeName(@TypeOf(decl.name)) ++ "\n");
+                            // std.log.err("Pushing in this decl: {any}\n", .{decl.name});
                             if (!std.mem.eql(u8, @tagName(expr.*), "Constant")) {
                                 const typeErrorStruct = try self.allocator.create(TypeErrorStruct);
                                 typeErrorStruct.* = .{
@@ -453,7 +496,11 @@ fn typecheckBlkItem(self: *Typechecker, blkItem: *AST.BlockItem) TypeCheckerErro
                             sym.* = .{
                                 .typeInfo = .Integer,
                                 .attributes = .{ .StaticAttr = .{
-                                    .init = .{ .Initial = expr.Constant.Integer },
+                                    .init = .{ .Initial = switch (decl.type) {
+                                        .Integer => .{ .type = .Integer, .value = .{ .Integer = expr.Constant.value.Integer } },
+                                        .Long => .{ .type = .Long, .value = .{ .Long = expr.Constant.value.Long } },
+                                        else => unreachable,
+                                    } },
                                     .global = true,
                                 } },
                             };
@@ -463,7 +510,7 @@ fn typecheckBlkItem(self: *Typechecker, blkItem: *AST.BlockItem) TypeCheckerErro
                             sym.* = .{
                                 .typeInfo = .Integer,
                                 .attributes = .{ .StaticAttr = .{
-                                    .init = .{ .Initial = 0 },
+                                    .init = .{ .Initial = .{ .type = .Integer, .value = .{ .Integer = 0 } } },
                                     .global = false,
                                 } },
                             };
@@ -641,59 +688,180 @@ fn typecheckForInit(self: *Typechecker, forInit: *AST.ForInit) TypeCheckerError!
     return null;
 }
 
+// TODO: A design change can make this easier
+// Or I can use some metaprogramming to generate this
+fn convert(allocator: std.mem.Allocator, expr: *AST.Expression, toType: AST.Type) !*AST.Expression {
+    switch (expr.*) {
+        .Cast => {
+            return expr;
+        },
+        .Assignment => {
+            if (expr.Assignment.type != toType) {
+                const castExpr = try allocator.create(AST.Expression);
+                castExpr.* = AST.Expression{ .Cast = .{
+                    .type = toType,
+                    .value = expr,
+                } };
+                return castExpr;
+            }
+            expr.Assignment.type = toType;
+            return expr;
+        },
+        .Binary => {
+            if (expr.Binary.type != toType) {
+                const castExpr = try allocator.create(AST.Expression);
+                castExpr.* = AST.Expression{ .Cast = .{
+                    .type = toType,
+                    .value = expr,
+                } };
+                return castExpr;
+            }
+            expr.Binary.type = toType;
+            return expr;
+        },
+        .FunctionCall => {
+            if (expr.FunctionCall.type != toType) {
+                const castExpr = try allocator.create(AST.Expression);
+                castExpr.* = AST.Expression{ .Cast = .{
+                    .type = toType,
+                    .value = expr,
+                } };
+                return castExpr;
+            }
+            expr.FunctionCall.type = toType;
+            return expr;
+        },
+        .Identifier => {
+            if (expr.Identifier.type != toType) {
+                const castExpr = try allocator.create(AST.Expression);
+                castExpr.* = AST.Expression{ .Cast = .{
+                    .type = toType,
+                    .value = expr,
+                } };
+                return castExpr;
+            }
+            expr.Identifier.type = toType;
+            return expr;
+        },
+        .Constant => {
+            if (expr.Constant.type != toType) {
+                const castExpr = try allocator.create(AST.Expression);
+                castExpr.* = AST.Expression{ .Cast = .{
+                    .type = toType,
+                    .value = expr,
+                } };
+                return castExpr;
+            }
+            expr.Constant.type = toType;
+            return expr;
+        },
+        .Unary => {
+            if (expr.Unary.type != toType) {
+                const castExpr = try allocator.create(AST.Expression);
+                castExpr.* = AST.Expression{ .Cast = .{
+                    .type = toType,
+                    .value = expr,
+                } };
+                return castExpr;
+            }
+            expr.Unary.type = toType;
+            return expr;
+        },
+        .Ternary => {
+            if (expr.Ternary.type != toType) {
+                const castExpr = try allocator.create(AST.Expression);
+                castExpr.* = AST.Expression{ .Cast = .{
+                    .type = toType,
+                    .value = expr,
+                } };
+                return castExpr;
+            }
+            expr.Ternary.type = toType;
+            return expr;
+        },
+    }
+}
+
 fn typecheckExpr(self: *Typechecker, expr: *AST.Expression) TypeError!AST.Type {
     // Expr can error because of a type issue,
     // for now we can just return a generic type error
     // and handle it from the outer functions (no diagnostic)
     switch (expr.*) {
+        .Cast => |cast| {
+            return cast.type;
+        },
         .Assignment => |assignment| {
             const lhsType = try typecheckExpr(self, assignment.lhs);
             //logz.info().fmt("lhs type", "{any}", .{lhsType}).log();
-            const rhsType = try typecheckExpr(self, assignment.rhs);
+            _ = try typecheckExpr(self, assignment.rhs);
             //logz.info().fmt("rhs type", "{any}", .{rhsType}).log();
-            if (lhsType != rhsType) {
-                std.log.warn("lhs type: {any} and rhs type: {any} not matching at assignment\n", .{ lhsType, rhsType });
-                return TypeError.TypeMismatch;
-            }
-            return AST.Type.Integer;
+            expr.Assignment.rhs = try convert(self.allocator, assignment.rhs, lhsType);
+            //if (lhsType != rhsType) {
+            //    // std.log.warn("lhs type: {any} and rhs type: {any} not matching at assignment\n", .{ lhsType, rhsType });
+            //    return TypeError.TypeMismatch;
+            //}
+            expr.Assignment.type = lhsType;
+            std.log.warn("Returning lhsType: {any}\n", .{lhsType});
+            return lhsType;
         },
         .Binary => {
             const lhsType = try typecheckExpr(self, expr.Binary.lhs);
             const rhsType = try typecheckExpr(self, expr.Binary.rhs);
-            if (lhsType != rhsType) {
-                std.log.warn("lhs type: {any} and rhs type: {any} not matching at binary op\n", .{ lhsType, rhsType });
-                return TypeError.TypeMismatch;
-            }
-            return AST.Type.Integer;
+            //if (lhsType != rhsType) {
+            //    // std.log.warn("lhs type: {any} and rhs type: {any} not matching at binary op\n", .{ lhsType, rhsType });
+            //    return TypeError.TypeMismatch;
+            //}
+
+            //INFO: Conversion logic
+            expr.Binary.type = switch (expr.Binary.op) {
+                .ADD, .SUBTRACT, .MULTIPLY, .DIVIDE, .REMAINDER => blk: {
+                    if (lhsType == AST.Type.Long or rhsType == AST.Type.Long) {
+                        expr.Binary.lhs = try convert(self.allocator, expr.Binary.lhs, AST.Type.Long);
+                        expr.Binary.rhs = try convert(self.allocator, expr.Binary.rhs, AST.Type.Long);
+                        break :blk AST.Type.Long;
+                    } else {
+                        break :blk AST.Type.Integer;
+                    }
+                },
+                else => AST.Type.Integer,
+            };
+
+            return expr.Binary.type.?;
         },
         .FunctionCall => |fnCall| {
             const fnSymbol = if (self.symbolTable.get(fnCall.name)) |fnSym| fnSym else {
-                std.log.warn("Unknown function: {s}\n", .{fnCall.name});
+                // std.log.warn("Unknown function: {s}\n", .{fnCall.name});
                 return TypeError.UnknownFunction;
             };
             if (fnCall.args.items.len != fnSymbol.typeInfo.Function.argsLen) {
-                std.log.warn("Expected {d} arguments but found {d} arguments in {s}\n", .{ fnSymbol.typeInfo.Function.argsLen, fnCall.args.items.len, fnCall.name });
+                // std.log.warn("Expected {d} arguments but found {d} arguments in {s}\n", .{ fnSymbol.typeInfo.Function.argsLen, fnCall.args.items.len, fnCall.name });
                 return TypeError.TypeMismatch;
             }
+            _ = try convert(self.allocator, expr, fnSymbol.typeInfo.Function.returnType);
             return fnSymbol.typeInfo.Function.returnType;
         },
         .Identifier => |identifier| {
-            const symbol = if (self.symbolTable.get(identifier)) |sym| sym else {
-                std.log.warn("Unknown identifier: {s}\n", .{identifier});
+            const symbol = if (self.symbolTable.get(identifier.name)) |sym| sym else {
+                // std.log.warn("Unknown identifier: {any}\n", .{identifier.name});
                 return TypeError.UnknownIdentifier;
             };
-            std.debug.assert(std.mem.eql(u8, @tagName(symbol.typeInfo), "Integer"));
-            return AST.Type.Integer;
+            const astType = AST.Type.fromSemType(symbol.typeInfo);
+            expr.Identifier.type = astType;
+            return astType;
         },
         .Constant => |constant| {
-            return switch (constant) {
+            const t = switch (constant.value) {
                 .Integer => AST.Type.Integer,
                 .Long => AST.Type.Long,
             };
+            // TODO: Should we store this type?
+            // expr.Constant.type = t;
+            return t;
         },
         .Unary => |unary| {
-            _ = try typecheckExpr(self, unary.exp);
-            return AST.Type.Integer;
+            const exprType = try typecheckExpr(self, unary.exp);
+            expr.Unary.type = exprType;
+            return exprType;
         },
         .Ternary => |ternary| {
             _ = try typecheckExpr(self, ternary.condition);
@@ -721,6 +889,7 @@ pub fn resolveDeclaration(declaration: *AST.Declaration, varMap: *std.StringHash
 
 pub fn resolveExpression(expression: *AST.Expression, varMap: *std.StringHashMap([]u8)) SemanticError!void {
     switch (expression.*) {
+        .Cast => {},
         .Unary => |unary| {
             try resolveExpression(unary.exp, varMap);
         },
@@ -730,8 +899,8 @@ pub fn resolveExpression(expression: *AST.Expression, varMap: *std.StringHashMap
         },
         .Constant => {},
         .Identifier => {
-            if (varMap.get(expression.Identifier)) |resolvedVar| {
-                expression.Identifier = resolvedVar;
+            if (varMap.get(expression.Identifier.name)) |resolvedVar| {
+                expression.Identifier.name = resolvedVar;
             } else {
                 return SemanticError.VarNotDeclared;
             }
@@ -880,6 +1049,5 @@ pub fn gotoResolutionPass(allocator: std.mem.Allocator, node: *AST.Program) Sema
     //      },
     //    }
     //  }
+    //
 }
-
-// Lots of typechecker tests here

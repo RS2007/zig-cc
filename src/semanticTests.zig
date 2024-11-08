@@ -418,7 +418,7 @@ test "extern inheriting init value from older linkage" {
         std.debug.assert(false);
     }
     std.debug.assert(externVarAttrs.StaticAttr.global);
-    std.debug.assert(externVarAttrs.StaticAttr.init.Initial == 4);
+    std.debug.assert(externVarAttrs.StaticAttr.init.Initial.value.Integer == 4);
 }
 
 test "multiple global inheriting init value from older linkage" {
@@ -445,7 +445,7 @@ test "multiple global inheriting init value from older linkage" {
         std.debug.assert(false);
     }
     std.debug.assert(externVarAttrs.StaticAttr.global);
-    std.debug.assert(externVarAttrs.StaticAttr.init.Initial == 4);
+    std.debug.assert(externVarAttrs.StaticAttr.init.Initial.value.Integer == 4);
 }
 
 test "tentative init values" {
@@ -472,4 +472,83 @@ test "tentative init values" {
     }
     std.debug.assert(externVarAttrs.StaticAttr.global);
     std.debug.assert(std.mem.eql(u8, @tagName(externVarAttrs.StaticAttr.init), "Tentative"));
+}
+
+test "typechecker error mismatch type in declaration" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const programStr =
+        \\ int main(){
+        \\     int a = 1L;
+        \\     return 0;
+        \\ }
+    ;
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    const program = try p.parseProgram();
+    const varResolver = try ast.VarResolver.init(allocator);
+    try varResolver.resolve(program);
+    const typechecker = try semantic.Typechecker.init(allocator);
+    const hasTypeErr = try typechecker.check(program);
+    var hasErr = false;
+    if (hasTypeErr) |typeErr| {
+        std.log.warn("Type error: {s}\n", .{typeErr});
+        hasErr = true;
+    }
+    _ = try std.testing.expect(hasErr);
+}
+
+test "typed ast check" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const programStr =
+        \\ int main(){
+        \\     int a;
+        \\     a = 3 + 2;
+        \\     return 0;
+        \\ }
+    ;
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    const program = try p.parseProgram();
+    const varResolver = try ast.VarResolver.init(allocator);
+    try varResolver.resolve(program);
+    const typechecker = try semantic.Typechecker.init(allocator);
+    const hasTypeErr = try typechecker.check(program);
+    var hasErr = false;
+    if (hasTypeErr) |typeErr| {
+        std.log.warn("Type error: {s}\n", .{typeErr});
+        hasErr = true;
+    }
+    _ = try std.testing.expect(!hasErr);
+    std.log.warn("type of expr: {any}", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[1].Statement.Expression.Assignment.type});
+}
+
+test "conversion logic" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const programStr =
+        \\ int main(){
+        \\     int a = 1L;
+        \\     return 0;
+        \\ }
+    ;
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    const program = try p.parseProgram();
+    const varResolver = try ast.VarResolver.init(allocator);
+    try varResolver.resolve(program);
+    const typechecker = try semantic.Typechecker.init(allocator);
+    const hasTypeErr = try typechecker.check(program);
+    var hasErr = false;
+    if (hasTypeErr) |typeErr| {
+        std.log.warn("Type error: {s}\n", .{typeErr});
+        hasErr = true;
+    }
+    _ = try std.testing.expect(!hasErr);
+    // Checking if casting has happened to the rhs of declaration
+    _ = try std.testing.expectEqual(program.externalDecls.items[0].FunctionDecl.blockItems.items[0].Declaration.expression.?.getType(), ast.Type.Integer);
 }

@@ -16,7 +16,11 @@ pub const FunctionDef = struct {
 pub const StaticVar = struct {
     name: []u8,
     global: bool,
-    init: u32,
+    init: union(ConstantType) {
+        Integer: u32,
+        Long: u64,
+    },
+    type: ConstantType,
 };
 
 pub const Program = struct {
@@ -34,7 +38,14 @@ pub const Program = struct {
                     staticVar.* = .{
                         .name = statItem.name,
                         .global = statItem.global,
-                        .init = statItem.init,
+                        .init = @intCast(switch (statItem.type) {
+                            .Integer => statItem.init.Integer,
+                            .Long => statItem.init.Long,
+                        }),
+                        .alignment = switch (statItem.type) {
+                            .Integer => 4,
+                            .Long => 8,
+                        },
                     };
                     asmTopLevelDecl.* = .{
                         .StaticVar = staticVar,
@@ -428,7 +439,12 @@ pub const ValType = enum {
     Variable,
 };
 
-pub const Constant = union(enum) {
+pub const ConstantType = enum {
+    Integer,
+    Long,
+};
+
+pub const Constant = union(ConstantType) {
     Integer: u32,
     Long: u64,
 };

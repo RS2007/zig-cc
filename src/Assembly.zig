@@ -72,7 +72,8 @@ pub const Function = struct {
 pub const StaticVar = struct {
     name: []u8,
     global: bool,
-    init: u32 = 0,
+    init: u64 = 0,
+    alignment: u32,
     const Self = @This();
     pub fn stringify(self: *Self, allocator: std.mem.Allocator) ![]u8 {
         // TODO: Hack for now, whenever a glob is encountered, emit the data

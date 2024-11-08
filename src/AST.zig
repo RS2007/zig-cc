@@ -37,6 +37,10 @@ pub const ExternalDeclType = enum {
     VarDeclaration,
 };
 
+pub const TypedIdentifier = struct {
+    name: []u8,
+    type: ?Type = null,
+};
 pub const Qualifier = enum {
     STATIC,
     EXTERN,
@@ -158,6 +162,7 @@ pub const ExpressionType = enum {
     Identifier,
     Assignment,
     FunctionCall,
+    Cast,
 };
 
 fn convertSymToTAC(tacProgram: *tac.Program, symbolTable: std.StringHashMap(*semantic.Symbol)) MemoryError!void {
@@ -174,7 +179,17 @@ fn convertSymToTAC(tacProgram: *tac.Program, symbolTable: std.StringHashMap(*sem
                         staticVar.* = .{
                             .name = @constCast(key),
                             .global = staticAttr.global,
-                            .init = initial,
+                            // TODO: Accomodate longs
+                            .init = switch (value.typeInfo) {
+                                .Integer => .{ .Integer = initial.value.Integer },
+                                .Long => .{ .Long = initial.value.Long },
+                                else => unreachable,
+                            },
+                            .type = switch (value.typeInfo) {
+                                .Integer => tac.ConstantType.Integer,
+                                .Long => tac.ConstantType.Long,
+                                else => unreachable,
+                            },
                         };
                         tacTopLevelDecl.* = .{
                             .StaticVar = staticVar,
@@ -187,7 +202,16 @@ fn convertSymToTAC(tacProgram: *tac.Program, symbolTable: std.StringHashMap(*sem
                         staticVar.* = .{
                             .name = @constCast(key),
                             .global = staticAttr.global,
-                            .init = 0,
+                            .init = switch (value.typeInfo) {
+                                .Integer => .{ .Integer = 0 },
+                                .Long => .{ .Long = 0 },
+                                else => unreachable,
+                            },
+                            .type = switch (value.typeInfo) {
+                                .Integer => tac.ConstantType.Integer,
+                                .Long => tac.ConstantType.Long,
+                                else => unreachable,
+                            },
                         };
                         tacTopLevelDecl.* = .{
                             .StaticVar = staticVar,
@@ -245,6 +269,15 @@ pub const Type = enum {
             .VOID => .Void,
             .LONG_TYPE => .Long,
             else => unreachable,
+        };
+    }
+
+    pub fn fromSemType(semanticType: semantic.TypeKind) Self {
+        return switch (semanticType) {
+            .Integer => .Integer,
+            .Void => .Void,
+            .Long => .Long,
+            .Function => unreachable,
         };
     }
 };
@@ -566,7 +599,7 @@ pub fn prettyPrintAST(node: Node, writer: anytype, depth: usize) !void {
                     try prettyPrintAST(Node{ .Expression = ass.lhs }, writer, depth + 1);
                     try prettyPrintAST(Node{ .Expression = ass.rhs }, writer, depth + 1);
                 },
-                .Identifier => |ident| try writer.print("{s}Identifier: {s}{s}\n", .{ colors.green, ident, colors.reset }),
+                .Identifier => |ident| try writer.print("{s}Identifier: {s}{s}\n", .{ colors.green, ident.name, colors.reset }),
                 .Ternary => |tern| {
                     try writer.print("{s}Ternary{s}\n", .{ colors.cyan, colors.reset });
                     try prettyPrintAST(Node{ .Expression = tern.condition }, writer, depth + 1);
@@ -600,17 +633,20 @@ pub const BinOp = enum {
 };
 
 pub const Unary = struct {
+    type: ?Type = null,
     unaryOp: UnaryOp,
     exp: *Expression,
 };
 
 pub const Binary = struct {
+    type: ?Type = null,
     op: BinOp,
     lhs: *Expression,
     rhs: *Expression,
 };
 
 pub const Ternary = struct {
+    type: ?Type = null,
     condition: *Expression,
     lhs: *Expression,
     rhs: *Expression,
@@ -637,11 +673,13 @@ pub fn tacBinOpFromASTBinOp(op: BinOp) tac.BinaryOp {
 }
 
 pub const Assignment = struct {
+    type: ?Type = null,
     lhs: *Expression,
     rhs: *Expression,
 };
 
 pub const FunctionCall = struct {
+    type: ?Type = null,
     name: []u8,
     args: std.ArrayList(*Expression),
 };
@@ -650,9 +688,16 @@ pub const ConstantKind = enum {
     Integer,
     Long,
 };
-pub const Constant = union(ConstantKind) {
-    Integer: u32,
-    Long: u64,
+pub const Constant = struct {
+    type: Type,
+    value: union(ConstantKind) {
+        Integer: u32,
+        Long: u64,
+    },
+};
+pub const Cast = struct {
+    type: Type,
+    value: *Expression,
 };
 
 pub const Expression = union(ExpressionType) {
@@ -660,14 +705,48 @@ pub const Expression = union(ExpressionType) {
     Unary: Unary,
     Binary: Binary,
     Ternary: Ternary,
-    Identifier: []u8,
+    Identifier: TypedIdentifier,
     Assignment: Assignment,
     FunctionCall: FunctionCall,
+    Cast: Cast,
+    const Self = @This();
+
+    pub fn getType(self: *Self) Type {
+        switch (self.*) {
+            .Cast => |cast| {
+                return cast.type;
+            },
+            .Assignment => |assignment| {
+                return assignment.type.?;
+            },
+            .Binary => |binary| {
+                return binary.type.?;
+            },
+            .FunctionCall => |fnCall| {
+                return fnCall.type.?;
+            },
+            .Identifier => |identifier| {
+                return identifier.type.?;
+            },
+            .Constant => |constant| {
+                return constant.type;
+            },
+            .Unary => |unary| {
+                return unary.type.?;
+            },
+            .Ternary => |ternary| {
+                return ternary.type.?;
+            },
+        }
+    }
 
     pub fn genTACInstructions(expression: *Expression, instructions: *std.ArrayList(*tac.Instruction), allocator: std.mem.Allocator) CodegenError!*tac.Val {
         switch (expression.*) {
+            .Cast => {
+                unreachable;
+            },
             .Constant => |constant| {
-                switch (constant) {
+                switch (constant.value) {
                     .Integer => |integer| {
                         const val = try allocator.create(tac.Val);
                         val.* = tac.Val{ .Constant = .{ .Integer = integer } };
@@ -822,7 +901,7 @@ pub const Expression = union(ExpressionType) {
             .Identifier => |iden| {
                 const tacVal = try allocator.create(tac.Val);
                 tacVal.* = tac.Val{
-                    .Variable = iden,
+                    .Variable = iden.name,
                 };
                 return tacVal;
             },
@@ -912,9 +991,9 @@ pub fn expressionScopeVariableResolve(self: *VarResolver, expression: *Expressio
     switch (expression.*) {
         .Constant => {},
         .Identifier => |identifier| {
-            if (self.lookup(identifier)) |resolvedSym| {
-                std.log.warn("resolved sym: {s} = {any}\n", .{ identifier, resolvedSym });
-                expression.Identifier = resolvedSym.newName;
+            if (self.lookup(identifier.name)) |resolvedSym| {
+                std.log.warn("resolved sym: {s} = {any}\n", .{ identifier.name, resolvedSym });
+                expression.Identifier.name = resolvedSym.newName;
             }
         },
         .Assignment => |assignment| {
@@ -937,6 +1016,9 @@ pub fn expressionScopeVariableResolve(self: *VarResolver, expression: *Expressio
             for (fnCall.args.items) |arg| {
                 try expressionScopeVariableResolve(self, arg, currentScope);
             }
+        },
+        .Cast => |cast| {
+            try expressionScopeVariableResolve(self, cast.value, currentScope);
         },
     }
 }

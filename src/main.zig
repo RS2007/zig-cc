@@ -4,26 +4,26 @@ const ast = @import("./AST.zig");
 const parser = @import("./parser.zig");
 const assembly = @import("./Assembly.zig");
 const semantic = @import("./semantic.zig");
-const logz = @import("logz");
+// const logz = @import("logz");
 
 pub fn main() !void {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     const allocator = arena.allocator();
     defer arena.deinit();
     // setup a log file, return a writer
-    try logz.setup(allocator, .{
-        .level = .Info,
-        .pool_size = 100,
-        .buffer_size = 4096,
-        .large_buffer_count = 8,
-        .large_buffer_size = 16384,
-        .output = .{
-            .file = "log.txt",
-        },
-        .encoding = .logfmt,
-    });
-    defer logz.deinit();
-    logz.info().string("Key", "Hello World").log();
+    //try logz.setup(allocator, .{
+    //    .level = .Info,
+    //    .pool_size = 100,
+    //    .buffer_size = 4096,
+    //    .large_buffer_count = 8,
+    //    .large_buffer_size = 16384,
+    //    .output = .{
+    //        .file = "log.txt",
+    //    },
+    //    .encoding = .logfmt,
+    //});
+    //defer logz.deinit();
+    //logz.info().string("Key", "Hello World").log();
 
     // Access argv[1]
     const args = try std.process.argsAlloc(allocator);

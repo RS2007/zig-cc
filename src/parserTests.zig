@@ -254,7 +254,7 @@ test "parse factor" {
     var p2 = try parser.Parser.init(allocator, l2);
     const factor2 = try p2.parseFactor();
     _ = try std.testing.expectEqual(factor2.Unary.unaryOp, ast.UnaryOp.NEGATE);
-    _ = try std.testing.expectEqual(factor2.Unary.exp.Constant.Integer, 42);
+    _ = try std.testing.expectEqual(factor2.Unary.exp.Constant.value.Integer, 42);
 }
 
 test "parsing expression with precedence" {
@@ -293,7 +293,7 @@ test "precedence with >= and <=" {
     std.log.warn("Binary lhs: \x1b[34m{any}\x1b[0m", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[0].Statement.Return.expression.Binary.lhs});
     std.log.warn("\x1b[34m{any}\x1b[0m", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[0].Statement.Return.expression.Binary.lhs.Binary.lhs});
     std.log.warn("\x1b[34m{any}\x1b[0m", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[0].Statement.Return.expression.Binary.lhs.Binary.rhs});
-    std.log.warn("\x1b[34m{any}\x1b[0m", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[0].Statement.Return.expression.Binary.rhs.Constant.Integer});
+    std.log.warn("\x1b[34m{any}\x1b[0m", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[0].Statement.Return.expression.Binary.rhs.Constant.value.Integer});
 }
 
 test "parsing declarations and statements" {
@@ -321,7 +321,7 @@ test "parsing declarations right associativity" {
     std.log.warn("\x1b[34m{any}\x1b[0m", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[1]});
     std.log.warn("\x1b[34m{s}\x1b[0m", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[1].Declaration.name});
     std.log.warn("\x1b[34m{any}\x1b[0m", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[1].Declaration.expression});
-    std.log.warn("\x1b[34m{s}\x1b[0m", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[1].Declaration.expression.?.Assignment.lhs.Identifier});
+    std.log.warn("\x1b[34m{any}\x1b[0m", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[1].Declaration.expression.?.Assignment.lhs.Identifier});
     std.log.warn("\x1b[34m{any}\x1b[0m", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[1].Declaration.expression.?.Assignment.rhs});
 }
 
@@ -529,7 +529,7 @@ test "parsing long declarations" {
     const declaration = try p.parseDeclaration();
     _ = try std.testing.expectEqual(declaration.type, ast.Type.Long);
     _ = try std.testing.expectEqualStrings(declaration.name, "k");
-    _ = try std.testing.expectEqual(declaration.expression.?.Constant.Long, 32);
+    _ = try std.testing.expectEqual(declaration.expression.?.Constant.value.Long, 32);
 }
 
 test "parse function args as long" {

@@ -286,7 +286,7 @@ pub const Parser = struct {
         }
         const semicolon1 = try self.l.nextToken(self.allocator);
         if (semicolon1.type != lexer.TokenType.SEMICOLON) {
-            std.log.warn("Semicolon expected, found {any}\n", .{semicolon1.type});
+            //std.log.warn("Semicolon expected, found {any}\n", .{semicolon1.type});
             unreachable;
         }
         return forInit;
@@ -393,19 +393,19 @@ pub const Parser = struct {
                 var condition: ?*AST.Expression = null;
                 var post: ?*AST.Expression = null;
                 if (peeked != null and peeked.?.type != lexer.TokenType.SEMICOLON) {
-                    std.log.warn("Parsing condition", .{});
+                    // std.log.warn("Parsing condition", .{});
                     condition = try self.parseExpression(0);
                 }
                 const semicolon = try self.l.nextToken(self.allocator);
                 std.debug.assert(semicolon.type == lexer.TokenType.SEMICOLON);
                 peeked = try self.l.peekToken(self.allocator);
                 if (peeked != null and peeked.?.type != lexer.TokenType.RPAREN) {
-                    std.log.warn("Parsing post", .{});
+                    // std.log.warn("Parsing post", .{});
                     post = try self.parseExpression(0);
                 }
                 const rparen = try self.l.nextToken(self.allocator);
                 if (rparen.type != lexer.TokenType.RPAREN) {
-                    std.log.warn("RParen expected, found {any}\n", .{rparen.type});
+                    // std.log.warn("RParen expected, found {any}\n", .{rparen.type});
                     unreachable;
                 }
                 const body = try self.parseStatement();
@@ -422,7 +422,7 @@ pub const Parser = struct {
                 return forStmt;
             },
             .BREAK => {
-                std.log.warn("Break statement\n", .{});
+                // std.log.warn("Break statement\n", .{});
                 _ = try self.l.nextToken(self.allocator);
                 const semicolon = try self.l.nextToken(self.allocator);
                 std.debug.assert(semicolon.type == lexer.TokenType.SEMICOLON);
@@ -462,7 +462,7 @@ pub const Parser = struct {
                         const colon = try self.l.nextToken(self.allocator);
                         std.debug.assert(colon.type == lexer.TokenType.COLON);
                         const labelStmt = try self.allocator.create(AST.Statement);
-                        std.log.warn("Found label: {s}\n", .{self.l.buffer[identifier.start .. identifier.end + 1]});
+                        // std.log.warn("Found label: {s}\n", .{self.l.buffer[identifier.start .. identifier.end + 1]});
                         labelStmt.* = AST.Statement{
                             .Label = self.l.buffer[identifier.start .. identifier.end + 1],
                         };
@@ -503,7 +503,8 @@ pub const Parser = struct {
                 const integerNode = try self.allocator.create(AST.Expression);
                 const suffixRemovedSlice = if (self.l.buffer[currToken.end - 1] == 'L') self.l.buffer[currToken.start .. currToken.end - 1] else self.l.buffer[currToken.start..currToken.end];
                 integerNode.* = AST.Expression{ .Constant = AST.Constant{
-                    .Long = try std.fmt.parseInt(u64, suffixRemovedSlice, 10),
+                    .type = .Long,
+                    .value = .{ .Long = try std.fmt.parseInt(u64, suffixRemovedSlice, 10) },
                 } };
                 return integerNode;
             },
@@ -512,7 +513,8 @@ pub const Parser = struct {
                 const integerNode = try self.allocator.create(AST.Expression);
                 integerNode.* = AST.Expression{
                     .Constant = AST.Constant{
-                        .Integer = try std.fmt.parseInt(u32, self.l.buffer[currToken.start .. currToken.end + 1], 10),
+                        .type = .Integer,
+                        .value = .{ .Integer = try std.fmt.parseInt(u32, self.l.buffer[currToken.start .. currToken.end + 1], 10) },
                     },
                 };
                 return integerNode;
@@ -560,7 +562,7 @@ pub const Parser = struct {
                 // Identifier
                 const currToken = try self.l.nextToken(self.allocator);
                 const identifier = try self.allocator.create(AST.Expression);
-                identifier.* = AST.Expression{ .Identifier = self.l.buffer[currToken.start .. currToken.end + 1] };
+                identifier.* = AST.Expression{ .Identifier = .{ .name = self.l.buffer[currToken.start .. currToken.end + 1] } };
                 return identifier;
             },
             else => |tokType| {
@@ -617,7 +619,7 @@ pub const Parser = struct {
             .LOGIC_AND => AST.BinOp.LOGIC_AND,
             .LOGIC_OR => AST.BinOp.LOGIC_OR,
             else => {
-                std.log.warn("Found in binaryOpFromTokType unhandled {}\n", .{tok});
+                //std.log.warn("Found in binaryOpFromTokType unhandled {}\n", .{tok});
                 unreachable;
             },
         };
