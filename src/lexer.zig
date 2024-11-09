@@ -202,6 +202,9 @@ pub const Lexer = struct {
             '!' => {
                 return (try createDoubleWidthToken(&[_]u8{'='}, &[_]TokenType{TokenType.NOT_EQUALS}, TokenType.NOT, allocator, lexer));
             },
+            '/' => {
+                return (try createSingleWidthToken(TokenType.DIVIDE, allocator, lexer));
+            },
             else => {
                 if (std.ascii.isDigit(lexer.buffer[lexer.current])) {
                     var token = try allocator.create(Token);
@@ -336,6 +339,9 @@ pub const Lexer = struct {
             },
             '}' => {
                 nextSingleWidthTokMacro(TokenType.RBRACE, token, lexer);
+            },
+            '/' => {
+                nextSingleWidthTokMacro(TokenType.DIVIDE, token, lexer);
             },
             ';' => {
                 nextSingleWidthTokMacro(TokenType.SEMICOLON, token, lexer);

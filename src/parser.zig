@@ -171,7 +171,7 @@ pub const Parser = struct {
         const blockItem = try self.allocator.create(AST.BlockItem);
         if (nextToken) |nextTok| {
             switch (nextTok.type) {
-                .EXTERN, .STATIC, .INT_TYPE => {
+                .EXTERN, .STATIC, .INT_TYPE, .LONG_TYPE => {
                     blockItem.* = AST.BlockItem{
                         .Declaration = (try self.parseDeclaration()),
                     };
@@ -255,6 +255,7 @@ pub const Parser = struct {
                         _ = try self.l.nextToken(self.allocator);
                         const expression = try self.parseExpression(0);
                         declaration.expression = expression;
+                        std.log.warn("var {s} = expression: {any}\n", .{ self.l.buffer[identifier.start .. identifier.end + 1], expression });
                         const peekedSemicolon = try self.l.peekToken(self.allocator);
                         std.debug.assert(peekedSemicolon.?.type == lexer.TokenType.SEMICOLON);
                         return declaration;
@@ -644,6 +645,7 @@ pub const Parser = struct {
                         .lhs = lhs,
                         .rhs = rhs,
                     } };
+                    std.log.warn("This: {any}\n", .{expr});
                     return expr;
                 },
                 .ASSIGN => {
@@ -685,6 +687,7 @@ pub const Parser = struct {
                     return lhs;
                 }
                 const hasPeekedPrecedence = getPrecedence(peeked.type);
+                std.log.warn("Precedence: {any} and peeked type: {s}\n", .{ peeked, self.l.buffer[peeked.start .. peeked.end + 1] });
                 if (hasPeekedPrecedence == null) {
                     //logz.info().fmt("parseExpression", "exited cause of no precdence for token and token={any}\n", .{peeked}).log();
                     return lhs;

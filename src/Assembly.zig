@@ -9,7 +9,7 @@ inline fn abs(src: i32) u32 {
 pub const Program = struct {
     topLevelDecls: std.ArrayList(*TopLevelDecl),
     const Self = @This();
-    pub fn stringify(self: *Self, writer: std.fs.File.Writer, allocator: std.mem.Allocator) !void {
+    pub fn stringify(self: *Self, writer: std.fs.File.Writer, allocator: std.mem.Allocator, asmSymbolTable: std.StringHashMap(*Symbol)) !void {
         try writer.writeAll(
             \\ .section .note.GNU-stack,"",@progbits
             \\ .section .text
@@ -19,7 +19,7 @@ pub const Program = struct {
         for (self.topLevelDecls.items) |topLevelDecl| {
             switch (topLevelDecl.*) {
                 .Function => |function| {
-                    try replacePseudoRegs(function, allocator);
+                    try replacePseudoRegs(function, allocator, asmSymbolTable);
                     const fixedAsmInstructions = try fixupInstructions(&function.instructions, allocator);
                     function.instructions = fixedAsmInstructions;
                     const fnString = try function.stringify(allocator);
@@ -39,6 +39,17 @@ pub const Program = struct {
 pub const TopLevelDeclType = enum {
     Function,
     StaticVar,
+};
+
+pub const AsmType = enum {
+    LongWord,
+    QuadWord,
+    pub fn suffix(asmType: AsmType) u8 {
+        return switch (asmType) {
+            .LongWord => 'l',
+            .QuadWord => 'q',
+        };
+    }
 };
 
 pub const TopLevelDecl = union(TopLevelDeclType) {
@@ -69,10 +80,34 @@ pub const Function = struct {
     }
 };
 
+pub const Symbol = union(enum) {
+    Function: struct {
+        defined: bool,
+        //INFO: Is function defined in the translation unit? If
+        //not then its from libc
+    },
+    Obj: struct {
+        type: AsmType,
+        static: bool,
+    },
+};
+
+pub const StaticInit = union(enum) {
+    Integer: u32,
+    Long: u64,
+
+    pub fn isZero(self: StaticInit) bool {
+        return switch (self) {
+            .Integer => |integer| integer == 0,
+            .Long => |long| long == 0,
+        };
+    }
+};
+
 pub const StaticVar = struct {
     name: []u8,
     global: bool,
-    init: u64 = 0,
+    init: StaticInit,
     alignment: u32,
     const Self = @This();
     pub fn stringify(self: *Self, allocator: std.mem.Allocator) ![]u8 {
@@ -89,9 +124,9 @@ pub const StaticVar = struct {
         , .{
             if (self.global) ".globl" else ".local",
             self.name,
-            if (self.init == 0) ".bss" else ".data",
+            if (self.init.isZero()) ".bss" else ".data",
             self.name,
-            if (self.init == 0) ".zero" else ".long",
+            if (self.init.isZero()) ".zero" else ".long",
         });
         try buf.appendSlice(code);
 
@@ -111,6 +146,8 @@ pub const Reg = enum {
     R8,
     R9,
     EAX,
+    R11_64, // TODO: Rename this later
+    R10_64,
     pub fn stringify(register: Reg, allocator: std.mem.Allocator) ast.CodegenError![]u8 {
         switch (register) {
             .AX => {
@@ -119,11 +156,17 @@ pub const Reg = enum {
             .R10 => {
                 return (try std.fmt.allocPrint(allocator, "%r10d", .{}));
             },
+            .R10_64 => {
+                return (try std.fmt.allocPrint(allocator, "%r10", .{}));
+            },
             .DX => {
                 return (try std.fmt.allocPrint(allocator, "%edx", .{}));
             },
             .R11 => {
                 return (try std.fmt.allocPrint(allocator, "%r11d", .{}));
+            },
+            .R11_64 => {
+                return (try std.fmt.allocPrint(allocator, "%r11", .{}));
             },
             .EDI => {
                 return (try std.fmt.allocPrint(allocator, "%edi", .{}));
@@ -187,7 +230,7 @@ pub const CondCode = enum {
 pub const OperandType = enum { Imm, Reg, Pseudo, Data, Stack };
 
 pub const Operand = union(OperandType) {
-    Imm: u32,
+    Imm: u64,
     Reg: Reg,
     Pseudo: []u8,
     Data: []u8,
@@ -250,27 +293,32 @@ pub const InstructionType = enum {
     SetCC,
     Label,
     FnCall,
+    Movsx,
 };
 
 pub const MovInst = struct {
     src: Operand,
     dest: Operand,
+    type: AsmType,
 };
 
 pub const UnaryInst = struct {
     op: UnaryOp,
     rhs: Operand,
+    type: AsmType,
 };
 
 pub const BinaryInst = struct {
     op: BinaryOp,
     lhs: Operand,
     rhs: Operand,
+    type: AsmType,
 };
 
 pub const Cmp = struct {
     op1: Operand,
     op2: Operand,
+    type: AsmType,
 };
 pub const JmpCC = struct {
     code: CondCode,
@@ -286,6 +334,16 @@ pub const FnCall = struct {
     name: []u8,
 };
 
+pub const Idiv = struct {
+    src: Operand,
+    type: AsmType,
+};
+
+pub const Movsx = struct {
+    src: Operand,
+    dest: Operand,
+};
+
 pub const Instruction = union(InstructionType) {
     Mov: MovInst,
     Unary: UnaryInst,
@@ -293,18 +351,20 @@ pub const Instruction = union(InstructionType) {
     Ret: void,
     Binary: BinaryInst,
     Idiv: Operand,
-    Cdq: void,
+    Cdq: AsmType,
     Cmp: Cmp,
     Jmp: []u8,
     JmpCC: JmpCC,
     SetCC: SetCC,
     Label: []u8,
     FnCall: FnCall,
+    Movsx: Movsx,
 
     pub fn stringify(instruction: *Instruction, allocator: std.mem.Allocator) ast.CodegenError![]u8 {
         switch (instruction.*) {
             .Mov => |mov| {
-                return (try std.fmt.allocPrint(allocator, "movl {s},{s}", .{ try Operand.stringify(@constCast(&mov.src), allocator), try Operand.stringify(@constCast(&mov.dest), allocator) }));
+                std.log.warn("Mov stringify: {any}\n", .{mov});
+                return (try std.fmt.allocPrint(allocator, "mov{c} {s},{s}", .{ mov.type.suffix(), try Operand.stringify(@constCast(&mov.src), allocator), try Operand.stringify(@constCast(&mov.dest), allocator) }));
             },
             .Unary => |unary| {
                 switch (unary.op) {
@@ -338,7 +398,7 @@ pub const Instruction = union(InstructionType) {
             .Cmp => |cmp| {
                 const op1Stringified = try @constCast(&cmp.op1).stringify(allocator);
                 const op2Stringified = try @constCast(&cmp.op2).stringify(allocator);
-                return (try std.fmt.allocPrint(allocator, "cmpl {s},{s}", .{ op1Stringified, op2Stringified }));
+                return (try std.fmt.allocPrint(allocator, "cmp{c} {s},{s}", .{ cmp.type.suffix(), op1Stringified, op2Stringified }));
             },
             .Jmp => |jmpLabel| {
                 return (try std.fmt.allocPrint(allocator, "jmp .L{s}", .{jmpLabel}));
@@ -356,6 +416,10 @@ pub const Instruction = union(InstructionType) {
             },
             .FnCall => |fnCall| {
                 return (try std.fmt.allocPrint(allocator, "call {s}", .{fnCall.name}));
+            },
+            .Movsx => |movsx| {
+                std.log.warn("Hey I am hit\n", .{});
+                return (try std.fmt.allocPrint(allocator, "movsx {s},{s}", .{ try Operand.stringify(@constCast(&movsx.src), allocator), try Operand.stringify(@constCast(&movsx.dest), allocator) }));
             },
         }
     }
@@ -385,16 +449,30 @@ pub fn fixupInstructions(instructions: *std.ArrayList(*Instruction), allocator: 
                     .Data => {
                         isDestStack = true;
                     },
+                    .Pseudo => {
+                        unreachable;
+                    },
                     else => {},
                 }
                 if (isSrcStack and isDestStack) {
                     //_ = instructions.orderedRemove(i);
                     const movInstSrc = try allocator.create(Instruction);
                     const movInstDest = try allocator.create(Instruction);
-                    movInstSrc.* = Instruction{ .Mov = MovInst{ .src = mov.src, .dest = Operand{ .Reg = Reg.R10 } } };
+                    movInstSrc.* = Instruction{ .Mov = MovInst{
+                        .src = mov.src,
+                        .dest = Operand{ .Reg = switch (mov.type) {
+                            .LongWord => Reg.R10,
+                            .QuadWord => Reg.R10_64,
+                        } },
+                        .type = mov.type,
+                    } };
                     movInstDest.* = Instruction{ .Mov = MovInst{
-                        .src = Operand{ .Reg = Reg.R10 },
+                        .src = Operand{ .Reg = switch (mov.type) {
+                            .LongWord => Reg.R10,
+                            .QuadWord => Reg.R10_64,
+                        } },
                         .dest = mov.dest,
+                        .type = mov.type,
                     } };
                     try fixedInstructions.append(
                         movInstSrc,
@@ -408,6 +486,9 @@ pub fn fixupInstructions(instructions: *std.ArrayList(*Instruction), allocator: 
                     continue;
                 }
             },
+            .Movsx => {
+                try fixedInstructions.append(inst);
+            },
             .Binary => |binary| {
                 if (binary.op == BinaryOp.Multiply) {
                     if (std.mem.eql(u8, @tagName(binary.lhs), "Stack")) {
@@ -416,12 +497,14 @@ pub fn fixupInstructions(instructions: *std.ArrayList(*Instruction), allocator: 
                             .Mov = MovInst{
                                 .dest = Operand{ .Reg = Reg.R11 },
                                 .src = inst.Binary.lhs,
+                                .type = binary.type,
                             },
                         };
                         const movR11ToLeft = try allocator.create(Instruction);
                         movR11ToLeft.* = Instruction{ .Mov = MovInst{
                             .dest = inst.Binary.lhs,
                             .src = Operand{ .Reg = Reg.R11 },
+                            .type = binary.type,
                         } };
                         inst.Binary.lhs = Operand{ .Reg = Reg.R11 };
                         try fixedInstructions.append(movLeftToR11);
@@ -437,11 +520,18 @@ pub fn fixupInstructions(instructions: *std.ArrayList(*Instruction), allocator: 
                     const cpInstruction = try allocator.create(Instruction);
                     cpInstruction.* = Instruction{
                         .Mov = .{
-                            .dest = Operand{ .Reg = Reg.R10 },
+                            .dest = Operand{ .Reg = switch (binary.type) {
+                                .LongWord => Reg.R10,
+                                .QuadWord => Reg.R10_64,
+                            } },
                             .src = binary.rhs,
+                            .type = binary.type,
                         },
                     };
-                    inst.Binary.rhs = Operand{ .Reg = Reg.R10 };
+                    inst.Binary.rhs = Operand{ .Reg = switch (binary.type) {
+                        .LongWord => Reg.R10,
+                        .QuadWord => Reg.R10_64,
+                    } };
                     try fixedInstructions.append(cpInstruction);
                     try fixedInstructions.append(inst);
                     continue;
@@ -454,9 +544,19 @@ pub fn fixupInstructions(instructions: *std.ArrayList(*Instruction), allocator: 
                 if (std.mem.eql(u8, @tagName(cmp.op1), "Stack") and std.mem.eql(u8, @tagName(cmp.op2), "Stack")) {
                     const movInst = try allocator.create(Instruction);
                     movInst.* = Instruction{
-                        .Mov = MovInst{ .src = cmp.op1, .dest = Operand{ .Reg = Reg.R10 } },
+                        .Mov = MovInst{
+                            .src = cmp.op1,
+                            .dest = Operand{ .Reg = switch (cmp.type) {
+                                .LongWord => Reg.R10,
+                                .QuadWord => Reg.R10_64,
+                            } },
+                            .type = cmp.type,
+                        },
                     };
-                    inst.Cmp.op1 = Operand{ .Reg = Reg.R10 };
+                    inst.Cmp.op1 = Operand{ .Reg = switch (cmp.type) {
+                        .LongWord => Reg.R10,
+                        .QuadWord => Reg.R10_64,
+                    } };
                     try fixedInstructions.append(movInst);
                     try fixedInstructions.append(inst);
                     continue;
@@ -476,7 +576,7 @@ pub fn fixupInstructions(instructions: *std.ArrayList(*Instruction), allocator: 
     return fixedInstructions;
 }
 
-pub fn replacePseudoRegs(function: *Function, allocator: std.mem.Allocator) ast.CodegenError!void {
+pub fn replacePseudoRegs(function: *Function, allocator: std.mem.Allocator, asmSymbolTable: std.StringHashMap(*Symbol)) ast.CodegenError!void {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     const hashAllocator = arena.allocator();
     defer arena.deinit();
@@ -485,12 +585,16 @@ pub fn replacePseudoRegs(function: *Function, allocator: std.mem.Allocator) ast.
     for (function.instructions.items, 0..) |inst, i| {
         switch (inst.*) {
             .Mov => |mov| {
+                std.log.warn("Mov: {any}\n", .{mov});
                 switch (mov.src) {
                     .Pseudo => |pseudo| {
                         if (lookup.contains(pseudo)) {
                             inst.Mov.src = Operand{ .Stack = lookup.get(pseudo).? };
                         } else {
-                            topOfStack -= 4;
+                            topOfStack -= switch (asmSymbolTable.get(pseudo).?.Obj.type) {
+                                .QuadWord => 8,
+                                .LongWord => 4,
+                            };
                             try lookup.put(
                                 pseudo,
                                 topOfStack,
@@ -505,12 +609,54 @@ pub fn replacePseudoRegs(function: *Function, allocator: std.mem.Allocator) ast.
                         if (lookup.contains(pseudo)) {
                             inst.Mov.dest = Operand{ .Stack = lookup.get(pseudo).? };
                         } else {
-                            topOfStack -= 4;
+                            topOfStack -= switch (asmSymbolTable.get(pseudo).?.Obj.type) {
+                                .QuadWord => 8,
+                                .LongWord => 4,
+                            };
                             try lookup.put(
                                 pseudo,
                                 topOfStack,
                             );
                             inst.Mov.dest = Operand{ .Stack = topOfStack };
+                        }
+                    },
+                    else => {},
+                }
+                std.log.warn("Transformed Mov: {any}\n", .{inst.Mov});
+            },
+            .Movsx => |mov| {
+                switch (mov.src) {
+                    .Pseudo => |pseudo| {
+                        if (lookup.contains(pseudo)) {
+                            inst.Movsx.src = Operand{ .Stack = lookup.get(pseudo).? };
+                        } else {
+                            topOfStack -= switch (asmSymbolTable.get(pseudo).?.Obj.type) {
+                                .QuadWord => 8,
+                                .LongWord => 4,
+                            };
+                            try lookup.put(
+                                pseudo,
+                                topOfStack,
+                            );
+                            inst.Movsx.src = Operand{ .Stack = topOfStack };
+                        }
+                    },
+                    else => {},
+                }
+                switch (mov.dest) {
+                    .Pseudo => |pseudo| {
+                        if (lookup.contains(pseudo)) {
+                            inst.Movsx.dest = Operand{ .Stack = lookup.get(pseudo).? };
+                        } else {
+                            topOfStack -= switch (asmSymbolTable.get(pseudo).?.Obj.type) {
+                                .QuadWord => 8,
+                                .LongWord => 4,
+                            };
+                            try lookup.put(
+                                pseudo,
+                                topOfStack,
+                            );
+                            inst.Movsx.dest = Operand{ .Stack = topOfStack };
                         }
                     },
                     else => {},
@@ -523,7 +669,10 @@ pub fn replacePseudoRegs(function: *Function, allocator: std.mem.Allocator) ast.
                             inst.Unary.rhs = Operand{ .Stack = lookup.get(pseudo).? };
                             continue;
                         } else {
-                            topOfStack -= 4;
+                            topOfStack -= switch (asmSymbolTable.get(pseudo).?.Obj.type) {
+                                .QuadWord => 8,
+                                .LongWord => 4,
+                            };
                             try lookup.put(
                                 pseudo,
                                 topOfStack,
@@ -540,7 +689,10 @@ pub fn replacePseudoRegs(function: *Function, allocator: std.mem.Allocator) ast.
                         if (lookup.contains(pseudo)) {
                             inst.Binary.lhs = Operand{ .Stack = lookup.get(pseudo).? };
                         } else {
-                            topOfStack -= 4;
+                            topOfStack -= switch (asmSymbolTable.get(pseudo).?.Obj.type) {
+                                .QuadWord => 8,
+                                .LongWord => 4,
+                            };
                             try lookup.put(
                                 pseudo,
                                 topOfStack,
@@ -555,7 +707,10 @@ pub fn replacePseudoRegs(function: *Function, allocator: std.mem.Allocator) ast.
                         if (lookup.contains(pseudo)) {
                             inst.Binary.rhs = Operand{ .Stack = lookup.get(pseudo).? };
                         } else {
-                            topOfStack -= 4;
+                            topOfStack -= switch (asmSymbolTable.get(pseudo).?.Obj.type) {
+                                .QuadWord => 8,
+                                .LongWord => 4,
+                            };
                             try lookup.put(
                                 pseudo,
                                 topOfStack,
@@ -575,6 +730,7 @@ pub fn replacePseudoRegs(function: *Function, allocator: std.mem.Allocator) ast.
                             movIdivArgToR10.* = Instruction{ .Mov = MovInst{
                                 .src = idiv,
                                 .dest = Operand{ .Reg = Reg.R10 },
+                                .type = AsmType.LongWord,
                             } };
                             try function.instructions.insert(
                                 i,
@@ -586,8 +742,18 @@ pub fn replacePseudoRegs(function: *Function, allocator: std.mem.Allocator) ast.
                     .Pseudo => |pseudo| {
                         const movIdivArgToR10 = try allocator.create(Instruction);
                         movIdivArgToR10.* = Instruction{ .Mov = MovInst{
-                            .src = Operand{ .Pseudo = pseudo },
+                            .src = if (lookup.contains(pseudo))
+                                Operand{ .Stack = lookup.get(pseudo).? }
+                            else blk: {
+                                topOfStack -= switch (asmSymbolTable.get(pseudo).?.Obj.type) {
+                                    .QuadWord => 8,
+                                    .LongWord => 4,
+                                };
+                                try lookup.put(pseudo, topOfStack);
+                                break :blk Operand{ .Stack = topOfStack };
+                            },
                             .dest = Operand{ .Reg = Reg.R10 },
+                            .type = AsmType.LongWord,
                         } };
                         try function.instructions.insert(
                             i,
@@ -600,6 +766,7 @@ pub fn replacePseudoRegs(function: *Function, allocator: std.mem.Allocator) ast.
                         movIdivArgToR10.* = Instruction{ .Mov = MovInst{
                             .src = Operand{ .Imm = imm },
                             .dest = Operand{ .Reg = Reg.R10 },
+                            .type = AsmType.LongWord,
                         } };
                         try function.instructions.insert(
                             i,
@@ -622,7 +789,10 @@ pub fn replacePseudoRegs(function: *Function, allocator: std.mem.Allocator) ast.
                         if (lookup.contains(pseudo)) {
                             inst.Cmp.op1 = Operand{ .Stack = lookup.get(pseudo).? };
                         } else {
-                            topOfStack -= 4;
+                            topOfStack -= switch (asmSymbolTable.get(pseudo).?.Obj.type) {
+                                .QuadWord => 8,
+                                .LongWord => 4,
+                            };
                             try lookup.put(
                                 pseudo,
                                 topOfStack,
@@ -638,7 +808,10 @@ pub fn replacePseudoRegs(function: *Function, allocator: std.mem.Allocator) ast.
                             inst.Cmp.op2 = Operand{ .Stack = lookup.get(pseudo).? };
                             continue;
                         } else {
-                            topOfStack -= 4;
+                            topOfStack -= switch (asmSymbolTable.get(pseudo).?.Obj.type) {
+                                .QuadWord => 8,
+                                .LongWord => 4,
+                            };
                             try lookup.put(
                                 pseudo,
                                 topOfStack,
@@ -656,7 +829,10 @@ pub fn replacePseudoRegs(function: *Function, allocator: std.mem.Allocator) ast.
                             inst.SetCC.dest = Operand{ .Stack = lookup.get(pseudo).? };
                             continue;
                         } else {
-                            topOfStack -= 4;
+                            topOfStack -= switch (asmSymbolTable.get(pseudo).?.Obj.type) {
+                                .QuadWord => 8,
+                                .LongWord => 4,
+                            };
                             try lookup.put(
                                 pseudo,
                                 topOfStack,
@@ -681,5 +857,9 @@ pub fn replacePseudoRegs(function: *Function, allocator: std.mem.Allocator) ast.
             0,
             allocateStackInst,
         );
+        var lookupIter = lookup.iterator();
+        while (lookupIter.next()) |entry| {
+            std.log.warn("{s}: {}\n", .{ entry.key_ptr.*, entry.value_ptr.* });
+        }
     }
 }

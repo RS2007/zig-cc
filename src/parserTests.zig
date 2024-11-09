@@ -545,3 +545,23 @@ test "parse function args as long" {
     _ = try std.testing.expectEqual(decl.FunctionDecl.args.items[1].NonVoidArg.type, ast.Type.Long);
     _ = try std.testing.expectEqualStrings(decl.FunctionDecl.args.items[1].NonVoidArg.identifier, "b");
 }
+
+test "divide" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const programStr = "int p = k / i ;";
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    _ = try p.parseDeclaration();
+}
+
+test "long declarations and divide" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const programStr = "int main(){ long k = 3; int i = 7; int result = k / i; return result; }";
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    _ = try p.parseProgram();
+}

@@ -231,6 +231,7 @@ pub fn typecheckExternalDecl(self: *Typechecker, externalDecl: *AST.ExternalDecl
                     },
                     .attributes = .LocalAttr,
                 };
+                std.log.warn("Pushing in {any}\n", .{arg.NonVoidArg.identifier});
                 try self.symbolTable.put(arg.NonVoidArg.identifier, argSym);
             }
             for (functionDecl.blockItems.items) |blk| {
@@ -282,7 +283,12 @@ pub fn typecheckExternalDecl(self: *Typechecker, externalDecl: *AST.ExternalDecl
 
                 // INFO: Assign the expression value to the decl
                 // TODO: accomodate longs
-                initializer = .{ .Initial = .{ .type = .Integer, .value = .{ .Integer = expression.Constant.value.Integer } } };
+
+                initializer = .{ .Initial = switch (expression.getType()) {
+                    .Integer => .{ .type = .Integer, .value = .{ .Integer = expression.Constant.value.Integer } },
+                    .Long => .{ .type = .Long, .value = .{ .Long = expression.Constant.value.Long } },
+                    else => unreachable,
+                } };
 
                 // INFO: Extern decls no assignment check
                 if (varDecl.storageClass == AST.Qualifier.EXTERN) {
@@ -823,9 +829,17 @@ fn typecheckExpr(self: *Typechecker, expr: *AST.Expression) TypeError!AST.Type {
                         break :blk AST.Type.Integer;
                     }
                 },
-                else => AST.Type.Integer,
+                else => blk: {
+                    expr.Binary.lhs = try convert(self.allocator, expr.Binary.lhs, AST.Type.Long);
+                    expr.Binary.rhs = try convert(self.allocator, expr.Binary.rhs, AST.Type.Long);
+                    break :blk AST.Type.Integer;
+                },
             };
 
+            std.log.warn("Returning from binary expr({any}): {any}\n", .{
+                expr.Binary.op,
+                expr.Binary.type.?,
+            });
             return expr.Binary.type.?;
         },
         .FunctionCall => |fnCall| {
@@ -838,14 +852,16 @@ fn typecheckExpr(self: *Typechecker, expr: *AST.Expression) TypeError!AST.Type {
                 return TypeError.TypeMismatch;
             }
             _ = try convert(self.allocator, expr, fnSymbol.typeInfo.Function.returnType);
+            expr.FunctionCall.type = fnSymbol.typeInfo.Function.returnType;
             return fnSymbol.typeInfo.Function.returnType;
         },
         .Identifier => |identifier| {
             const symbol = if (self.symbolTable.get(identifier.name)) |sym| sym else {
-                // std.log.warn("Unknown identifier: {any}\n", .{identifier.name});
+                std.log.warn("Unknown identifier: {s}\n", .{identifier.name});
                 return TypeError.UnknownIdentifier;
             };
             const astType = AST.Type.fromSemType(symbol.typeInfo);
+            std.log.warn("Identifier({s}) type registered as: {any}", .{ identifier.name, symbol.typeInfo });
             expr.Identifier.type = astType;
             return astType;
         },
@@ -869,6 +885,7 @@ fn typecheckExpr(self: *Typechecker, expr: *AST.Expression) TypeError!AST.Type {
             std.debug.assert(lhsType == AST.Type.Integer);
             const rhsType = try typecheckExpr(self, ternary.rhs);
             std.debug.assert(rhsType == AST.Type.Integer);
+            expr.Ternary.type = AST.Type.Integer;
             return AST.Type.Integer;
         },
     }

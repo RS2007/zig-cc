@@ -5,6 +5,10 @@ const lexer = @import("./lexer.zig");
 const parser = @import("./parser.zig");
 const semantic = @import("./semantic.zig");
 
+pub const FnArg = struct {
+    name: []u8,
+    type: ConstantType,
+};
 pub const FunctionDef = struct {
     name: []u8,
     global: bool,
@@ -23,24 +27,60 @@ pub const StaticVar = struct {
     type: ConstantType,
 };
 
-pub const Program = struct {
-    topLevelDecls: std.ArrayList(*TopLevel),
-    symbolTable: std.StringHashMap(*semantic.Symbol),
-    pub fn codegen(self: *Program, allocator: std.mem.Allocator) !*assembly.Program {
-        const topLevelDecls = std.ArrayList(*assembly.TopLevelDecl).init(allocator);
-        const asmProgram = try allocator.create(assembly.Program);
+pub fn astSymTabToTacSymTab(allocator: std.mem.Allocator, astSymTab: std.StringHashMap(*semantic.Symbol)) ast.CodegenError!std.StringHashMap(*assembly.Symbol) {
+    var asmSymTab = std.StringHashMap(*assembly.Symbol).init(astSymTab.allocator);
+    var astSymTabIter = astSymTab.iterator();
+    while (astSymTabIter.next()) |entry| {
+        const symName = entry.key_ptr.*;
+        const sym = entry.value_ptr.*;
+        const asmSymbol = try allocator.create(assembly.Symbol);
+        asmSymbol.* = switch (sym.typeInfo) {
+            .Integer => .{ .Obj = .{
+                .type = assembly.AsmType.LongWord,
+                .static = std.mem.eql(u8, @tagName(sym.attributes), "StaticAttr"),
+            } },
+            .Long => .{ .Obj = .{
+                .type = assembly.AsmType.QuadWord,
+                .static = std.mem.eql(u8, @tagName(sym.attributes), "StaticAttr"),
+            } },
+            .Function => .{ .Function = .{
+                .defined = sym.attributes.FunctionAttr.defined,
+            } },
+            .Void => unreachable,
+        };
+        try asmSymTab.put(
+            @constCast(symName),
+            asmSymbol,
+        );
+    }
+    return asmSymTab;
+}
+pub const AsmRenderer = struct {
+    asmSymbolTable: std.StringHashMap(*assembly.Symbol),
+    allocator: std.mem.Allocator,
+    pub fn init(allocator: std.mem.Allocator, astSymTab: std.StringHashMap(*assembly.Symbol)) ast.CodegenError!*AsmRenderer {
+        const asmRenderer = try allocator.create(AsmRenderer);
+        asmRenderer.* = .{
+            .asmSymbolTable = astSymTab,
+            .allocator = allocator,
+        };
+        return asmRenderer;
+    }
+    pub fn render(self: *AsmRenderer, program: *Program) !*assembly.Program {
+        const topLevelDecls = std.ArrayList(*assembly.TopLevelDecl).init(self.allocator);
+        const asmProgram = try self.allocator.create(assembly.Program);
         asmProgram.* = assembly.Program{ .topLevelDecls = topLevelDecls };
-        for (self.topLevelDecls.items) |topLevelDecl| {
-            const asmTopLevelDecl = try allocator.create(assembly.TopLevelDecl);
+        for (program.topLevelDecls.items) |topLevelDecl| {
+            const asmTopLevelDecl = try self.allocator.create(assembly.TopLevelDecl);
             switch (topLevelDecl.*) {
                 .StaticVar => |statItem| {
-                    const staticVar = try allocator.create(assembly.StaticVar);
+                    const staticVar = try self.allocator.create(assembly.StaticVar);
                     staticVar.* = .{
                         .name = statItem.name,
                         .global = statItem.global,
-                        .init = @intCast(switch (statItem.type) {
-                            .Integer => statItem.init.Integer,
-                            .Long => statItem.init.Long,
+                        .init = (switch (statItem.type) {
+                            .Integer => .{ .Integer = statItem.init.Integer },
+                            .Long => .{ .Long = statItem.init.Long },
                         }),
                         .alignment = switch (statItem.type) {
                             .Integer => 4,
@@ -53,23 +93,28 @@ pub const Program = struct {
                     try asmProgram.topLevelDecls.append(asmTopLevelDecl);
                 },
                 .Function => |fnItem| {
-                    const func = try allocator.create(assembly.Function);
+                    const func = try self.allocator.create(assembly.Function);
                     func.* = .{
                         .name = fnItem.name,
-                        .instructions = std.ArrayList(*assembly.Instruction).init(allocator),
+                        .instructions = std.ArrayList(*assembly.Instruction).init(self.allocator),
                         .args = fnItem.args,
                     };
                     const registers = [_]assembly.Reg{ assembly.Reg.EDI, assembly.Reg.ESI, assembly.Reg.EDX, assembly.Reg.ECX, assembly.Reg.R8, assembly.Reg.R9 };
                     for (fnItem.args.items, 0..) |arg, i| {
-                        const movInstructoin = try allocator.create(assembly.Instruction);
+                        const movInstructoin = try self.allocator.create(assembly.Instruction);
+                        const resolvedArgSym = self.asmSymbolTable.get(arg).?;
                         movInstructoin.* = assembly.Instruction{ .Mov = assembly.MovInst{
+                            .type = switch (resolvedArgSym.*) {
+                                .Obj => |obj| obj.type,
+                                else => unreachable,
+                            },
                             .src = assembly.Operand{ .Reg = registers[i] },
                             .dest = assembly.Operand{ .Pseudo = arg },
                         } };
                         try func.instructions.append(movInstructoin);
                     }
                     for (fnItem.instructions.items) |instruction| {
-                        try instruction.codegen(self.symbolTable, &func.instructions, allocator);
+                        try instruction.codegen(self.asmSymbolTable, &func.instructions, self.allocator);
                     }
                     asmTopLevelDecl.* = .{
                         .Function = func,
@@ -80,6 +125,10 @@ pub const Program = struct {
         }
         return asmProgram;
     }
+};
+
+pub const Program = struct {
+    topLevelDecls: std.ArrayList(*TopLevel),
 };
 
 pub const TopLevelType = enum {
@@ -101,6 +150,8 @@ pub const InstructionType = enum {
     JumpIfNotZero,
     Label,
     FunctionCall,
+    SignExtend,
+    Truncate,
 };
 
 pub const Return = struct {
@@ -172,6 +223,16 @@ pub const FunctionCall = struct {
     dest: *Val,
 };
 
+pub const SignExtend = struct {
+    src: *Val,
+    dest: *Val,
+};
+
+pub const Truncate = struct {
+    src: *Val,
+    dest: *Val,
+};
+
 pub const Instruction = union(InstructionType) {
     Return: Return,
     Unary: Unary,
@@ -182,12 +243,48 @@ pub const Instruction = union(InstructionType) {
     JumpIfNotZero: Jmp,
     Label: []u8,
     FunctionCall: FunctionCall,
-    pub fn codegen(instruction: *Instruction, symbolTable: std.StringHashMap(*semantic.Symbol), instructions: *std.ArrayList(*assembly.Instruction), allocator: std.mem.Allocator) ast.CodegenError!void {
+    SignExtend: SignExtend,
+    Truncate: Truncate,
+    pub fn codegen(instruction: *Instruction, symbolTable: std.StringHashMap(*assembly.Symbol), instructions: *std.ArrayList(*assembly.Instruction), allocator: std.mem.Allocator) ast.CodegenError!void {
         switch (instruction.*) {
+            .SignExtend => |signExt| {
+                const src = try signExt.src.codegen(symbolTable, allocator);
+                const dest = try signExt.dest.codegen(symbolTable, allocator);
+                const movsxInst = try allocator.create(assembly.Instruction);
+                const movSrcToR10 = try allocator.create(assembly.Instruction);
+                movSrcToR10.* = assembly.Instruction{ .Mov = assembly.MovInst{
+                    .src = src,
+                    .dest = assembly.Operand{ .Reg = assembly.Reg.R10 },
+                    .type = signExt.src.getTypeFromSymTab(symbolTable).?,
+                } };
+                //movsxInst.* = assembly.Instruction{ .Movsx = assembly.Movsx{
+                //    .src = assembly.Operand{ .Reg = assembly.Reg.R10 },
+                //    .dest = assembly.Operand{ .Reg = assembly.Reg.R11 },
+                //} };
+                const movR11ToDest = try allocator.create(assembly.Instruction);
+                try instructions.append(movSrcToR10);
+                movsxInst.* = assembly.Instruction{ .Movsx = assembly.Movsx{
+                    .src = assembly.Operand{ .Reg = assembly.Reg.R10 },
+                    .dest = assembly.Operand{ .Reg = assembly.Reg.R11_64 },
+                } };
+                try instructions.append(movsxInst);
+                movR11ToDest.* = assembly.Instruction{ .Mov = assembly.MovInst{
+                    .src = assembly.Operand{ .Reg = assembly.Reg.R11_64 },
+                    .dest = dest,
+                    .type = signExt.dest.getTypeFromSymTab(symbolTable).?,
+                } };
+                try instructions.append(movR11ToDest);
+            },
+            .Truncate => |trunc| {
+                _ = trunc;
+                unreachable;
+            },
             .Return => |ret| {
                 const val = try ret.val.codegen(symbolTable, allocator);
                 const movInst = try allocator.create(assembly.Instruction);
+                const instType = ret.val.getTypeFromSymTab(symbolTable).?;
                 movInst.* = assembly.Instruction{ .Mov = assembly.MovInst{
+                    .type = instType,
                     .src = val,
                     .dest = assembly.Operand{ .Reg = assembly.Reg.AX },
                 } };
@@ -201,8 +298,10 @@ pub const Instruction = union(InstructionType) {
                 const src = try unary.src.codegen(symbolTable, allocator);
                 const movInst = try allocator.create(assembly.Instruction);
                 const unaryInst = try allocator.create(assembly.Instruction);
+                const destType = unary.dest.getTypeFromSymTab(symbolTable).?;
                 movInst.* = assembly.Instruction{
                     .Mov = assembly.MovInst{
+                        .type = destType,
                         .src = src,
                         .dest = dest,
                     },
@@ -213,6 +312,7 @@ pub const Instruction = union(InstructionType) {
                             .Unary = assembly.UnaryInst{
                                 .op = assembly.UnaryOp.Neg,
                                 .rhs = dest,
+                                .type = destType,
                             },
                         };
                     },
@@ -221,6 +321,7 @@ pub const Instruction = union(InstructionType) {
                             .Unary = assembly.UnaryInst{
                                 .op = assembly.UnaryOp.Not,
                                 .rhs = dest,
+                                .type = destType,
                             },
                         };
                     },
@@ -230,6 +331,7 @@ pub const Instruction = union(InstructionType) {
             },
             .Binary => |binary| {
                 const storeDest = try binary.dest.codegen(symbolTable, allocator);
+                const storeDestType = binary.dest.getTypeFromSymTab(symbolTable).?;
                 const left = try binary.left.codegen(symbolTable, allocator);
                 const right = try binary.right.codegen(symbolTable, allocator);
                 switch (binary.op) {
@@ -238,12 +340,14 @@ pub const Instruction = union(InstructionType) {
                         movLeftToDest.* = assembly.Instruction{ .Mov = assembly.MovInst{
                             .src = left,
                             .dest = storeDest,
+                            .type = storeDestType,
                         } };
                         const binaryInstr = try allocator.create(assembly.Instruction);
                         binaryInstr.* = assembly.Instruction{ .Binary = assembly.BinaryInst{
                             .lhs = storeDest,
                             .rhs = right,
                             .op = tacOpToAssemblyOp(binary.op),
+                            .type = storeDestType,
                         } };
                         try instructions.append(movLeftToDest);
                         try instructions.append(binaryInstr);
@@ -256,9 +360,10 @@ pub const Instruction = union(InstructionType) {
                         movLeftToAX.* = assembly.Instruction{ .Mov = assembly.MovInst{
                             .src = left,
                             .dest = assembly.Operand{ .Reg = assembly.Reg.AX },
+                            .type = binary.left.getTypeFromSymTab(symbolTable).?,
                         } };
                         cdqInstr.* = assembly.Instruction{
-                            .Cdq = {},
+                            .Cdq = storeDestType,
                         };
                         idivWithRight.* = assembly.Instruction{
                             .Idiv = right,
@@ -266,6 +371,7 @@ pub const Instruction = union(InstructionType) {
                         movAXToDest.* = assembly.Instruction{ .Mov = assembly.MovInst{
                             .src = assembly.Operand{ .Reg = assembly.Reg.AX },
                             .dest = storeDest,
+                            .type = storeDestType,
                         } };
                         try instructions.append(movLeftToAX);
                         try instructions.append(cdqInstr);
@@ -280,9 +386,10 @@ pub const Instruction = union(InstructionType) {
                         movLeftToDX.* = assembly.Instruction{ .Mov = assembly.MovInst{
                             .src = left,
                             .dest = assembly.Operand{ .Reg = assembly.Reg.AX },
+                            .type = binary.left.getTypeFromSymTab(symbolTable).?,
                         } };
                         cdqInstr.* = assembly.Instruction{
-                            .Cdq = {},
+                            .Cdq = storeDestType,
                         };
                         idivWithRight.* = assembly.Instruction{
                             .Idiv = right,
@@ -290,6 +397,7 @@ pub const Instruction = union(InstructionType) {
                         movDXToDest.* = assembly.Instruction{ .Mov = assembly.MovInst{
                             .src = assembly.Operand{ .Reg = assembly.Reg.DX },
                             .dest = storeDest,
+                            .type = storeDestType,
                         } };
                         try instructions.append(movLeftToDX);
                         try instructions.append(cdqInstr);
@@ -302,10 +410,12 @@ pub const Instruction = union(InstructionType) {
                         movLeftToDest.* = assembly.Instruction{ .Mov = assembly.MovInst{
                             .src = left,
                             .dest = storeDest,
+                            .type = storeDestType,
                         } };
                         cmpInstr.* = assembly.Instruction{ .Cmp = assembly.Cmp{
                             .op1 = right,
                             .op2 = storeDest,
+                            .type = storeDestType,
                         } };
                         const setCC = try allocator.create(assembly.Instruction);
                         setCC.* = assembly.Instruction{ .SetCC = assembly.SetCC{
@@ -328,9 +438,11 @@ pub const Instruction = union(InstructionType) {
                 const cpInstr = try allocator.create(assembly.Instruction);
                 const src = try cp.src.codegen(symbolTable, allocator);
                 const dest = try cp.dest.codegen(symbolTable, allocator);
+                const destType = cp.dest.getTypeFromSymTab(symbolTable).?;
                 cpInstr.* = assembly.Instruction{ .Mov = assembly.MovInst{
                     .src = src,
                     .dest = dest,
+                    .type = destType,
                 } };
                 try instructions.append(cpInstr);
             },
@@ -347,13 +459,18 @@ pub const Instruction = union(InstructionType) {
                 const val = try jmp.condition.codegen(symbolTable, allocator);
                 movToTemp.* = assembly.Instruction{ .Mov = assembly.MovInst{
                     .src = val,
-                    .dest = assembly.Operand{ .Reg = assembly.Reg.R10 },
+                    .dest = assembly.Operand{ .Reg = switch (jmp.condition.getTypeFromSymTab(symbolTable).?) {
+                        .LongWord => assembly.Reg.R10,
+                        .QuadWord => assembly.Reg.R10_64,
+                    } },
+                    .type = jmp.condition.getTypeFromSymTab(symbolTable).?,
                 } };
                 checkZero.* = assembly.Instruction{ .Cmp = assembly.Cmp{
                     .op2 = assembly.Operand{ .Reg = assembly.Reg.R10 },
                     .op1 = assembly.Operand{
                         .Imm = 0,
                     },
+                    .type = assembly.AsmType.LongWord,
                 } };
                 try instructions.append(movToTemp);
                 try instructions.append(checkZero);
@@ -370,13 +487,18 @@ pub const Instruction = union(InstructionType) {
                 const val = try jmp.condition.codegen(symbolTable, allocator);
                 movToTemp.* = assembly.Instruction{ .Mov = assembly.MovInst{
                     .src = val,
-                    .dest = assembly.Operand{ .Reg = assembly.Reg.R10 },
+                    .dest = assembly.Operand{ .Reg = switch (jmp.condition.getTypeFromSymTab(symbolTable).?) {
+                        .LongWord => assembly.Reg.R10,
+                        .QuadWord => assembly.Reg.R10_64,
+                    } },
+                    .type = jmp.condition.getTypeFromSymTab(symbolTable).?,
                 } };
                 checkZero.* = assembly.Instruction{ .Cmp = assembly.Cmp{
                     .op2 = assembly.Operand{ .Reg = assembly.Reg.R10 },
                     .op1 = assembly.Operand{
                         .Imm = 0,
                     },
+                    .type = assembly.AsmType.LongWord,
                 } };
                 try instructions.append(movToTemp);
                 try instructions.append(checkZero);
@@ -400,10 +522,12 @@ pub const Instruction = union(InstructionType) {
                     for (fnCall.args.items, 0..) |arg, i| {
                         const movArgToReg = try allocator.create(assembly.Instruction);
                         const assemblyArg = try arg.codegen(symbolTable, allocator);
+                        const assemblyArgType = arg.getTypeFromSymTab(symbolTable).?;
                         movArgToReg.* = assembly.Instruction{
                             .Mov = assembly.MovInst{
                                 .src = assemblyArg,
                                 .dest = assembly.Operand{ .Reg = registers[i] },
+                                .type = assemblyArgType,
                             },
                         };
                         try instructions.append(movArgToReg);
@@ -421,6 +545,7 @@ pub const Instruction = union(InstructionType) {
                         .Mov = assembly.MovInst{
                             .dest = asmDest,
                             .src = assembly.Operand{ .Reg = assembly.Reg.EAX },
+                            .type = fnCall.dest.getTypeFromSymTab(symbolTable).?,
                         },
                     };
                     try instructions.append(movReturnToReg);
@@ -452,32 +577,47 @@ pub const Constant = union(ConstantType) {
 pub const Val = union(ValType) {
     Constant: Constant,
     Variable: []u8,
-    pub fn codegen(val: *Val, symbolTable: std.StringHashMap(*semantic.Symbol), allocator: std.mem.Allocator) ast.CodegenError!assembly.Operand {
+
+    const Self = @This();
+    pub fn getTypeFromSymTab(self: *Self, symbolTable: std.StringHashMap(*assembly.Symbol)) ?assembly.AsmType {
+        return switch (self.*) {
+            .Constant => |constant| switch (constant) {
+                .Long => assembly.AsmType.QuadWord,
+                .Integer => assembly.AsmType.LongWord,
+            },
+            .Variable => |varName| if (symbolTable.get(varName)) |sym| sym.Obj.type else blk: {
+                std.log.warn("Not found: {s}\n", .{varName});
+                break :blk null;
+            },
+        };
+    }
+    pub fn codegen(val: *Val, symbolTable: std.StringHashMap(*assembly.Symbol), allocator: std.mem.Allocator) ast.CodegenError!assembly.Operand {
         switch (val.*) {
             .Constant => |constant| {
                 const operand = try allocator.create(assembly.Operand);
-                std.debug.assert(std.mem.eql(u8, @tagName(constant), "Integer"));
                 operand.* = assembly.Operand{
-                    .Imm = constant.Integer,
+                    .Imm = @intCast(switch (constant) {
+                        .Integer => constant.Integer,
+                        .Long => constant.Long,
+                    }),
                 };
                 return operand.*;
             },
             .Variable => |variable| {
                 const operand = try allocator.create(assembly.Operand);
                 if (symbolTable.get(variable)) |sym| {
-                    switch (sym.attributes) {
-                        .StaticAttr => {
-                            operand.* = assembly.Operand{
-                                .Data = variable,
-                            };
+                    switch (sym.*) {
+                        .Obj => |obj| {
+                            return (if (obj.static) ifblk: {
+                                operand.* = .{ .Data = variable };
+                                break :ifblk operand.*;
+                            } else elseblk: {
+                                operand.* = .{ .Pseudo = variable };
+                                break :elseblk operand.*;
+                            });
                         },
-                        else => {
-                            operand.* = assembly.Operand{
-                                .Pseudo = variable,
-                            };
-                        },
+                        else => unreachable,
                     }
-                    return operand.*;
                 }
                 operand.* = assembly.Operand{
                     .Pseudo = variable,

@@ -22,10 +22,11 @@ test "test multiple functions" {
     const typechecker = try semantic.Typechecker.init(allocator);
     const hasTypeErr = try typechecker.check(program);
     if (hasTypeErr) |typeErr| {
-        std.log.warn("Type error: {any}\n", .{typeErr});
+        std.log.warn("Type error: {s}\n", .{typeErr});
         std.debug.assert(false);
     }
-    _ = (try program.genTAC(typechecker.symbolTable, allocator));
+    const tacRenderer = try ast.TACRenderer.init(allocator, typechecker.symbolTable);
+    _ = try tacRenderer.render(program);
 }
 test "test while and do while" {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
@@ -50,7 +51,8 @@ test "test while and do while" {
         std.log.warn("Type error: {s}\n", .{typeErr});
         std.debug.assert(false);
     }
-    _ = (try program.genTAC(typechecker.symbolTable, allocator));
+    const tacRenderer = try ast.TACRenderer.init(allocator, typechecker.symbolTable);
+    _ = try tacRenderer.render(program);
     //for (instructions.items, 0..) |inst, i| {
     //    std.log.warn("Inst at {}: {any}\n", .{ i, inst });
     //}
@@ -72,7 +74,8 @@ test "test tac generation for ternary" {
         std.log.warn("Type error: {any}\n", .{typeErr});
         std.debug.assert(false);
     }
-    _ = (try program.genTAC(typechecker.symbolTable, allocator));
+    const tacRenderer = try ast.TACRenderer.init(allocator, typechecker.symbolTable);
+    _ = try tacRenderer.render(program);
 }
 
 // TODO: shaky tests, rewrite later

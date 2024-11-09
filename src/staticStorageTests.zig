@@ -1,5 +1,6 @@
 const std = @import("std");
 const ast = @import("./AST.zig");
+const tac = @import("./TAC.zig");
 const lexer = @import("./lexer.zig");
 const parser = @import("./parser.zig");
 const semantic = @import("./semantic.zig");
@@ -28,7 +29,7 @@ test "static storage codegenaration" {
     ;
     const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
     var p = try parser.Parser.init(allocator, l);
-    var program = try p.parseProgram();
+    const program = try p.parseProgram();
     const varResolver = try ast.VarResolver.init(allocator);
     try varResolver.resolve(program);
     const typechecker = try semantic.Typechecker.init(allocator);
@@ -38,7 +39,10 @@ test "static storage codegenaration" {
         std.debug.assert(false);
     }
     try ast.loopLabelPass(program, allocator);
-    const asmProgram = try (try program.genTAC(typechecker.symbolTable, allocator)).codegen(allocator);
-    try asmProgram.stringify(sFileWriter, allocator);
+    const tacRenderer = try ast.TACRenderer.init(allocator, typechecker.symbolTable);
+    const tacProgram = try tacRenderer.render(program);
+    const asmRenderer = try tac.AsmRenderer.init(allocator, tacRenderer.asmSymbolTable);
+    const asmProgram = try asmRenderer.render(tacProgram);
+    try asmProgram.stringify(sFileWriter, allocator, tacRenderer.asmSymbolTable);
     try cFileWriter.writeAll(programStr);
 }

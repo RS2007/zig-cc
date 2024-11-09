@@ -8,7 +8,7 @@ test "testing variable rename pass" {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     const allocator = arena.allocator();
     defer arena.deinit();
-    const programStr = "{ int k = 4; return k2+5;}";
+    const programStr = "{ int k = 4; return k+5;}";
     const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
     var p = try parser.Parser.init(allocator, l);
     const stmt = try p.parseStatement();
@@ -42,11 +42,7 @@ test "testing with nested scopes and with an error" {
     defer arena.deinit();
     const programStr =
         \\ int k = 5;
-        \\
-        \\ int main(){
-        \\     {
-        \\ 	extern int k;
-        \\ 	int k;
+        \\ int main(){{ extern int k; int k;
         \\     }
         \\     return k;
         \\ }

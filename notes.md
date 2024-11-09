@@ -252,3 +252,25 @@ int main(){
 * initializer for a static variable must be a constant expression 
 * no specifiers in for loop header or function arguments list
 
+
+### Symbol table
+
+* Variable resolution level (Stack of hashmaps):
+    * Need it to maintain variable names for that scope
+* At typechecker level 
+    * To maintain the types and initial values of symbols
+    * Later used to generate TAC:
+        * static variables: top level tac symbols
+        * tac instructions(function bodies)
+* At assembly level:
+    * How are types kept in assembly?
+
+
+* A bug in variable scope resolution
+* An Id has to be created for each scope
+* function args need to be renamed as well
+
+* In TAC, while generating instructions, we need to know the type of the tac
+symbol
+* Hence a TAC symbol table needs to be constructed
+

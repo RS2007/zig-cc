@@ -3,6 +3,7 @@ const ast = @import("./AST.zig");
 const lexer = @import("./lexer.zig");
 const parser = @import("./parser.zig");
 const semantic = @import("./semantic.zig");
+const tac = @import("./TAC.zig");
 
 test "testing assembly generation - unary" {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
@@ -13,7 +14,7 @@ test "testing assembly generation - unary" {
     const programStr = "int main(){ return ~(-2); }";
     const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
     var p = try parser.Parser.init(allocator, l);
-    var program = try p.parseProgram();
+    const program = try p.parseProgram();
     const varResolver = try ast.VarResolver.init(allocator);
     try varResolver.resolve(program);
     const typechecker = try semantic.Typechecker.init(allocator);
@@ -23,8 +24,11 @@ test "testing assembly generation - unary" {
         std.debug.assert(false);
     }
     try ast.loopLabelPass(program, allocator);
-    const asmProgram = try (try program.genTAC(typechecker.symbolTable, allocator)).codegen(allocator);
-    try asmProgram.stringify(sFileWriter, allocator);
+    const tacRenderer = try ast.TACRenderer.init(allocator, typechecker.symbolTable);
+    const tacProgram = try tacRenderer.render(program);
+    const asmRenderer = try tac.AsmRenderer.init(allocator, tacRenderer.asmSymbolTable);
+    const asmProgram = try asmRenderer.render(tacProgram);
+    try asmProgram.stringify(sFileWriter, allocator, tacRenderer.asmSymbolTable);
     try cFileWriter.writeAll(programStr);
 }
 
@@ -37,7 +41,7 @@ test "testing assembly generation - binary" {
     const programStr = "int main(){ return (2*3)%5+6; }";
     const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
     var p = try parser.Parser.init(allocator, l);
-    var program = try p.parseProgram();
+    const program = try p.parseProgram();
     const varResolver = try ast.VarResolver.init(allocator);
     try varResolver.resolve(program);
     const typechecker = try semantic.Typechecker.init(allocator);
@@ -47,8 +51,11 @@ test "testing assembly generation - binary" {
         std.debug.assert(false);
     }
     try ast.loopLabelPass(program, allocator);
-    const asmProgram = try (try program.genTAC(typechecker.symbolTable, allocator)).codegen(allocator);
-    try asmProgram.stringify(sFileWriter, allocator);
+    const tacRenderer = try ast.TACRenderer.init(allocator, typechecker.symbolTable);
+    const tacProgram = try tacRenderer.render(program);
+    const asmRenderer = try tac.AsmRenderer.init(allocator, tacRenderer.asmSymbolTable);
+    const asmProgram = try asmRenderer.render(tacProgram);
+    try asmProgram.stringify(sFileWriter, allocator, tacRenderer.asmSymbolTable);
     try cFileWriter.writeAll(programStr);
 }
 
@@ -72,8 +79,11 @@ test "testing assembly generation - >= and <=" {
         std.debug.assert(false);
     }
     try ast.loopLabelPass(program, allocator);
-    const asmProgram = try (try program.genTAC(typechecker.symbolTable, allocator)).codegen(allocator);
-    try asmProgram.stringify(sFileWriter, allocator);
+    const tacRenderer = try ast.TACRenderer.init(allocator, typechecker.symbolTable);
+    const tacProgram = try tacRenderer.render(program);
+    const asmRenderer = try tac.AsmRenderer.init(allocator, tacRenderer.asmSymbolTable);
+    const asmProgram = try asmRenderer.render(tacProgram);
+    try asmProgram.stringify(sFileWriter, allocator, tacRenderer.asmSymbolTable);
     try cFileWriter.writeAll(programStr);
 }
 
@@ -97,8 +107,11 @@ test "testing assembly generation - short circuiting with logical AND and OR" {
         std.debug.assert(false);
     }
     try ast.loopLabelPass(program, allocator);
-    const asmProgram = try (try program.genTAC(typechecker.symbolTable, allocator)).codegen(allocator);
-    try asmProgram.stringify(sFileWriter, allocator);
+    const tacRenderer = try ast.TACRenderer.init(allocator, typechecker.symbolTable);
+    const tacProgram = try tacRenderer.render(program);
+    const asmRenderer = try tac.AsmRenderer.init(allocator, tacRenderer.asmSymbolTable);
+    const asmProgram = try asmRenderer.render(tacProgram);
+    try asmProgram.stringify(sFileWriter, allocator, tacRenderer.asmSymbolTable);
     try cFileWriter.writeAll(programStr);
 }
 
@@ -111,7 +124,7 @@ test "testing assembly generation - declarations" {
     const programStr = "int main(){ int x = 2; int y = 3 || 4; return x && y; }";
     const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
     var p = try parser.Parser.init(allocator, l);
-    var program = try p.parseProgram();
+    const program = try p.parseProgram();
     const varResolver = try ast.VarResolver.init(allocator);
     try varResolver.resolve(program);
     const typechecker = try semantic.Typechecker.init(allocator);
@@ -121,8 +134,11 @@ test "testing assembly generation - declarations" {
         std.debug.assert(false);
     }
     try ast.loopLabelPass(program, allocator);
-    const asmProgram = try (try program.genTAC(typechecker.symbolTable, allocator)).codegen(allocator);
-    try asmProgram.stringify(sFileWriter, allocator);
+    const tacRenderer = try ast.TACRenderer.init(allocator, typechecker.symbolTable);
+    const tacProgram = try tacRenderer.render(program);
+    const asmRenderer = try tac.AsmRenderer.init(allocator, tacRenderer.asmSymbolTable);
+    const asmProgram = try asmRenderer.render(tacProgram);
+    try asmProgram.stringify(sFileWriter, allocator, tacRenderer.asmSymbolTable);
     try cFileWriter.writeAll(programStr);
 }
 
@@ -155,8 +171,11 @@ test "tac generation - if" {
         std.debug.assert(false);
     }
     try ast.loopLabelPass(program, allocator);
-    const asmProgram = try (try program.genTAC(typechecker.symbolTable, allocator)).codegen(allocator);
-    try asmProgram.stringify(sFileWriter, allocator);
+    const tacRenderer = try ast.TACRenderer.init(allocator, typechecker.symbolTable);
+    const tacProgram = try tacRenderer.render(program);
+    const asmRenderer = try tac.AsmRenderer.init(allocator, tacRenderer.asmSymbolTable);
+    const asmProgram = try asmRenderer.render(tacProgram);
+    try asmProgram.stringify(sFileWriter, allocator, tacRenderer.asmSymbolTable);
     try cFileWriter.writeAll(programStr);
 }
 
@@ -179,8 +198,11 @@ test "tac generation - if nested" {
         std.debug.assert(false);
     }
     try ast.loopLabelPass(program, allocator);
-    const asmProgram = try (try program.genTAC(typechecker.symbolTable, allocator)).codegen(allocator);
-    try asmProgram.stringify(sFileWriter, allocator);
+    const tacRenderer = try ast.TACRenderer.init(allocator, typechecker.symbolTable);
+    const tacProgram = try tacRenderer.render(program);
+    const asmRenderer = try tac.AsmRenderer.init(allocator, tacRenderer.asmSymbolTable);
+    const asmProgram = try asmRenderer.render(tacProgram);
+    try asmProgram.stringify(sFileWriter, allocator, tacRenderer.asmSymbolTable);
     try cFileWriter.writeAll(programStr);
 }
 
@@ -203,8 +225,11 @@ test "assembly generation with ternary" {
         std.debug.assert(false);
     }
     try ast.loopLabelPass(program, allocator);
-    const asmProgram = try (try program.genTAC(typechecker.symbolTable, allocator)).codegen(allocator);
-    try asmProgram.stringify(sFileWriter, allocator);
+    const tacRenderer = try ast.TACRenderer.init(allocator, typechecker.symbolTable);
+    const tacProgram = try tacRenderer.render(program);
+    const asmRenderer = try tac.AsmRenderer.init(allocator, tacRenderer.asmSymbolTable);
+    const asmProgram = try asmRenderer.render(tacProgram);
+    try asmProgram.stringify(sFileWriter, allocator, tacRenderer.asmSymbolTable);
     try cFileWriter.writeAll(programStr);
 }
 
@@ -227,8 +252,11 @@ test "assembly generation with nested ternary" {
         std.debug.assert(false);
     }
     try ast.loopLabelPass(program, allocator);
-    const asmProgram = try (try program.genTAC(typechecker.symbolTable, allocator)).codegen(allocator);
-    try asmProgram.stringify(sFileWriter, allocator);
+    const tacRenderer = try ast.TACRenderer.init(allocator, typechecker.symbolTable);
+    const tacProgram = try tacRenderer.render(program);
+    const asmRenderer = try tac.AsmRenderer.init(allocator, tacRenderer.asmSymbolTable);
+    const asmProgram = try asmRenderer.render(tacProgram);
+    try asmProgram.stringify(sFileWriter, allocator, tacRenderer.asmSymbolTable);
     try cFileWriter.writeAll(programStr);
 }
 
@@ -251,8 +279,11 @@ test "assembly generation with labelled statements and goto" {
         std.debug.assert(false);
     }
     try ast.loopLabelPass(program, allocator);
-    const asmProgram = try (try program.genTAC(typechecker.symbolTable, allocator)).codegen(allocator);
-    try asmProgram.stringify(sFileWriter, allocator);
+    const tacRenderer = try ast.TACRenderer.init(allocator, typechecker.symbolTable);
+    const tacProgram = try tacRenderer.render(program);
+    const asmRenderer = try tac.AsmRenderer.init(allocator, tacRenderer.asmSymbolTable);
+    const asmProgram = try asmRenderer.render(tacProgram);
+    try asmProgram.stringify(sFileWriter, allocator, tacRenderer.asmSymbolTable);
     try cFileWriter.writeAll(programStr);
 }
 
@@ -274,8 +305,11 @@ test "testing assembly generation with compound statement parsing" {
         std.log.warn("\x1b[33mError\x1b[0m: {s}\n", .{typeError});
         std.debug.assert(false);
     }
-    const asmProgram = try (try program.genTAC(typechecker.symbolTable, allocator)).codegen(allocator);
-    try asmProgram.stringify(sFileWriter, allocator);
+    const tacRenderer = try ast.TACRenderer.init(allocator, typechecker.symbolTable);
+    const tacProgram = try tacRenderer.render(program);
+    const asmRenderer = try tac.AsmRenderer.init(allocator, tacRenderer.asmSymbolTable);
+    const asmProgram = try asmRenderer.render(tacProgram);
+    try asmProgram.stringify(sFileWriter, allocator, tacRenderer.asmSymbolTable);
     try cFileWriter.writeAll(programStr);
 }
 
@@ -305,8 +339,11 @@ test "testing assembly generation with do and while loop" {
         std.debug.assert(false);
     }
     try ast.loopLabelPass(program, allocator);
-    const asmProgram = try (try program.genTAC(typechecker.symbolTable, allocator)).codegen(allocator);
-    try asmProgram.stringify(sFileWriter, allocator);
+    const tacRenderer = try ast.TACRenderer.init(allocator, typechecker.symbolTable);
+    const tacProgram = try tacRenderer.render(program);
+    const asmRenderer = try tac.AsmRenderer.init(allocator, tacRenderer.asmSymbolTable);
+    const asmProgram = try asmRenderer.render(tacProgram);
+    try asmProgram.stringify(sFileWriter, allocator, tacRenderer.asmSymbolTable);
     try cFileWriter.writeAll(programStr);
 }
 
@@ -331,6 +368,19 @@ test "testing assembly generation loop with breaks and continue" {
     const program = try p.parseProgram();
     const varResolver = try ast.VarResolver.init(allocator);
     try varResolver.resolve(program);
+    // get the resolved identifier in the while condition
+    // if condition and the add in the while loop
+    //std.log.warn("while stmt condition: lhs = {any} and rhs = {any}\n", .{
+    //    program.externalDecls.items[0].FunctionDecl.blockItems.items[1].Statement.While.condition.Binary.lhs,
+    //    program.externalDecls.items[0].FunctionDecl.blockItems.items[1].Statement.While.condition.Binary.rhs,
+    //});
+
+    //std.log.warn("if: lhs = {any}, update statement: assigning {any} with lhs={any} and rhs = {any}\n", .{
+    //    program.externalDecls.items[0].FunctionDecl.blockItems.items[1].Statement.While.body.Compound.items[0].Statement.If.condition.Binary.lhs,
+    //    program.externalDecls.items[0].FunctionDecl.blockItems.items[1].Statement.While.body.Compound.items[1].Statement.Expression.Assignment.lhs,
+    //    program.externalDecls.items[0].FunctionDecl.blockItems.items[1].Statement.While.body.Compound.items[1].Statement.Expression.Assignment.rhs.Binary.lhs,
+    //    program.externalDecls.items[0].FunctionDecl.blockItems.items[1].Statement.While.body.Compound.items[1].Statement.Expression.Assignment.rhs.Binary.rhs,
+    //});
     const typechecker = try semantic.Typechecker.init(allocator);
     const hasTypeErr = try typechecker.check(program);
     if (hasTypeErr) |typeError| {
@@ -338,8 +388,11 @@ test "testing assembly generation loop with breaks and continue" {
         std.debug.assert(false);
     }
     try ast.loopLabelPass(program, allocator);
-    const asmProgram = try (try program.genTAC(typechecker.symbolTable, allocator)).codegen(allocator);
-    try asmProgram.stringify(sFileWriter, allocator);
+    const tacRenderer = try ast.TACRenderer.init(allocator, typechecker.symbolTable);
+    const tacProgram = try tacRenderer.render(program);
+    const asmRenderer = try tac.AsmRenderer.init(allocator, tacRenderer.asmSymbolTable);
+    const asmProgram = try asmRenderer.render(tacProgram);
+    try asmProgram.stringify(sFileWriter, allocator, tacRenderer.asmSymbolTable);
     try cFileWriter.writeAll(programStr);
 }
 
@@ -376,8 +429,11 @@ test "nested while and do while loops with continue" {
         std.debug.assert(false);
     }
     try ast.loopLabelPass(program, allocator);
-    const asmProgram = try (try program.genTAC(typechecker.symbolTable, allocator)).codegen(allocator);
-    try asmProgram.stringify(sFileWriter, allocator);
+    const tacRenderer = try ast.TACRenderer.init(allocator, typechecker.symbolTable);
+    const tacProgram = try tacRenderer.render(program);
+    const asmRenderer = try tac.AsmRenderer.init(allocator, tacRenderer.asmSymbolTable);
+    const asmProgram = try asmRenderer.render(tacProgram);
+    try asmProgram.stringify(sFileWriter, allocator, tacRenderer.asmSymbolTable);
     try cFileWriter.writeAll(programStr);
 }
 
@@ -406,8 +462,11 @@ test "test assembly generation for for loops" {
         std.debug.assert(false);
     }
     try ast.loopLabelPass(program, allocator);
-    const asmProgram = try (try program.genTAC(typechecker.symbolTable, allocator)).codegen(allocator);
-    try asmProgram.stringify(sFileWriter, allocator);
+    const tacRenderer = try ast.TACRenderer.init(allocator, typechecker.symbolTable);
+    const tacProgram = try tacRenderer.render(program);
+    const asmRenderer = try tac.AsmRenderer.init(allocator, tacRenderer.asmSymbolTable);
+    const asmProgram = try asmRenderer.render(tacProgram);
+    try asmProgram.stringify(sFileWriter, allocator, tacRenderer.asmSymbolTable);
     try cFileWriter.writeAll(programStr);
 }
 //
@@ -435,8 +494,11 @@ test "multiple functions and call" {
         std.debug.assert(false);
     }
     try ast.loopLabelPass(program, allocator);
-    const asmProgram = try (try program.genTAC(typechecker.symbolTable, allocator)).codegen(allocator);
-    try asmProgram.stringify(sFileWriter, allocator);
+    const tacRenderer = try ast.TACRenderer.init(allocator, typechecker.symbolTable);
+    const tacProgram = try tacRenderer.render(program);
+    const asmRenderer = try tac.AsmRenderer.init(allocator, tacRenderer.asmSymbolTable);
+    const asmProgram = try asmRenderer.render(tacProgram);
+    try asmProgram.stringify(sFileWriter, allocator, tacRenderer.asmSymbolTable);
     try cFileWriter.writeAll(programStr);
 }
 
@@ -464,8 +526,11 @@ test "global variable codegeneration" {
         std.debug.assert(false);
     }
     try ast.loopLabelPass(program, allocator);
-    const asmProgram = try (try program.genTAC(typechecker.symbolTable, allocator)).codegen(allocator);
-    try asmProgram.stringify(sFileWriter, allocator);
+    const tacRenderer = try ast.TACRenderer.init(allocator, typechecker.symbolTable);
+    const tacProgram = try tacRenderer.render(program);
+    const asmRenderer = try tac.AsmRenderer.init(allocator, tacRenderer.asmSymbolTable);
+    const asmProgram = try asmRenderer.render(tacProgram);
+    try asmProgram.stringify(sFileWriter, allocator, tacRenderer.asmSymbolTable);
     try cFileWriter.writeAll(programStr);
 }
 
@@ -494,7 +559,78 @@ test "global variable codegenaration with multiple funcs" {
         std.debug.assert(false);
     }
     try ast.loopLabelPass(program, allocator);
-    const asmProgram = try (try program.genTAC(typechecker.symbolTable, allocator)).codegen(allocator);
-    try asmProgram.stringify(sFileWriter, allocator);
+    const tacRenderer = try ast.TACRenderer.init(allocator, typechecker.symbolTable);
+    const tacProgram = try tacRenderer.render(program);
+    const asmRenderer = try tac.AsmRenderer.init(allocator, tacRenderer.asmSymbolTable);
+    const asmProgram = try asmRenderer.render(tacProgram);
+    try asmProgram.stringify(sFileWriter, allocator, tacRenderer.asmSymbolTable);
+    try cFileWriter.writeAll(programStr);
+}
+
+test "casting program" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const cFileWriter = (try std.fs.cwd().createFile("./cFiles/C/casting.c", .{})).writer();
+    const sFileWriter = (try std.fs.cwd().createFile("./cFiles/S/casting.s", .{})).writer();
+    const programStr =
+        \\ int main() {
+        \\  long l = 2147483653;
+        \\  int i = 10;
+        \\  long result = i + l;
+        \\  return (result == 2147483663L);
+        \\}
+    ;
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    const program = try p.parseProgram();
+    const varResolver = try ast.VarResolver.init(allocator);
+    try varResolver.resolve(program);
+    const typechecker = try semantic.Typechecker.init(allocator);
+    const hasTypeErr = try typechecker.check(program);
+    if (hasTypeErr) |typeError| {
+        std.log.warn("\x1b[33mError\x1b[0m: {s}\n", .{typeError});
+        std.debug.assert(false);
+    }
+    try ast.loopLabelPass(program, allocator);
+    const tacRenderer = try ast.TACRenderer.init(allocator, typechecker.symbolTable);
+    const tacProgram = try tacRenderer.render(program);
+    const asmRenderer = try tac.AsmRenderer.init(allocator, tacRenderer.asmSymbolTable);
+    const asmProgram = try asmRenderer.render(tacProgram);
+    try asmProgram.stringify(sFileWriter, allocator, tacRenderer.asmSymbolTable);
+    try cFileWriter.writeAll(programStr);
+}
+
+test "casting with div" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const cFileWriter = (try std.fs.cwd().createFile("./cFiles/C/castingDiv.c", .{})).writer();
+    const sFileWriter = (try std.fs.cwd().createFile("./cFiles/S/castingDiv.s", .{})).writer();
+    const programStr =
+        \\int main() {
+        \\    long l = 2147483653;
+        \\    int i = 10;
+        \\    int intResult = l / i;
+        \\    return 0;
+        \\}
+    ;
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    const program = try p.parseProgram();
+    const varResolver = try ast.VarResolver.init(allocator);
+    try varResolver.resolve(program);
+    const typechecker = try semantic.Typechecker.init(allocator);
+    const hasTypeErr = try typechecker.check(program);
+    if (hasTypeErr) |typeError| {
+        std.log.warn("\x1b[33mError\x1b[0m: {s}\n", .{typeError});
+        std.debug.assert(false);
+    }
+    try ast.loopLabelPass(program, allocator);
+    const tacRenderer = try ast.TACRenderer.init(allocator, typechecker.symbolTable);
+    const tacProgram = try tacRenderer.render(program);
+    const asmRenderer = try tac.AsmRenderer.init(allocator, tacRenderer.asmSymbolTable);
+    const asmProgram = try asmRenderer.render(tacProgram);
+    try asmProgram.stringify(sFileWriter, allocator, tacRenderer.asmSymbolTable);
     try cFileWriter.writeAll(programStr);
 }
