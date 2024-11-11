@@ -52,51 +52,14 @@ pub const Parser = struct {
         return program;
     }
 
-    pub fn parseExternalDecl(self: *Parser) ParserError!*AST.ExternalDecl {
-        // TODO: parse_if_qualifier
-        const qualifier = AST.Qualifier.from((try self.l.peekToken(self.allocator)).?.type);
-        if (qualifier != null) {
-            _ = try self.l.nextToken(self.allocator);
-        }
-        const returnType = try self.l.nextToken(self.allocator);
-        const peekTwo = try self.l.peekTwoTokens(self.allocator);
-        if (peekTwo[1].?.type != lexer.TokenType.LPAREN) {
-            const varName = try self.l.nextToken(self.allocator);
-            const externalDecl = try self.allocator.create(AST.ExternalDecl);
-            const declaration = try self.allocator.create(AST.Declaration);
-            declaration.* = .{
-                .name = self.l.buffer[varName.start .. varName.end + 1],
-                .expression = null,
-                .type = AST.Type.from(returnType.type),
-                .storageClass = qualifier,
-                // TODO: should support other types
-            };
-            externalDecl.* = .{
-                .VarDeclaration = declaration,
-            };
-            switch (peekTwo[1].?.type) {
-                .SEMICOLON => {
-                    _ = try self.l.nextToken(self.allocator);
-                    return externalDecl;
-                },
-                .ASSIGN => {
-                    _ = try self.l.nextToken(self.allocator);
-                    const expression = try self.parseExpression(0);
-                    declaration.expression = expression;
-                    std.debug.assert(if ((try self.l.peekToken(self.allocator) != null)) (try self.l.peekToken(self.allocator)).?.type == lexer.TokenType.SEMICOLON else false);
-                    _ = try self.l.nextToken(self.allocator);
-                    return externalDecl;
-                },
-                else => {
-                    unreachable;
-                },
-            }
-        }
+    inline fn parseFunctionDecl(self: *Parser, qualifier: ?AST.Qualifier) ParserError!*AST.ExternalDecl {
+        const returnType = self.l.currentToken.?;
         const fnNameToken = try self.l.nextToken(self.allocator);
         var argList = std.ArrayList(*AST.Arg).init(self.allocator);
         std.debug.assert(fnNameToken.type == lexer.TokenType.IDENTIFIER);
         std.debug.assert((try self.l.nextToken(self.allocator)).type == lexer.TokenType.LPAREN);
-        // TODO: parse function arguments
+
+        // INFO: Parse function arguments
         while ((try self.l.peekToken(self.allocator)).?.type != lexer.TokenType.RPAREN) {
             const arg = try self.parseArg();
             try argList.append(arg);
@@ -105,6 +68,8 @@ pub const Parser = struct {
             }
         }
         std.debug.assert((try self.l.nextToken(self.allocator)).type == lexer.TokenType.RPAREN);
+
+        //INFO: Parse function body
         const blockItems = std.ArrayList(*AST.BlockItem).init(self.allocator);
         var peekToken = try self.l.peekToken(self.allocator);
         const functionDecl = try self.allocator.create(AST.ExternalDecl);
@@ -119,10 +84,14 @@ pub const Parser = struct {
         functionDecl.* = .{
             .FunctionDecl = functionDef,
         };
+
         if ((try self.l.peekToken(self.allocator)).?.type == lexer.TokenType.SEMICOLON) {
+            //INFO: Handle declared but not defined functions
             _ = try self.l.nextToken(self.allocator);
             return functionDecl;
         }
+
+        //INFO: Parse function body
         std.debug.assert((try self.l.nextToken(self.allocator)).type == lexer.TokenType.LBRACE);
         while (peekToken != null and peekToken.?.type != lexer.TokenType.RBRACE) {
             const blockItem = try self.parseBlockItem();
@@ -131,7 +100,56 @@ pub const Parser = struct {
         }
         const rbrace = try self.l.nextToken(self.allocator);
         std.debug.assert(rbrace.type == lexer.TokenType.RBRACE);
+
         return functionDecl;
+    }
+
+    inline fn parseVarDecl(self: *Parser, qualifier: ?AST.Qualifier) ParserError!*AST.Declaration {
+        const returnType = self.l.currentToken.?;
+        const varName = try self.l.nextToken(self.allocator);
+        std.log.warn("Return type: {any} and varName: {any}\n", .{ returnType, varName });
+        const declaration = try self.allocator.create(AST.Declaration);
+        declaration.* = .{
+            .name = self.l.buffer[varName.start .. varName.end + 1],
+            .expression = null,
+            .type = AST.Type.from(returnType.type),
+            .storageClass = qualifier,
+        };
+
+        const semicolonOrAssign = try self.l.nextToken(self.allocator);
+        switch (semicolonOrAssign.type) {
+            .SEMICOLON => {
+                return declaration;
+            },
+            .ASSIGN => {
+                const expression = try self.parseExpression(0);
+                declaration.expression = expression;
+                const semicolon = try self.l.nextToken(self.allocator);
+                std.debug.assert(semicolon.type == lexer.TokenType.SEMICOLON);
+                return declaration;
+            },
+            else => {
+                unreachable;
+            },
+        }
+    }
+
+    pub fn parseExternalDecl(self: *Parser) ParserError!*AST.ExternalDecl {
+        const qualifier = AST.Qualifier.from((try self.l.peekToken(self.allocator)).?.type);
+        if (qualifier != null) {
+            _ = try self.l.nextToken(self.allocator);
+        }
+        _ = try self.l.nextToken(self.allocator);
+        const peekTwo = try self.l.peekTwoTokens(self.allocator);
+        if (peekTwo[1].?.type != lexer.TokenType.LPAREN) {
+            const varDecl = try self.parseVarDecl(qualifier);
+            const externalDecl = try self.allocator.create(AST.ExternalDecl);
+            externalDecl.* = .{
+                .VarDeclaration = varDecl,
+            };
+            return externalDecl;
+        }
+        return try self.parseFunctionDecl(qualifier);
     }
 
     pub fn parseArg(self: *Parser) ParserError!*AST.Arg {
@@ -175,8 +193,6 @@ pub const Parser = struct {
                     blockItem.* = AST.BlockItem{
                         .Declaration = (try self.parseDeclaration()),
                     };
-                    const semicolon = try self.l.nextToken(self.allocator);
-                    std.debug.assert(semicolon.type == lexer.TokenType.SEMICOLON);
                 },
                 else => {
                     blockItem.* = AST.BlockItem{
@@ -192,84 +208,12 @@ pub const Parser = struct {
 
     pub fn parseDeclaration(self: *Parser) ParserError!*AST.Declaration {
         const nextToken = try self.l.nextToken(self.allocator);
-        switch (nextToken.type) {
-            .STATIC, .EXTERN => {
-                const qualifier = AST.Qualifier.from(nextToken.type);
-                const returnType = try self.l.nextToken(self.allocator);
-                std.debug.assert(returnType.type == lexer.TokenType.INT_TYPE or returnType.type == lexer.TokenType.VOID or returnType.type == lexer.TokenType.LONG_TYPE);
-                const identifier = try self.l.nextToken(self.allocator);
-                std.debug.assert(identifier.type == lexer.TokenType.IDENTIFIER);
-                const declaration = try self.allocator.create(AST.Declaration);
-
-                // declarations can be of the form:
-                // int x;
-                // int x = 3;
-                // int x = y = 3;
-                declaration.* = AST.Declaration{
-                    .name = self.l.buffer[identifier.start .. identifier.end + 1],
-                    .expression = null,
-                    .type = AST.Type.from(returnType.type),
-                    .storageClass = qualifier,
-                };
-                const peeked = try self.l.peekToken(self.allocator);
-                std.debug.assert(peeked != null);
-                switch ((peeked.?).type) {
-                    .SEMICOLON => {
-                        return declaration;
-                    },
-                    .ASSIGN => {
-                        _ = try self.l.nextToken(self.allocator);
-                        const expression = try self.parseExpression(0);
-                        declaration.expression = expression;
-                        const peekedSemicolon = try self.l.peekToken(self.allocator);
-                        std.debug.assert(peekedSemicolon.?.type == lexer.TokenType.SEMICOLON);
-                        return declaration;
-                    },
-                    else => {
-                        unreachable;
-                    },
-                }
-                return declaration;
-            },
-            .INT_TYPE, .LONG_TYPE => {
-                const identifier = try self.l.nextToken(self.allocator);
-                std.debug.assert(identifier.type == lexer.TokenType.IDENTIFIER);
-                const declaration = try self.allocator.create(AST.Declaration);
-
-                // declarations can be of the form:
-                // int x;
-                // int x = 3;
-                // int x = y = 3;
-                declaration.* = AST.Declaration{
-                    .name = self.l.buffer[identifier.start .. identifier.end + 1],
-                    .expression = null,
-                    .type = AST.Type.from(nextToken.type),
-                };
-                const peeked = try self.l.peekToken(self.allocator);
-                std.debug.assert(peeked != null);
-                switch ((peeked.?).type) {
-                    .SEMICOLON => {
-                        return declaration;
-                    },
-                    .ASSIGN => {
-                        _ = try self.l.nextToken(self.allocator);
-                        const expression = try self.parseExpression(0);
-                        declaration.expression = expression;
-                        std.log.warn("var {s} = expression: {any}\n", .{ self.l.buffer[identifier.start .. identifier.end + 1], expression });
-                        const peekedSemicolon = try self.l.peekToken(self.allocator);
-                        std.debug.assert(peekedSemicolon.?.type == lexer.TokenType.SEMICOLON);
-                        return declaration;
-                    },
-                    else => {
-                        unreachable;
-                    },
-                }
-                return declaration;
-            },
-            else => {
-                unreachable;
-            },
+        const qualifier = AST.Qualifier.from(nextToken.type);
+        if (qualifier != null) {
+            _ = try self.l.nextToken(self.allocator);
         }
+        // _ = try self.l.nextToken(self.allocator);
+        return try self.parseVarDecl(qualifier);
     }
 
     pub fn parseForInit(self: *Parser) ParserError!*AST.ForInit {
@@ -283,326 +227,333 @@ pub const Parser = struct {
             else => {
                 const expr = try self.parseExpression(0);
                 forInit.* = AST.ForInit{ .Expression = expr };
+                const semicolon1 = try self.l.nextToken(self.allocator);
+                if (semicolon1.type != lexer.TokenType.SEMICOLON) {
+                    //std.log.warn("Semicolon expected, found {any}\n", .{semicolon1.type});
+                    unreachable;
+                }
             },
-        }
-        const semicolon1 = try self.l.nextToken(self.allocator);
-        if (semicolon1.type != lexer.TokenType.SEMICOLON) {
-            //std.log.warn("Semicolon expected, found {any}\n", .{semicolon1.type});
-            unreachable;
         }
         return forInit;
     }
 
-    pub fn parseStatement(self: *Parser) ParserError!*AST.Statement {
-        switch ((try self.l.peekToken(self.allocator)).?.type) {
-            .RETURN => {
-                _ = try self.l.nextToken(self.allocator);
-                const expr = try self.parseExpression(0);
-                const retStmt = try self.allocator.create(AST.Statement);
-                retStmt.* = AST.Statement{
-                    .Return = AST.Return{
-                        .expression = expr,
-                    },
-                };
-                const peeked = try self.l.peekToken(self.allocator);
-                if (peeked != null and peeked.?.type == lexer.TokenType.SEMICOLON) {
-                    _ = try self.l.nextToken(self.allocator);
-                }
-                return retStmt;
+    pub inline fn parseReturn(self: *Parser) ParserError!*AST.Statement {
+        _ = try self.l.nextToken(self.allocator);
+        const expr = try self.parseExpression(0);
+        const retStmt = try self.allocator.create(AST.Statement);
+        retStmt.* = AST.Statement{
+            .Return = AST.Return{
+                .expression = expr,
             },
-            .SEMICOLON => {
-                _ = try self.l.nextToken(self.allocator);
-                const nullStmt = try self.allocator.create(AST.Statement);
-                nullStmt.* = AST.Statement{
-                    .Null = {},
-                };
-                return nullStmt;
-            },
-            .IF => {
-                _ = try self.l.nextToken(self.allocator);
-                const ifStmt = try self.allocator.create(AST.Statement);
-                const expr = try self.parseFactor();
-                const thenStmt = try self.parseStatement();
-                ifStmt.* = AST.Statement{ .If = AST.If{
-                    .condition = expr,
-                    .thenStmt = thenStmt,
-                } };
-
-                const peekToken = try self.l.peekToken(self.allocator);
-                if (peekToken != null and peekToken.?.type == lexer.TokenType.ELSE) {
-                    _ = try self.l.nextToken(self.allocator);
-                    const elseStmt = try self.parseStatement();
-                    ifStmt.If.elseStmt = elseStmt;
-                }
-                return ifStmt;
-            },
-            .LBRACE => {
-                _ = try self.l.nextToken(self.allocator);
-                const blockItemsList = std.ArrayList(*AST.BlockItem).init(self.allocator);
-                const compoundStatement = try self.allocator.create(AST.Statement);
-                compoundStatement.* = AST.Statement{
-                    .Compound = blockItemsList,
-                };
-                while (true) {
-                    const hasPeeked = try self.l.peekToken(self.allocator);
-                    if (hasPeeked == null) break;
-                    if (hasPeeked.?.type == lexer.TokenType.RBRACE) break;
-                    const blockItem = try self.parseBlockItem();
-                    try compoundStatement.Compound.append(blockItem);
-                }
-                const rbrace = try self.l.nextToken(self.allocator);
-                std.debug.assert(rbrace.type == lexer.TokenType.RBRACE);
-                return compoundStatement;
-            },
-            .GOTO => {
-                _ = try self.l.nextToken(self.allocator);
-                const jumpLabel = try self.l.nextToken(self.allocator);
-                const gotoStatement = try self.allocator.create(AST.Statement);
-                gotoStatement.* = AST.Statement{
-                    .Goto = self.l.buffer[jumpLabel.start .. jumpLabel.end + 1],
-                };
-                const semicolon = try self.l.nextToken(self.allocator);
-                std.debug.assert(semicolon.type == lexer.TokenType.SEMICOLON);
-                return gotoStatement;
-            },
-            .DO => {
-                _ = try self.l.nextToken(self.allocator);
-                const body = try self.parseStatement();
-                const whileTok = try self.l.nextToken(self.allocator);
-                std.debug.assert(whileTok.type == lexer.TokenType.WHILE);
-                const lparen = try self.l.nextToken(self.allocator);
-                std.debug.assert(lparen.type == lexer.TokenType.LPAREN);
-                const condition = try self.parseExpression(0);
-                const rparen = try self.l.nextToken(self.allocator);
-                std.debug.assert(rparen.type == lexer.TokenType.RPAREN);
-                const semicolon = try self.l.nextToken(self.allocator);
-                std.debug.assert(semicolon.type == lexer.TokenType.SEMICOLON);
-                const doWhileStatement = try self.allocator.create(AST.Statement);
-                doWhileStatement.* = AST.Statement{ .DoWhile = .{
-                    .body = body,
-                    .condition = condition,
-                    .loopId = 0,
-                } };
-                return doWhileStatement;
-            },
-            .FOR => {
-                _ = try self.l.nextToken(self.allocator);
-                const lparen = try self.l.nextToken(self.allocator);
-                std.debug.assert(lparen.type == lexer.TokenType.LPAREN);
-                const forInit = try self.parseForInit();
-                var peeked = try self.l.peekToken(self.allocator);
-                var condition: ?*AST.Expression = null;
-                var post: ?*AST.Expression = null;
-                if (peeked != null and peeked.?.type != lexer.TokenType.SEMICOLON) {
-                    // std.log.warn("Parsing condition", .{});
-                    condition = try self.parseExpression(0);
-                }
-                const semicolon = try self.l.nextToken(self.allocator);
-                std.debug.assert(semicolon.type == lexer.TokenType.SEMICOLON);
-                peeked = try self.l.peekToken(self.allocator);
-                if (peeked != null and peeked.?.type != lexer.TokenType.RPAREN) {
-                    // std.log.warn("Parsing post", .{});
-                    post = try self.parseExpression(0);
-                }
-                const rparen = try self.l.nextToken(self.allocator);
-                if (rparen.type != lexer.TokenType.RPAREN) {
-                    // std.log.warn("RParen expected, found {any}\n", .{rparen.type});
-                    unreachable;
-                }
-                const body = try self.parseStatement();
-                const forStmt = try self.allocator.create(AST.Statement);
-                forStmt.* = .{
-                    .For = .{
-                        .init = forInit,
-                        .condition = condition,
-                        .post = post,
-                        .body = body,
-                        .loopId = 0,
-                    },
-                };
-                return forStmt;
-            },
-            .BREAK => {
-                // std.log.warn("Break statement\n", .{});
-                _ = try self.l.nextToken(self.allocator);
-                const semicolon = try self.l.nextToken(self.allocator);
-                std.debug.assert(semicolon.type == lexer.TokenType.SEMICOLON);
-                const breakStatement = try self.allocator.create(AST.Statement);
-                breakStatement.* = AST.Statement{ .Break = 0 };
-                return breakStatement;
-            },
-            .CONTINUE => {
-                _ = try self.l.nextToken(self.allocator);
-                const semicolon = try self.l.nextToken(self.allocator);
-                std.debug.assert(semicolon.type == lexer.TokenType.SEMICOLON);
-                const continueStatement = try self.allocator.create(AST.Statement);
-                continueStatement.* = AST.Statement{ .Continue = 0 };
-                return continueStatement;
-            },
-            .WHILE => {
-                _ = try self.l.nextToken(self.allocator);
-                const lparen = try self.l.nextToken(self.allocator);
-                std.debug.assert(lparen.type == lexer.TokenType.LPAREN);
-                const condition = try self.parseExpression(0);
-                const rparen = try self.l.nextToken(self.allocator);
-                std.debug.assert(rparen.type == lexer.TokenType.RPAREN);
-                const body = try self.parseStatement();
-                const whileStatement = try self.allocator.create(AST.Statement);
-                whileStatement.* = AST.Statement{ .While = .{
-                    .body = body,
-                    .condition = condition,
-                    .loopId = 0,
-                } };
-                return whileStatement;
-            },
-            else => {
-                const twoToks = try self.l.peekTwoTokens(self.allocator);
-                if (twoToks[1]) |secondTok| {
-                    if (secondTok.type == lexer.TokenType.COLON) {
-                        const identifier = try self.l.nextToken(self.allocator);
-                        const colon = try self.l.nextToken(self.allocator);
-                        std.debug.assert(colon.type == lexer.TokenType.COLON);
-                        const labelStmt = try self.allocator.create(AST.Statement);
-                        // std.log.warn("Found label: {s}\n", .{self.l.buffer[identifier.start .. identifier.end + 1]});
-                        labelStmt.* = AST.Statement{
-                            .Label = self.l.buffer[identifier.start .. identifier.end + 1],
-                        };
-                        return labelStmt;
-                    }
-                }
-                const expression = try self.parseExpression(0);
-                const expressionStmt = try self.allocator.create(AST.Statement);
-                const semicolon = try self.l.nextToken(self.allocator);
-                std.debug.assert(semicolon.type == lexer.TokenType.SEMICOLON);
-                expressionStmt.* = AST.Statement{
-                    .Expression = expression,
-                };
-                return expressionStmt;
-            },
+        };
+        const peeked = try self.l.peekToken(self.allocator);
+        if (peeked != null and peeked.?.type == lexer.TokenType.SEMICOLON) {
+            _ = try self.l.nextToken(self.allocator);
         }
+        return retStmt;
     }
 
-    fn tokToUnaryOp(tokenType: lexer.TokenType) ParserError!AST.UnaryOp {
-        switch (tokenType) {
-            .MINUS => {
-                return AST.UnaryOp.NEGATE;
-            },
-            .TILDE => {
-                return AST.UnaryOp.COMPLEMENT;
-            },
-            else => {
-                return lexer.LexerError.InvalidToken;
-            },
+    pub inline fn parseEmpty(self: *Parser) ParserError!*AST.Statement {
+        _ = try self.l.nextToken(self.allocator);
+        const nullStmt = try self.allocator.create(AST.Statement);
+        nullStmt.* = AST.Statement{
+            .Null = {},
+        };
+        return nullStmt;
+    }
+
+    pub inline fn parseIf(self: *Parser) ParserError!*AST.Statement {
+        _ = try self.l.nextToken(self.allocator);
+        const ifStmt = try self.allocator.create(AST.Statement);
+        const expr = try self.parseFactor();
+        const thenStmt = try self.parseStatement();
+        ifStmt.* = AST.Statement{ .If = AST.If{
+            .condition = expr,
+            .thenStmt = thenStmt,
+        } };
+
+        const peekToken = try self.l.peekToken(self.allocator);
+        if (peekToken != null and peekToken.?.type == lexer.TokenType.ELSE) {
+            _ = try self.l.nextToken(self.allocator);
+            const elseStmt = try self.parseStatement();
+            ifStmt.If.elseStmt = elseStmt;
         }
+        return ifStmt;
+    }
+
+    pub inline fn parseCompound(self: *Parser) ParserError!*AST.Statement {
+        _ = try self.l.nextToken(self.allocator);
+        const blockItemsList = std.ArrayList(*AST.BlockItem).init(self.allocator);
+        const compoundStatement = try self.allocator.create(AST.Statement);
+        compoundStatement.* = AST.Statement{
+            .Compound = blockItemsList,
+        };
+        while (true) {
+            const hasPeeked = try self.l.peekToken(self.allocator);
+            if (hasPeeked == null) break;
+            if (hasPeeked.?.type == lexer.TokenType.RBRACE) break;
+            const blockItem = try self.parseBlockItem();
+            try compoundStatement.Compound.append(blockItem);
+        }
+        const rbrace = try self.l.nextToken(self.allocator);
+        std.debug.assert(rbrace.type == lexer.TokenType.RBRACE);
+        return compoundStatement;
+    }
+
+    pub inline fn parseGoto(self: *Parser) ParserError!*AST.Statement {
+        _ = try self.l.nextToken(self.allocator);
+        const jumpLabel = try self.l.nextToken(self.allocator);
+        const gotoStatement = try self.allocator.create(AST.Statement);
+        gotoStatement.* = AST.Statement{
+            .Goto = self.l.buffer[jumpLabel.start .. jumpLabel.end + 1],
+        };
+        const semicolon = try self.l.nextToken(self.allocator);
+        std.debug.assert(semicolon.type == lexer.TokenType.SEMICOLON);
+        return gotoStatement;
+    }
+
+    pub inline fn parseDoWhile(self: *Parser) ParserError!*AST.Statement {
+        _ = try self.l.nextToken(self.allocator);
+        const body = try self.parseStatement();
+        const whileTok = try self.l.nextToken(self.allocator);
+        std.debug.assert(whileTok.type == lexer.TokenType.WHILE);
+        const lparen = try self.l.nextToken(self.allocator);
+        std.debug.assert(lparen.type == lexer.TokenType.LPAREN);
+        const condition = try self.parseExpression(0);
+        const rparen = try self.l.nextToken(self.allocator);
+        std.debug.assert(rparen.type == lexer.TokenType.RPAREN);
+        const semicolon = try self.l.nextToken(self.allocator);
+        std.debug.assert(semicolon.type == lexer.TokenType.SEMICOLON);
+        const doWhileStatement = try self.allocator.create(AST.Statement);
+        doWhileStatement.* = AST.Statement{ .DoWhile = .{
+            .body = body,
+            .condition = condition,
+            .loopId = 0,
+        } };
+        return doWhileStatement;
+    }
+
+    inline fn parseFor(self: *Parser) ParserError!*AST.Statement {
+        _ = try self.l.nextToken(self.allocator);
+        const lparen = try self.l.nextToken(self.allocator);
+        std.debug.assert(lparen.type == lexer.TokenType.LPAREN);
+        const forInit = try self.parseForInit();
+        var peeked = try self.l.peekToken(self.allocator);
+        var condition: ?*AST.Expression = null;
+        var post: ?*AST.Expression = null;
+        if (peeked != null and peeked.?.type != lexer.TokenType.SEMICOLON) {
+            // std.log.warn("Parsing condition", .{});
+            condition = try self.parseExpression(0);
+        }
+        const semicolon = try self.l.nextToken(self.allocator);
+        std.debug.assert(semicolon.type == lexer.TokenType.SEMICOLON);
+        peeked = try self.l.peekToken(self.allocator);
+        if (peeked != null and peeked.?.type != lexer.TokenType.RPAREN) {
+            // std.log.warn("Parsing post", .{});
+            post = try self.parseExpression(0);
+        }
+        const rparen = try self.l.nextToken(self.allocator);
+        if (rparen.type != lexer.TokenType.RPAREN) {
+            // std.log.warn("RParen expected, found {any}\n", .{rparen.type});
+            unreachable;
+        }
+        const body = try self.parseStatement();
+        const forStmt = try self.allocator.create(AST.Statement);
+        forStmt.* = .{
+            .For = .{
+                .init = forInit,
+                .condition = condition,
+                .post = post,
+                .body = body,
+                .loopId = 0,
+            },
+        };
+        return forStmt;
+    }
+
+    inline fn parseBreak(self: *Parser) ParserError!*AST.Statement {
+        _ = try self.l.nextToken(self.allocator);
+        const semicolon = try self.l.nextToken(self.allocator);
+        std.debug.assert(semicolon.type == lexer.TokenType.SEMICOLON);
+        const breakStatement = try self.allocator.create(AST.Statement);
+        breakStatement.* = AST.Statement{ .Break = 0 };
+        return breakStatement;
+    }
+
+    inline fn parseContinue(self: *Parser) ParserError!*AST.Statement {
+        _ = try self.l.nextToken(self.allocator);
+        const semicolon = try self.l.nextToken(self.allocator);
+        std.debug.assert(semicolon.type == lexer.TokenType.SEMICOLON);
+        const continueStatement = try self.allocator.create(AST.Statement);
+        continueStatement.* = AST.Statement{ .Continue = 0 };
+        return continueStatement;
+    }
+
+    inline fn parseWhile(self: *Parser) ParserError!*AST.Statement {
+        _ = try self.l.nextToken(self.allocator);
+        const lparen = try self.l.nextToken(self.allocator);
+        std.debug.assert(lparen.type == lexer.TokenType.LPAREN);
+        const condition = try self.parseExpression(0);
+        const rparen = try self.l.nextToken(self.allocator);
+        std.debug.assert(rparen.type == lexer.TokenType.RPAREN);
+        const body = try self.parseStatement();
+        const whileStatement = try self.allocator.create(AST.Statement);
+        whileStatement.* = AST.Statement{ .While = .{
+            .body = body,
+            .condition = condition,
+            .loopId = 0,
+        } };
+        return whileStatement;
+    }
+
+    inline fn parseExpressionOrLabel(self: *Parser) ParserError!*AST.Statement {
+        const twoToks = try self.l.peekTwoTokens(self.allocator);
+        if (twoToks[1]) |secondTok| {
+            if (secondTok.type == lexer.TokenType.COLON) {
+                const identifier = try self.l.nextToken(self.allocator);
+                const colon = try self.l.nextToken(self.allocator);
+                std.debug.assert(colon.type == lexer.TokenType.COLON);
+                const labelStmt = try self.allocator.create(AST.Statement);
+                // std.log.warn("Found label: {s}\n", .{self.l.buffer[identifier.start .. identifier.end + 1]});
+                labelStmt.* = AST.Statement{
+                    .Label = self.l.buffer[identifier.start .. identifier.end + 1],
+                };
+                return labelStmt;
+            }
+        }
+        const expression = try self.parseExpression(0);
+        const expressionStmt = try self.allocator.create(AST.Statement);
+        const semicolon = try self.l.nextToken(self.allocator);
+        std.debug.assert(semicolon.type == lexer.TokenType.SEMICOLON);
+        expressionStmt.* = AST.Statement{
+            .Expression = expression,
+        };
+        return expressionStmt;
+    }
+
+    pub fn parseStatement(self: *Parser) ParserError!*AST.Statement {
+        return switch ((try self.l.peekToken(self.allocator)).?.type) {
+            .RETURN => try self.parseReturn(),
+            .SEMICOLON => try self.parseEmpty(),
+            .IF => try self.parseIf(),
+            .LBRACE => try self.parseCompound(),
+            .GOTO => try self.parseGoto(),
+            .DO => try self.parseDoWhile(),
+            .FOR => try self.parseFor(),
+            .BREAK => try self.parseBreak(),
+            .CONTINUE => try self.parseContinue(),
+            .WHILE => try self.parseWhile(),
+            else => try self.parseExpressionOrLabel(),
+        };
+    }
+
+    inline fn tokToUnaryOp(tokenType: lexer.TokenType) ParserError!AST.UnaryOp {
+        return switch (tokenType) {
+            .MINUS => AST.UnaryOp.NEGATE,
+            .TILDE => AST.UnaryOp.COMPLEMENT,
+            else => lexer.LexerError.InvalidToken,
+        };
+    }
+
+    pub inline fn parseVarOrFn(self: *Parser) ParserError!*AST.Expression {
+        const peekedTwo = try self.l.peekTwoTokens(self.allocator);
+        if (peekedTwo[1] != null and peekedTwo[1].?.type == lexer.TokenType.LPAREN) {
+            //Function Call
+            const fnName = self.l.buffer[peekedTwo[0].?.start .. peekedTwo[0].?.end + 1];
+            var args = std.ArrayList(*AST.Expression).init(self.allocator);
+            _ = try self.l.nextToken(self.allocator);
+            _ = try self.l.nextToken(self.allocator);
+            while ((try self.l.peekToken(self.allocator)).?.type != lexer.TokenType.RPAREN) {
+                const expr = try self.parseExpression(0);
+                try args.append(expr);
+                if ((try self.l.peekToken(self.allocator)).?.type == lexer.TokenType.COMMA) {
+                    _ = try self.l.nextToken(self.allocator);
+                }
+            }
+            _ = try self.l.nextToken(self.allocator);
+            const functionCall = try self.allocator.create(AST.Expression);
+            functionCall.* = .{ .FunctionCall = .{
+                .name = fnName,
+                .args = args,
+            } };
+            return functionCall;
+        }
+        // Identifier
+        const currToken = try self.l.nextToken(self.allocator);
+        const identifier = try self.allocator.create(AST.Expression);
+        identifier.* = AST.Expression{ .Identifier = .{ .name = self.l.buffer[currToken.start .. currToken.end + 1] } };
+        return identifier;
+    }
+
+    pub inline fn parseBracketed(self: *Parser) ParserError!*AST.Expression {
+        _ = try self.l.nextToken(self.allocator);
+        const exp = try self.parseExpression(0);
+        const rparen = try self.l.nextToken(self.allocator);
+        std.debug.assert(rparen.type == lexer.TokenType.RPAREN);
+        return exp;
+    }
+
+    pub inline fn parseUnaryExp(self: *Parser) ParserError!*AST.Expression {
+        const op = try tokToUnaryOp((try self.l.nextToken(self.allocator)).type);
+        const factor = try self.parseFactor();
+        const unaryNode = try self.allocator.create(AST.Expression);
+        unaryNode.* = AST.Expression{ .Unary = AST.Unary{
+            .unaryOp = op,
+            .exp = factor,
+        } };
+        return unaryNode;
+    }
+    pub inline fn parseInteger(self: *Parser) ParserError!*AST.Expression {
+        const currToken = try self.l.nextToken(self.allocator);
+        const integerNode = try self.allocator.create(AST.Expression);
+        integerNode.* = AST.Expression{
+            .Constant = AST.Constant{
+                .type = .Integer,
+                .value = .{ .Integer = try std.fmt.parseInt(u32, self.l.buffer[currToken.start .. currToken.end + 1], 10) },
+            },
+        };
+        return integerNode;
+    }
+
+    pub inline fn parseLong(self: *Parser) ParserError!*AST.Expression {
+        const currToken = try self.l.nextToken(self.allocator);
+
+        const longNode = try self.allocator.create(AST.Expression);
+        const suffixRemovedSlice = if (self.l.buffer[currToken.end - 1] == 'L') self.l.buffer[currToken.start .. currToken.end - 1] else self.l.buffer[currToken.start..currToken.end];
+        longNode.* = AST.Expression{ .Constant = AST.Constant{
+            .type = .Long,
+            .value = .{ .Long = try std.fmt.parseInt(u64, suffixRemovedSlice, 10) },
+        } };
+        return longNode;
     }
 
     pub fn parseFactor(self: *Parser) ParserError!*AST.Expression {
         const peekToken = (try self.l.peekToken(self.allocator)).?;
-        switch (peekToken.type) {
-            .LONG => {
-                const currToken = try self.l.nextToken(self.allocator);
-                const integerNode = try self.allocator.create(AST.Expression);
-                const suffixRemovedSlice = if (self.l.buffer[currToken.end - 1] == 'L') self.l.buffer[currToken.start .. currToken.end - 1] else self.l.buffer[currToken.start..currToken.end];
-                integerNode.* = AST.Expression{ .Constant = AST.Constant{
-                    .type = .Long,
-                    .value = .{ .Long = try std.fmt.parseInt(u64, suffixRemovedSlice, 10) },
-                } };
-                return integerNode;
-            },
-            .INTEGER => {
-                const currToken = try self.l.nextToken(self.allocator);
-                const integerNode = try self.allocator.create(AST.Expression);
-                integerNode.* = AST.Expression{
-                    .Constant = AST.Constant{
-                        .type = .Integer,
-                        .value = .{ .Integer = try std.fmt.parseInt(u32, self.l.buffer[currToken.start .. currToken.end + 1], 10) },
-                    },
-                };
-                return integerNode;
-            },
-            .MINUS, .TILDE => {
-                const op = try tokToUnaryOp((try self.l.nextToken(self.allocator)).type);
-                const factor = try self.parseFactor();
-                const unaryNode = try self.allocator.create(AST.Expression);
-                unaryNode.* = AST.Expression{ .Unary = AST.Unary{
-                    .unaryOp = op,
-                    .exp = factor,
-                } };
-                return unaryNode;
-            },
-            .LPAREN => {
-                _ = try self.l.nextToken(self.allocator);
-                const exp = try self.parseExpression(0);
-                const rparen = try self.l.nextToken(self.allocator);
-                std.debug.assert(rparen.type == lexer.TokenType.RPAREN);
-                return exp;
-            },
-            .IDENTIFIER => {
-                const peekedTwo = try self.l.peekTwoTokens(self.allocator);
-                if (peekedTwo[1] != null and peekedTwo[1].?.type == lexer.TokenType.LPAREN) {
-                    //Function Call
-                    const fnName = self.l.buffer[peekedTwo[0].?.start .. peekedTwo[0].?.end + 1];
-                    var args = std.ArrayList(*AST.Expression).init(self.allocator);
-                    _ = try self.l.nextToken(self.allocator);
-                    _ = try self.l.nextToken(self.allocator);
-                    while ((try self.l.peekToken(self.allocator)).?.type != lexer.TokenType.RPAREN) {
-                        const expr = try self.parseExpression(0);
-                        try args.append(expr);
-                        if ((try self.l.peekToken(self.allocator)).?.type == lexer.TokenType.COMMA) {
-                            _ = try self.l.nextToken(self.allocator);
-                        }
-                    }
-                    _ = try self.l.nextToken(self.allocator);
-                    const functionCall = try self.allocator.create(AST.Expression);
-                    functionCall.* = .{ .FunctionCall = .{
-                        .name = fnName,
-                        .args = args,
-                    } };
-                    return functionCall;
-                }
-                // Identifier
-                const currToken = try self.l.nextToken(self.allocator);
-                const identifier = try self.allocator.create(AST.Expression);
-                identifier.* = AST.Expression{ .Identifier = .{ .name = self.l.buffer[currToken.start .. currToken.end + 1] } };
-                return identifier;
-            },
+        return switch (peekToken.type) {
+            .LONG => try self.parseLong(),
+            .INTEGER => try self.parseInteger(),
+            .MINUS, .TILDE => try self.parseUnaryExp(),
+            .LPAREN => try self.parseBracketed(),
+            .IDENTIFIER => try self.parseVarOrFn(),
             else => |tokType| {
                 std.log.warn("Parse factor unknown type: {any}\n", .{tokType});
                 unreachable;
             },
-        }
+        };
     }
 
     fn getPrecedence(tok: lexer.TokenType) ?u32 {
-        switch (tok) {
-            .MULTIPLY, .DIVIDE, .MODULO => {
-                return 50;
-            },
-            .PLUS, .MINUS => {
-                return 45;
-            },
-            .LESS, .LESSEQ, .GREATER, .GREATEREQ => {
-                return 35;
-            },
-            .EQUALS, .NOT_EQUALS => {
-                return 30;
-            },
-            .LOGIC_AND => {
-                return 10;
-            },
-            .LOGIC_OR => {
-                return 5;
-            },
-            .TERNARY => {
-                return 3;
-            },
-            .ASSIGN => {
-                return 1;
-            },
-            else => {
-                return null;
-            },
-        }
+        return switch (tok) {
+            .MULTIPLY, .DIVIDE, .MODULO => 50,
+            .PLUS, .MINUS => 45,
+            .LESS, .LESSEQ, .GREATER, .GREATEREQ => 35,
+            .EQUALS, .NOT_EQUALS => 30,
+            .LOGIC_AND => 10,
+            .LOGIC_OR => 5,
+            .TERNARY => 3,
+            .ASSIGN => 1,
+            else => null,
+        };
     }
     fn binaryOpFromTokType(tok: lexer.TokenType) AST.BinOp {
         return switch (tok) {

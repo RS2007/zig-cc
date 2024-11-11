@@ -101,6 +101,11 @@ pub const TypeInfo = union(TypeKind) {
     Void,
     Integer,
     Long,
+
+    const Self = @This();
+    pub inline fn isOfKind(self: *Self, other: TypeKind) bool {
+        return std.mem.eql(u8, @tagName(self.*), std.enums.tagName(TypeKind, other).?);
+    }
 };
 
 pub const Symbol = struct {
@@ -284,11 +289,32 @@ pub fn typecheckExternalDecl(self: *Typechecker, externalDecl: *AST.ExternalDecl
                 // INFO: Assign the expression value to the decl
                 // TODO: accomodate longs
 
-                initializer = .{ .Initial = switch (expression.getType()) {
-                    .Integer => .{ .type = .Integer, .value = .{ .Integer = expression.Constant.value.Integer } },
-                    .Long => .{ .type = .Long, .value = .{ .Long = expression.Constant.value.Long } },
-                    else => unreachable,
-                } };
+                // Add a cast here
+
+                if (varDecl.type != expression.getType()) {
+                    const castExpr = try self.allocator.create(AST.Expression);
+                    castExpr.* = AST.Expression{ .Cast = .{
+                        .type = varDecl.type,
+                        .value = expression,
+                    } };
+                    varDecl.expression = castExpr;
+                    const unwrappedConst: u64 = switch (expression.Constant.value) {
+                        .Integer => |integer| @intCast(integer),
+
+                        .Long => |long| long,
+                    };
+                    initializer = .{ .Initial = switch (varDecl.type) {
+                        .Integer => .{ .type = .Integer, .value = .{ .Integer = @intCast(unwrappedConst) } },
+                        .Long => .{ .type = .Long, .value = .{ .Long = @intCast(unwrappedConst) } },
+                        else => unreachable,
+                    } };
+                } else {
+                    initializer = .{ .Initial = switch (varDecl.type) {
+                        .Integer => .{ .type = .Integer, .value = .{ .Integer = expression.Constant.value.Integer } },
+                        .Long => .{ .type = .Long, .value = .{ .Long = expression.Constant.value.Long } },
+                        else => unreachable,
+                    } };
+                }
 
                 // INFO: Extern decls no assignment check
                 if (varDecl.storageClass == AST.Qualifier.EXTERN) {
@@ -342,6 +368,21 @@ pub fn typecheckExternalDecl(self: *Typechecker, externalDecl: *AST.ExternalDecl
                             unreachable;
                         },
                     }
+
+                    // INFO: repeated cause extern requires this (should be
+                    // a function at some point)
+                    if (!varSym.typeInfo.isOfKind(TypeKind.from(varDecl.type))) {
+                        const typeErrorStruct = try self.allocator.create(TypeErrorStruct);
+                        typeErrorStruct.* = .{
+                            .errorType = TypeError.TypeMismatch,
+                            .errorPayload = (try std.fmt.allocPrint(
+                                self.allocator,
+                                "Type mismatch for declaration of {s}\n",
+                                .{varDecl.name},
+                            )),
+                        };
+                        return typeErrorStruct;
+                    }
                 } else {
                     //INFO: if no extern, check whether earlier decl was
                     //global/static. check if the new one is the same, else
@@ -369,6 +410,19 @@ pub fn typecheckExternalDecl(self: *Typechecker, externalDecl: *AST.ExternalDecl
                     }
                 }
 
+                if (!varSym.typeInfo.isOfKind(TypeKind.from(varDecl.type))) {
+                    const typeErrorStruct = try self.allocator.create(TypeErrorStruct);
+                    typeErrorStruct.* = .{
+                        .errorType = TypeError.TypeMismatch,
+                        .errorPayload = (try std.fmt.allocPrint(
+                            self.allocator,
+                            "Type mismatch for declaration of {s}\n",
+                            .{varDecl.name},
+                        )),
+                    };
+                    return typeErrorStruct;
+                }
+
                 // zig fmt: off
                 if (std.mem.eql(u8, @tagName(varSym.attributes.StaticAttr.init), "Initial") 
                     and !std.mem.eql(u8, @tagName(initializer), "Initial")) {
@@ -381,7 +435,11 @@ pub fn typecheckExternalDecl(self: *Typechecker, externalDecl: *AST.ExternalDecl
 
             const sym = try self.allocator.create(Symbol);
             sym.* = .{
-                .typeInfo = .Integer,
+                .typeInfo = switch (varDecl.type) {
+                    .Integer => .Integer,
+                    .Long => .Long,
+                    else => unreachable,
+                },
                 .attributes = .{
                     .StaticAttr = .{
                         .global = global,
@@ -461,6 +519,19 @@ fn typecheckBlkItem(self: *Typechecker, blkItem: *AST.BlockItem) TypeCheckerErro
                             return typeErrorStruct;
                         }
                         if (self.symbolTable.get(decl.name)) |olderSym| {
+                            std.log.warn("This: {any} and {any}\n", .{ olderSym.typeInfo, TypeKind.from(decl.type) });
+                            if (!olderSym.typeInfo.isOfKind(TypeKind.from(decl.type))) {
+                                const typeErrorStruct = try self.allocator.create(TypeErrorStruct);
+                                typeErrorStruct.* = .{
+                                    .errorType = TypeError.FnRedeclaredAsVar,
+                                    .errorPayload = (try std.fmt.allocPrint(
+                                        self.allocator,
+                                        "Extern variable type error for symbol {s}\n",
+                                        .{decl.name},
+                                    )),
+                                };
+                                return typeErrorStruct;
+                            }
                             if (std.mem.eql(u8, @tagName(olderSym.typeInfo), "Function")) {
                                 const typeErrorStruct = try self.allocator.create(TypeErrorStruct);
                                 typeErrorStruct.* = .{
@@ -830,8 +901,10 @@ fn typecheckExpr(self: *Typechecker, expr: *AST.Expression) TypeError!AST.Type {
                     }
                 },
                 else => blk: {
-                    expr.Binary.lhs = try convert(self.allocator, expr.Binary.lhs, AST.Type.Long);
-                    expr.Binary.rhs = try convert(self.allocator, expr.Binary.rhs, AST.Type.Long);
+                    if (lhsType == AST.Type.Long or rhsType == AST.Type.Long) {
+                        expr.Binary.lhs = try convert(self.allocator, expr.Binary.lhs, AST.Type.Long);
+                        expr.Binary.rhs = try convert(self.allocator, expr.Binary.rhs, AST.Type.Long);
+                    }
                     break :blk AST.Type.Integer;
                 },
             };
