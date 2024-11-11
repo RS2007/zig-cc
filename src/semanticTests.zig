@@ -74,7 +74,6 @@ test "Declarations" {
     const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
     var p = try parser.Parser.init(allocator, l);
     const program = try p.parseProgram();
-    try semantic.varResolutionPass(allocator, program);
     //const stdout = std.io.getStdOut().writer();
     //try prettyPrintAST(Node{ .Program = program }, stdout, 0);
     std.log.warn("{any}", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[2].Statement.Return.expression.Unary.exp});

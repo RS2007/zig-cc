@@ -279,6 +279,10 @@ pub const FunctionDef = struct {
     returnType: Type,
     storageClass: ?Qualifier,
 
+    pub fn isDefined(self: *FunctionDef) bool {
+        return self.blockItems.items.len != 0;
+    }
+
     pub fn genTAC(functionDef: FunctionDef, renderer: *TACRenderer, instructions: *std.ArrayList(*tac.Instruction), symbolTable: std.StringHashMap(*semantic.Symbol), allocator: std.mem.Allocator) CodegenError!void {
         for (functionDef.blockItems.items) |blockItem| {
             try blockItem.genTAC(renderer, instructions, @constCast(&symbolTable), allocator);

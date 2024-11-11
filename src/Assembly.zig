@@ -235,6 +235,9 @@ pub const Operand = union(OperandType) {
     Pseudo: []u8,
     Data: []u8,
     Stack: i32,
+    inline fn isOfKind(self: Operand, comptime operandType: OperandType) bool {
+        return std.meta.activeTag(self) == operandType;
+    }
     pub fn stringify(operand: *Operand, allocator: std.mem.Allocator) ast.CodegenError![]u8 {
         switch (operand.*) {
             .Imm => |imm| {
@@ -425,36 +428,40 @@ pub const Instruction = union(InstructionType) {
     }
 };
 
+inline fn fixMultiply(inst: *Instruction, allocator: std.mem.Allocator, fixedInstructions: *std.ArrayList(*Instruction)) ast.CodegenError!void {
+    if (inst.Binary.lhs.isOfKind(.Stack)) {
+        const movLeftToR11 = try allocator.create(Instruction);
+        movLeftToR11.* = Instruction{
+            .Mov = MovInst{
+                .dest = Operand{ .Reg = Reg.R11 },
+                .src = inst.Binary.lhs,
+                .type = inst.Binary.type,
+            },
+        };
+        const movR11ToLeft = try allocator.create(Instruction);
+        movR11ToLeft.* = Instruction{ .Mov = MovInst{
+            .dest = inst.Binary.lhs,
+            .src = Operand{ .Reg = Reg.R11 },
+            .type = inst.Binary.type,
+        } };
+        inst.Binary.lhs = Operand{ .Reg = Reg.R11 };
+        try fixedInstructions.append(movLeftToR11);
+        try fixedInstructions.append(inst);
+        try fixedInstructions.append(movR11ToLeft);
+    } else {
+        try fixedInstructions.append(inst);
+    }
+}
+
 // This function fixes the instructions, stack to stack moves
 pub fn fixupInstructions(instructions: *std.ArrayList(*Instruction), allocator: std.mem.Allocator) ast.CodegenError!std.ArrayList(*Instruction) {
     var fixedInstructions = try std.ArrayList(*Instruction).initCapacity(allocator, instructions.items.len);
     for (instructions.items) |inst| {
         switch (inst.*) {
             .Mov => |mov| {
-                var isSrcStack = false;
-                var isDestStack = false;
-                switch (mov.src) {
-                    .Stack => {
-                        isSrcStack = true;
-                    },
-                    .Data => {
-                        isSrcStack = true;
-                    },
-                    else => {},
-                }
-                switch (mov.dest) {
-                    .Stack => {
-                        isDestStack = true;
-                    },
-                    .Data => {
-                        isDestStack = true;
-                    },
-                    .Pseudo => {
-                        unreachable;
-                    },
-                    else => {},
-                }
-                if (isSrcStack and isDestStack) {
+                const isSrcMem = mov.src.isOfKind(.Data) or mov.src.isOfKind(.Stack);
+                const isDestMem = mov.dest.isOfKind(.Data) or mov.dest.isOfKind(.Stack);
+                if (isSrcMem and isDestMem) {
                     //_ = instructions.orderedRemove(i);
                     const movInstSrc = try allocator.create(Instruction);
                     const movInstDest = try allocator.create(Instruction);
@@ -491,32 +498,14 @@ pub fn fixupInstructions(instructions: *std.ArrayList(*Instruction), allocator: 
             },
             .Binary => |binary| {
                 if (binary.op == BinaryOp.Multiply) {
-                    if (std.mem.eql(u8, @tagName(binary.lhs), "Stack")) {
-                        const movLeftToR11 = try allocator.create(Instruction);
-                        movLeftToR11.* = Instruction{
-                            .Mov = MovInst{
-                                .dest = Operand{ .Reg = Reg.R11 },
-                                .src = inst.Binary.lhs,
-                                .type = binary.type,
-                            },
-                        };
-                        const movR11ToLeft = try allocator.create(Instruction);
-                        movR11ToLeft.* = Instruction{ .Mov = MovInst{
-                            .dest = inst.Binary.lhs,
-                            .src = Operand{ .Reg = Reg.R11 },
-                            .type = binary.type,
-                        } };
-                        inst.Binary.lhs = Operand{ .Reg = Reg.R11 };
-                        try fixedInstructions.append(movLeftToR11);
-                        try fixedInstructions.append(inst);
-                        try fixedInstructions.append(movR11ToLeft);
-                    } else {
-                        try fixedInstructions.append(inst);
-                    }
+                    try fixMultiply(inst, allocator, &fixedInstructions);
                     continue;
                 }
 
-                if ((std.mem.eql(u8, @tagName(binary.lhs), "Stack") or std.mem.eql(u8, @tagName(binary.lhs), "Data")) and (std.mem.eql(u8, @tagName(binary.rhs), "Stack") or std.mem.eql(u8, @tagName(binary.rhs), "Data"))) {
+                const isSrcMem = binary.lhs.isOfKind(.Data) or binary.lhs.isOfKind(.Stack);
+                const isDestMem = binary.rhs.isOfKind(.Data) or binary.rhs.isOfKind(.Stack);
+
+                if (isSrcMem and isDestMem) {
                     const cpInstruction = try allocator.create(Instruction);
                     cpInstruction.* = Instruction{
                         .Mov = .{
@@ -541,7 +530,9 @@ pub fn fixupInstructions(instructions: *std.ArrayList(*Instruction), allocator: 
                 }
             },
             .Cmp => |cmp| {
-                if (std.mem.eql(u8, @tagName(cmp.op1), "Stack") and std.mem.eql(u8, @tagName(cmp.op2), "Stack")) {
+                const isOp1Mem = cmp.op1.isOfKind(.Data) or cmp.op1.isOfKind(.Stack);
+                const isOp2Mem = cmp.op2.isOfKind(.Data) or cmp.op2.isOfKind(.Stack);
+                if (isOp1Mem and isOp2Mem) {
                     const movInst = try allocator.create(Instruction);
                     movInst.* = Instruction{
                         .Mov = MovInst{
@@ -565,6 +556,13 @@ pub fn fixupInstructions(instructions: *std.ArrayList(*Instruction), allocator: 
                     continue;
                 }
             },
+            .Idiv => {
+                try fixupIdiv(
+                    inst,
+                    allocator,
+                    &fixedInstructions,
+                );
+            },
             else => {
                 try fixedInstructions.append(inst);
             },
@@ -576,271 +574,191 @@ pub fn fixupInstructions(instructions: *std.ArrayList(*Instruction), allocator: 
     return fixedInstructions;
 }
 
+inline fn fixupIdiv(
+    instruction: *Instruction,
+    allocator: std.mem.Allocator,
+    fixedInstructions: *std.ArrayList(*Instruction),
+) ast.CodegenError!void {
+    switch (instruction.Idiv) {
+        .Reg => {
+            const movIdivArgToR10 = try allocator.create(Instruction);
+            movIdivArgToR10.* = Instruction{ .Mov = MovInst{
+                .src = instruction.Idiv,
+                .dest = Operand{ .Reg = Reg.R10 },
+                .type = AsmType.LongWord,
+            } };
+            try fixedInstructions.append(
+                movIdivArgToR10,
+            );
+            const divInstruction = try allocator.create(Instruction);
+            divInstruction.* = .{
+                .Idiv = Operand{ .Reg = Reg.R10 },
+            };
+            try fixedInstructions.append(divInstruction);
+        },
+        .Pseudo => {
+            unreachable;
+        },
+        .Imm => |imm| {
+            const movIdivArgToR10 = try allocator.create(Instruction);
+            movIdivArgToR10.* = Instruction{ .Mov = MovInst{
+                .src = Operand{ .Imm = imm },
+                .dest = Operand{ .Reg = Reg.R10 },
+                .type = AsmType.LongWord,
+            } };
+            try fixedInstructions.append(
+                movIdivArgToR10,
+            );
+            const divInstruction = try allocator.create(Instruction);
+            divInstruction.* = .{
+                .Idiv = Operand{ .Reg = Reg.R10 },
+            };
+            try fixedInstructions.append(divInstruction);
+        },
+        .Data => |data| {
+            const movIdivArgToR10 = try allocator.create(Instruction);
+            movIdivArgToR10.* = Instruction{ .Mov = MovInst{
+                .src = Operand{ .Data = data },
+                .dest = Operand{ .Reg = Reg.R10 },
+                .type = AsmType.LongWord,
+            } };
+            try fixedInstructions.append(
+                movIdivArgToR10,
+            );
+            const divInstruction = try allocator.create(Instruction);
+            divInstruction.* = .{
+                .Idiv = Operand{ .Reg = Reg.R10 },
+            };
+            try fixedInstructions.append(divInstruction);
+        },
+        .Stack => |stack| {
+            const movIdivArgToR10 = try allocator.create(Instruction);
+            movIdivArgToR10.* = Instruction{ .Mov = MovInst{
+                .src = Operand{ .Stack = stack },
+                .dest = Operand{ .Reg = Reg.R10 },
+                .type = AsmType.LongWord,
+            } };
+            try fixedInstructions.append(
+                movIdivArgToR10,
+            );
+            const divInstruction = try allocator.create(Instruction);
+            divInstruction.* = .{
+                .Idiv = Operand{ .Reg = Reg.R10 },
+            };
+            try fixedInstructions.append(divInstruction);
+        },
+    }
+}
+
 pub fn replacePseudoRegs(function: *Function, allocator: std.mem.Allocator, asmSymbolTable: std.StringHashMap(*Symbol)) ast.CodegenError!void {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     const hashAllocator = arena.allocator();
     defer arena.deinit();
     var lookup = std.StringHashMap(i32).init(hashAllocator);
     var topOfStack: i32 = 0;
-    for (function.instructions.items, 0..) |inst, i| {
+    for (function.instructions.items) |inst| {
         switch (inst.*) {
             .Mov => |mov| {
-                std.log.warn("Mov: {any}\n", .{mov});
-                switch (mov.src) {
-                    .Pseudo => |pseudo| {
-                        if (lookup.contains(pseudo)) {
-                            inst.Mov.src = Operand{ .Stack = lookup.get(pseudo).? };
-                        } else {
-                            topOfStack -= switch (asmSymbolTable.get(pseudo).?.Obj.type) {
-                                .QuadWord => 8,
-                                .LongWord => 4,
-                            };
-                            try lookup.put(
-                                pseudo,
-                                topOfStack,
-                            );
-                            inst.Mov.src = Operand{ .Stack = topOfStack };
-                        }
-                    },
-                    else => {},
+                if (mov.src.isOfKind(.Pseudo)) {
+                    try replacePseudo(
+                        &inst.Mov.src,
+                        &lookup,
+                        @constCast(&asmSymbolTable),
+                        &topOfStack,
+                    );
                 }
-                switch (mov.dest) {
-                    .Pseudo => |pseudo| {
-                        if (lookup.contains(pseudo)) {
-                            inst.Mov.dest = Operand{ .Stack = lookup.get(pseudo).? };
-                        } else {
-                            topOfStack -= switch (asmSymbolTable.get(pseudo).?.Obj.type) {
-                                .QuadWord => 8,
-                                .LongWord => 4,
-                            };
-                            try lookup.put(
-                                pseudo,
-                                topOfStack,
-                            );
-                            inst.Mov.dest = Operand{ .Stack = topOfStack };
-                        }
-                    },
-                    else => {},
+                if (mov.dest.isOfKind(.Pseudo)) {
+                    try replacePseudo(
+                        &inst.Mov.dest,
+                        &lookup,
+                        @constCast(&asmSymbolTable),
+                        &topOfStack,
+                    );
                 }
-                std.log.warn("Transformed Mov: {any}\n", .{inst.Mov});
             },
             .Movsx => |mov| {
-                switch (mov.src) {
-                    .Pseudo => |pseudo| {
-                        if (lookup.contains(pseudo)) {
-                            inst.Movsx.src = Operand{ .Stack = lookup.get(pseudo).? };
-                        } else {
-                            topOfStack -= switch (asmSymbolTable.get(pseudo).?.Obj.type) {
-                                .QuadWord => 8,
-                                .LongWord => 4,
-                            };
-                            try lookup.put(
-                                pseudo,
-                                topOfStack,
-                            );
-                            inst.Movsx.src = Operand{ .Stack = topOfStack };
-                        }
-                    },
-                    else => {},
+                if (mov.src.isOfKind(.Pseudo)) {
+                    try replacePseudo(
+                        &inst.Movsx.src,
+                        &lookup,
+                        @constCast(&asmSymbolTable),
+                        &topOfStack,
+                    );
                 }
-                switch (mov.dest) {
-                    .Pseudo => |pseudo| {
-                        if (lookup.contains(pseudo)) {
-                            inst.Movsx.dest = Operand{ .Stack = lookup.get(pseudo).? };
-                        } else {
-                            topOfStack -= switch (asmSymbolTable.get(pseudo).?.Obj.type) {
-                                .QuadWord => 8,
-                                .LongWord => 4,
-                            };
-                            try lookup.put(
-                                pseudo,
-                                topOfStack,
-                            );
-                            inst.Movsx.dest = Operand{ .Stack = topOfStack };
-                        }
-                    },
-                    else => {},
+                if (mov.dest.isOfKind(.Pseudo)) {
+                    try replacePseudo(
+                        &inst.Movsx.dest,
+                        &lookup,
+                        @constCast(&asmSymbolTable),
+                        &topOfStack,
+                    );
                 }
             },
             .Unary => |unary| {
-                switch (unary.rhs) {
-                    .Pseudo => |pseudo| {
-                        if (lookup.contains(pseudo)) {
-                            inst.Unary.rhs = Operand{ .Stack = lookup.get(pseudo).? };
-                            continue;
-                        } else {
-                            topOfStack -= switch (asmSymbolTable.get(pseudo).?.Obj.type) {
-                                .QuadWord => 8,
-                                .LongWord => 4,
-                            };
-                            try lookup.put(
-                                pseudo,
-                                topOfStack,
-                            );
-                            inst.Unary.rhs = Operand{ .Stack = topOfStack };
-                        }
-                    },
-                    else => {},
+                if (unary.rhs.isOfKind(.Pseudo)) {
+                    try replacePseudo(
+                        &inst.Unary.rhs,
+                        &lookup,
+                        @constCast(&asmSymbolTable),
+                        &topOfStack,
+                    );
                 }
             },
             .Binary => |binary| {
-                switch (binary.lhs) {
-                    .Pseudo => |pseudo| {
-                        if (lookup.contains(pseudo)) {
-                            inst.Binary.lhs = Operand{ .Stack = lookup.get(pseudo).? };
-                        } else {
-                            topOfStack -= switch (asmSymbolTable.get(pseudo).?.Obj.type) {
-                                .QuadWord => 8,
-                                .LongWord => 4,
-                            };
-                            try lookup.put(
-                                pseudo,
-                                topOfStack,
-                            );
-                            inst.Binary.lhs = Operand{ .Stack = topOfStack };
-                        }
-                    },
-                    else => {},
+                if (binary.lhs.isOfKind(.Pseudo)) {
+                    try replacePseudo(
+                        &inst.Binary.lhs,
+                        &lookup,
+                        @constCast(&asmSymbolTable),
+                        &topOfStack,
+                    );
                 }
-                switch (binary.rhs) {
-                    .Pseudo => |pseudo| {
-                        if (lookup.contains(pseudo)) {
-                            inst.Binary.rhs = Operand{ .Stack = lookup.get(pseudo).? };
-                        } else {
-                            topOfStack -= switch (asmSymbolTable.get(pseudo).?.Obj.type) {
-                                .QuadWord => 8,
-                                .LongWord => 4,
-                            };
-                            try lookup.put(
-                                pseudo,
-                                topOfStack,
-                            );
-                            inst.Binary.rhs = Operand{ .Stack = topOfStack };
-                        }
-                    },
-                    else => {},
+                if (binary.rhs.isOfKind(.Pseudo)) {
+                    try replacePseudo(
+                        &inst.Binary.rhs,
+                        &lookup,
+                        @constCast(&asmSymbolTable),
+                        &topOfStack,
+                    );
                 }
-                continue;
             },
             .Idiv => |idiv| {
-                switch (idiv) {
-                    .Reg => |reg| {
-                        if (reg != Reg.R10) {
-                            const movIdivArgToR10 = try allocator.create(Instruction);
-                            movIdivArgToR10.* = Instruction{ .Mov = MovInst{
-                                .src = idiv,
-                                .dest = Operand{ .Reg = Reg.R10 },
-                                .type = AsmType.LongWord,
-                            } };
-                            try function.instructions.insert(
-                                i,
-                                movIdivArgToR10,
-                            );
-                            inst.Idiv = Operand{ .Reg = Reg.R10 };
-                        }
-                    },
-                    .Pseudo => |pseudo| {
-                        const movIdivArgToR10 = try allocator.create(Instruction);
-                        movIdivArgToR10.* = Instruction{ .Mov = MovInst{
-                            .src = if (lookup.contains(pseudo))
-                                Operand{ .Stack = lookup.get(pseudo).? }
-                            else blk: {
-                                topOfStack -= switch (asmSymbolTable.get(pseudo).?.Obj.type) {
-                                    .QuadWord => 8,
-                                    .LongWord => 4,
-                                };
-                                try lookup.put(pseudo, topOfStack);
-                                break :blk Operand{ .Stack = topOfStack };
-                            },
-                            .dest = Operand{ .Reg = Reg.R10 },
-                            .type = AsmType.LongWord,
-                        } };
-                        try function.instructions.insert(
-                            i,
-                            movIdivArgToR10,
-                        );
-                        inst.Idiv = Operand{ .Reg = Reg.R10 };
-                    },
-                    .Imm => |imm| {
-                        const movIdivArgToR10 = try allocator.create(Instruction);
-                        movIdivArgToR10.* = Instruction{ .Mov = MovInst{
-                            .src = Operand{ .Imm = imm },
-                            .dest = Operand{ .Reg = Reg.R10 },
-                            .type = AsmType.LongWord,
-                        } };
-                        try function.instructions.insert(
-                            i,
-                            movIdivArgToR10,
-                        );
-                        inst.Idiv = Operand{ .Reg = Reg.R10 };
-                    },
-                    .Data => {
-                        unreachable;
-                    },
-                    .Stack => {
-                        unreachable;
-                    },
+                if (idiv.isOfKind(.Pseudo)) {
+                    try replacePseudo(
+                        &inst.Idiv,
+                        &lookup,
+                        @constCast(&asmSymbolTable),
+                        &topOfStack,
+                    );
                 }
             },
             .Cdq, .AllocateStack, .Ret => {},
             .Cmp => |cmp| {
-                switch (cmp.op1) {
-                    .Pseudo => |pseudo| {
-                        if (lookup.contains(pseudo)) {
-                            inst.Cmp.op1 = Operand{ .Stack = lookup.get(pseudo).? };
-                        } else {
-                            topOfStack -= switch (asmSymbolTable.get(pseudo).?.Obj.type) {
-                                .QuadWord => 8,
-                                .LongWord => 4,
-                            };
-                            try lookup.put(
-                                pseudo,
-                                topOfStack,
-                            );
-                            inst.Cmp.op1 = Operand{ .Stack = topOfStack };
-                        }
-                    },
-                    else => {},
+                if (cmp.op1.isOfKind(.Pseudo)) {
+                    try replacePseudo(
+                        &inst.Cmp.op1,
+                        &lookup,
+                        @constCast(&asmSymbolTable),
+                        &topOfStack,
+                    );
                 }
-                switch (cmp.op2) {
-                    .Pseudo => |pseudo| {
-                        if (lookup.contains(pseudo)) {
-                            inst.Cmp.op2 = Operand{ .Stack = lookup.get(pseudo).? };
-                            continue;
-                        } else {
-                            topOfStack -= switch (asmSymbolTable.get(pseudo).?.Obj.type) {
-                                .QuadWord => 8,
-                                .LongWord => 4,
-                            };
-                            try lookup.put(
-                                pseudo,
-                                topOfStack,
-                            );
-                            inst.Cmp.op2 = Operand{ .Stack = topOfStack };
-                        }
-                    },
-                    else => {},
+                if (cmp.op2.isOfKind(.Pseudo)) {
+                    try replacePseudo(
+                        &inst.Cmp.op2,
+                        &lookup,
+                        @constCast(&asmSymbolTable),
+                        &topOfStack,
+                    );
                 }
             },
             .SetCC => |setCC| {
-                switch (setCC.dest) {
-                    .Pseudo => |pseudo| {
-                        if (lookup.contains(pseudo)) {
-                            inst.SetCC.dest = Operand{ .Stack = lookup.get(pseudo).? };
-                            continue;
-                        } else {
-                            topOfStack -= switch (asmSymbolTable.get(pseudo).?.Obj.type) {
-                                .QuadWord => 8,
-                                .LongWord => 4,
-                            };
-                            try lookup.put(
-                                pseudo,
-                                topOfStack,
-                            );
-                            inst.SetCC.dest = Operand{ .Stack = topOfStack };
-                        }
-                    },
-                    else => {},
+                if (setCC.dest.isOfKind(.Pseudo)) {
+                    try replacePseudo(
+                        &inst.SetCC.dest,
+                        &lookup,
+                        @constCast(&asmSymbolTable),
+                        &topOfStack,
+                    );
                 }
             },
             .Jmp, .Label, .JmpCC, .FnCall => {
@@ -857,9 +775,27 @@ pub fn replacePseudoRegs(function: *Function, allocator: std.mem.Allocator, asmS
             0,
             allocateStackInst,
         );
-        var lookupIter = lookup.iterator();
-        while (lookupIter.next()) |entry| {
-            std.log.warn("{s}: {}\n", .{ entry.key_ptr.*, entry.value_ptr.* });
-        }
+    }
+}
+
+inline fn replacePseudo(
+    operand: *Operand,
+    lookup: *std.StringHashMap(i32),
+    asmSymbolTable: *std.StringHashMap(*Symbol),
+    topOfStack: *i32,
+) ast.CodegenError!void {
+    if (lookup.contains(operand.Pseudo)) {
+        operand.* = Operand{ .Stack = lookup.get(operand.Pseudo).? };
+    } else {
+        const offset: i32 = switch (asmSymbolTable.get(operand.Pseudo).?.Obj.type) {
+            .QuadWord => 8,
+            .LongWord => 4,
+        };
+        topOfStack.* = topOfStack.* - offset;
+        try lookup.put(
+            operand.Pseudo,
+            topOfStack.*,
+        );
+        operand.* = Operand{ .Stack = topOfStack.* };
     }
 }

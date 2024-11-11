@@ -72,6 +72,16 @@ const TypeCheckerError = error{OutOfMemory} || TypeError;
 pub const TypeErrorStruct = struct {
     errorType: ?TypeError,
     errorPayload: []u8,
+
+    const Self = @This();
+    inline fn typeError(allocator: std.mem.Allocator, errorType: TypeError, errorPayload: []u8) TypeCheckerError!*Self {
+        const typeErrorStruct = try allocator.create(Self);
+        typeErrorStruct.* = .{
+            .errorType = errorType,
+            .errorPayload = errorPayload,
+        };
+        return typeErrorStruct;
+    }
 };
 
 pub const TypeKind = enum {
@@ -111,6 +121,13 @@ pub const TypeInfo = union(TypeKind) {
 pub const Symbol = struct {
     typeInfo: TypeInfo,
     attributes: SymAttribute,
+    const Self = @This();
+    pub fn isDefined(self: *const Self) bool {
+        if (std.meta.activeTag(self.attributes) == .FunctionAttr) {
+            return self.attributes.FunctionAttr.defined;
+        }
+        return true;
+    }
 };
 
 pub const Typechecker = struct {
@@ -161,51 +178,45 @@ pub fn typecheckExternalDecl(self: *Typechecker, externalDecl: *AST.ExternalDecl
         //     - This will be implemented later
         .FunctionDecl => |functionDecl| {
             if (self.symbolTable.get(functionDecl.name)) |sym| {
-                if (!std.mem.eql(u8, @tagName(sym.typeInfo), "Function")) {
-                    const typeError = try self.allocator.create(TypeErrorStruct);
-                    typeError.* = .{
-                        .errorType = TypeError.GlobVarRedeclaredAsFn,
-                        .errorPayload = (try std.fmt.allocPrint(self.allocator, "Global variable {s} redeclared as function\n", .{functionDecl.name})),
-                    };
-                    return typeError;
+                if (!sym.typeInfo.isOfKind(.Function)) {
+                    return try TypeErrorStruct.typeError(
+                        self.allocator,
+                        TypeError.GlobVarRedeclaredAsFn,
+                        (try std.fmt.allocPrint(self.allocator, "Global variable {s} redeclared as function\n", .{functionDecl.name})),
+                    );
                 }
-                // zig fmt: off
-                if ((!sym.attributes.FunctionAttr.global and (functionDecl.storageClass != AST.Qualifier.STATIC))
-                    or (sym.attributes.FunctionAttr.global and (functionDecl.storageClass == AST.Qualifier.STATIC))) {
-                // zig fmt: on
-                    const typeError = try self.allocator.create(TypeErrorStruct);
-                    typeError.* = .{
-                        .errorType = TypeError.LinkageMismatch,
-                        .errorPayload = (try std.fmt.allocPrint(self.allocator, "Global variable {s} redeclared as non-static\n", .{functionDecl.name})),
-                    };
-                    return typeError;
+                const nonStaticLinkageMismatch = !sym.attributes.FunctionAttr.global and (functionDecl.storageClass != AST.Qualifier.STATIC);
+                const staticLinkageMismatch = sym.attributes.FunctionAttr.global and (functionDecl.storageClass == AST.Qualifier.STATIC);
+                if (nonStaticLinkageMismatch or staticLinkageMismatch) {
+                    return TypeErrorStruct.typeError(
+                        self.allocator,
+                        TypeError.LinkageMismatch,
+                        try std.fmt.allocPrint(self.allocator, "Global variable {s} redeclared as non-static\n", .{functionDecl.name}),
+                    );
                 }
-                // zig fmt: off
-                if ((functionDecl.blockItems.items.len != 0) and (sym.attributes.FunctionAttr.defined)) {
-                // zig fmt: on
-                    const typeError = try self.allocator.create(TypeErrorStruct);
-                    typeError.* = .{
-                        .errorType = TypeError.FnRedefined,
-                        .errorPayload = (try std.fmt.allocPrint(
+
+                if (functionDecl.isDefined() and sym.isDefined()) {
+                    return TypeErrorStruct.typeError(
+                        self.allocator,
+                        TypeError.FnRedefined,
+                        try std.fmt.allocPrint(
                             self.allocator,
                             "Function redefinition of {s}\n",
                             .{functionDecl.name},
-                        )),
-                    };
-                    return typeError;
+                        ),
+                    );
                 }
 
                 if (functionDecl.args.items.len != sym.typeInfo.Function.argsLen) {
-                    const typeError = try self.allocator.create(TypeErrorStruct);
-                    typeError.* = .{
-                        .errorType = TypeError.FnArgNumMismatch,
-                        .errorPayload = (try std.fmt.allocPrint(
+                    return TypeErrorStruct.typeError(
+                        self.allocator,
+                        TypeError.FnArgNumMismatch,
+                        try std.fmt.allocPrint(
                             self.allocator,
                             "Function {s} has mismatching declarations\n",
                             .{functionDecl.name},
-                        )),
-                    };
-                    return typeError;
+                        ),
+                    );
                 }
             }
             const fnSym = try self.allocator.create(Symbol);
@@ -218,7 +229,7 @@ pub fn typecheckExternalDecl(self: *Typechecker, externalDecl: *AST.ExternalDecl
                 },
                 .attributes = .{
                     .FunctionAttr = .{
-                        .defined = (functionDecl.blockItems.items.len != 0),
+                        .defined = (functionDecl.isDefined()),
                         .global = (functionDecl.storageClass != AST.Qualifier.STATIC),
                     },
                 },
@@ -239,6 +250,7 @@ pub fn typecheckExternalDecl(self: *Typechecker, externalDecl: *AST.ExternalDecl
                 std.log.warn("Pushing in {any}\n", .{arg.NonVoidArg.identifier});
                 try self.symbolTable.put(arg.NonVoidArg.identifier, argSym);
             }
+
             for (functionDecl.blockItems.items) |blk| {
                 const hasTypeErr = try typecheckBlkItem(self, blk);
                 if (hasTypeErr) |typeErr| {
@@ -273,24 +285,20 @@ pub fn typecheckExternalDecl(self: *Typechecker, externalDecl: *AST.ExternalDecl
             // INFO: Has expression
             if (varDecl.expression) |expression| {
                 // INFO: Should be constant initialized
-                if (!std.mem.eql(u8, @tagName(expression.*), "Constant")) {
-                    const typeErrorStruct = try self.allocator.create(TypeErrorStruct);
-                    typeErrorStruct.* = .{
-                        .errorType = TypeError.GlobalDeclarationNotInteger,
-                        .errorPayload = (try std.fmt.allocPrint(
+
+                if (std.meta.activeTag(expression.*) != .Constant) {
+                    return TypeErrorStruct.typeError(
+                        self.allocator,
+                        TypeError.GlobalDeclarationNotInteger,
+                        try std.fmt.allocPrint(
                             self.allocator,
                             "Global declarations only support integers for declaration of {s}\n",
                             .{varDecl.name},
-                        )),
-                    };
-                    return typeErrorStruct;
+                        ),
+                    );
                 }
 
                 // INFO: Assign the expression value to the decl
-                // TODO: accomodate longs
-
-                // Add a cast here
-
                 if (varDecl.type != expression.getType()) {
                     const castExpr = try self.allocator.create(AST.Expression);
                     castExpr.* = AST.Expression{ .Cast = .{
@@ -318,16 +326,15 @@ pub fn typecheckExternalDecl(self: *Typechecker, externalDecl: *AST.ExternalDecl
 
                 // INFO: Extern decls no assignment check
                 if (varDecl.storageClass == AST.Qualifier.EXTERN) {
-                    const typeErrorStruct = try self.allocator.create(TypeErrorStruct);
-                    typeErrorStruct.* = .{
-                        .errorType = (TypeError.ExternVarDeclared),
-                        .errorPayload = (try std.fmt.allocPrint(
+                    return TypeErrorStruct.typeError(
+                        self.allocator,
+                        TypeError.ExternVarDeclared,
+                        try std.fmt.allocPrint(
                             self.allocator,
                             "Extern declarations cant have an assignment: {s}\n",
                             .{varDecl.name},
-                        )),
-                    };
-                    return typeErrorStruct;
+                        ),
+                    );
                 }
             } else {
                 // INFO: Extern is not initialized (a case exists where there is
@@ -341,17 +348,16 @@ pub fn typecheckExternalDecl(self: *Typechecker, externalDecl: *AST.ExternalDecl
             global = varDecl.storageClass != AST.Qualifier.STATIC;
             if (self.symbolTable.get(varDecl.name)) |varSym| {
                 //INFO: Function redeclaration as variable handling
-                if (std.mem.eql(u8, @tagName(varSym.typeInfo), "Function")) {
-                    const typeErrorStruct = try self.allocator.create(TypeErrorStruct);
-                    typeErrorStruct.* = .{
-                        .errorType = TypeError.FnRedeclaredAsVar,
-                        .errorPayload = (try std.fmt.allocPrint(
+                if (varSym.typeInfo.isOfKind(.Function)) {
+                    return TypeErrorStruct.typeError(
+                        self.allocator,
+                        TypeError.FnRedeclaredAsVar,
+                        try std.fmt.allocPrint(
                             self.allocator,
                             "Function redeclared as var: {s}\n",
                             .{varDecl.name},
-                        )),
-                    };
-                    return typeErrorStruct;
+                        ),
+                    );
                 }
 
                 //INFO: extern inherit scope (global/static)
@@ -372,16 +378,15 @@ pub fn typecheckExternalDecl(self: *Typechecker, externalDecl: *AST.ExternalDecl
                     // INFO: repeated cause extern requires this (should be
                     // a function at some point)
                     if (!varSym.typeInfo.isOfKind(TypeKind.from(varDecl.type))) {
-                        const typeErrorStruct = try self.allocator.create(TypeErrorStruct);
-                        typeErrorStruct.* = .{
-                            .errorType = TypeError.TypeMismatch,
-                            .errorPayload = (try std.fmt.allocPrint(
+                        return TypeErrorStruct.typeError(
+                            self.allocator,
+                            TypeError.TypeMismatch,
+                            try std.fmt.allocPrint(
                                 self.allocator,
                                 "Type mismatch for declaration of {s}\n",
                                 .{varDecl.name},
-                            )),
-                        };
-                        return typeErrorStruct;
+                            ),
+                        );
                     }
                 } else {
                     //INFO: if no extern, check whether earlier decl was
@@ -457,8 +462,7 @@ fn typecheckBlkItem(self: *Typechecker, blkItem: *AST.BlockItem) TypeCheckerErro
         .Declaration => |decl| {
             // INFO: cases when var is extern, static or local
             // Only locals are localAttrs
-            //
-            // if var is static: static variables live beyond their scope, since
+            // 1. if var is static: static variables live beyond their scope, since
             // they are in bss. There is an initialization, if the var is
             // already seen in a call, they are not reinitialized.
             // Non static initializers are not allowed for static local
@@ -473,8 +477,7 @@ fn typecheckBlkItem(self: *Typechecker, blkItem: *AST.BlockItem) TypeCheckerErro
             //  int main() {
             //        recurse(10);}
             // Output: prints from 10 to 0
-            //
-            // if var is extern: look if there is a declaration outside
+            // 2.if var is extern: look if there is a declaration outside
 
             // Typecheck the expression
             if (decl.expression) |declExpression| {
@@ -742,23 +745,21 @@ fn typecheckForInit(self: *Typechecker, forInit: *AST.ForInit) TypeCheckerError!
             try self.symbolTable.put(decl.name, sym);
             if (decl.expression) |expression| {
                 _ = typecheckExpr(self, expression) catch |err| {
-                    const typeErrorStruct = try self.allocator.create(TypeErrorStruct);
-                    typeErrorStruct.* = .{
-                        .errorType = err,
-                        .errorPayload = (try std.fmt.allocPrint(self.allocator, "Type error at for init\n", .{})),
-                    };
-                    return typeErrorStruct;
+                    return try TypeErrorStruct.typeError(
+                        self.allocator,
+                        err,
+                        try std.fmt.allocPrint(self.allocator, "Type error at for init\n", .{}),
+                    );
                 };
             }
         },
         .Expression => |expr| {
             _ = typecheckExpr(self, expr) catch |err| {
-                const typeErrorStruct = try self.allocator.create(TypeErrorStruct);
-                typeErrorStruct.* = .{
-                    .errorType = err,
-                    .errorPayload = (try std.fmt.allocPrint(self.allocator, "Type error at for init\n", .{})),
-                };
-                return typeErrorStruct;
+                return try TypeErrorStruct.typeError(
+                    self.allocator,
+                    err,
+                    try std.fmt.allocPrint(self.allocator, "Type error at for init\n", .{}),
+                );
             };
         },
     }
@@ -767,7 +768,7 @@ fn typecheckForInit(self: *Typechecker, forInit: *AST.ForInit) TypeCheckerError!
 
 // TODO: A design change can make this easier
 // Or I can use some metaprogramming to generate this
-fn convert(allocator: std.mem.Allocator, expr: *AST.Expression, toType: AST.Type) !*AST.Expression {
+inline fn convert(allocator: std.mem.Allocator, expr: *AST.Expression, toType: AST.Type) !*AST.Expression {
     switch (expr.*) {
         .Cast => {
             return expr;
@@ -869,14 +870,8 @@ fn typecheckExpr(self: *Typechecker, expr: *AST.Expression) TypeError!AST.Type {
         },
         .Assignment => |assignment| {
             const lhsType = try typecheckExpr(self, assignment.lhs);
-            //logz.info().fmt("lhs type", "{any}", .{lhsType}).log();
             _ = try typecheckExpr(self, assignment.rhs);
-            //logz.info().fmt("rhs type", "{any}", .{rhsType}).log();
             expr.Assignment.rhs = try convert(self.allocator, assignment.rhs, lhsType);
-            //if (lhsType != rhsType) {
-            //    // std.log.warn("lhs type: {any} and rhs type: {any} not matching at assignment\n", .{ lhsType, rhsType });
-            //    return TypeError.TypeMismatch;
-            //}
             expr.Assignment.type = lhsType;
             std.log.warn("Returning lhsType: {any}\n", .{lhsType});
             return lhsType;
@@ -884,10 +879,6 @@ fn typecheckExpr(self: *Typechecker, expr: *AST.Expression) TypeError!AST.Type {
         .Binary => {
             const lhsType = try typecheckExpr(self, expr.Binary.lhs);
             const rhsType = try typecheckExpr(self, expr.Binary.rhs);
-            //if (lhsType != rhsType) {
-            //    // std.log.warn("lhs type: {any} and rhs type: {any} not matching at binary op\n", .{ lhsType, rhsType });
-            //    return TypeError.TypeMismatch;
-            //}
 
             //INFO: Conversion logic
             expr.Binary.type = switch (expr.Binary.op) {
@@ -917,11 +908,11 @@ fn typecheckExpr(self: *Typechecker, expr: *AST.Expression) TypeError!AST.Type {
         },
         .FunctionCall => |fnCall| {
             const fnSymbol = if (self.symbolTable.get(fnCall.name)) |fnSym| fnSym else {
-                // std.log.warn("Unknown function: {s}\n", .{fnCall.name});
+                std.log.warn("Unknown function: {s}\n", .{fnCall.name});
                 return TypeError.UnknownFunction;
             };
             if (fnCall.args.items.len != fnSymbol.typeInfo.Function.argsLen) {
-                // std.log.warn("Expected {d} arguments but found {d} arguments in {s}\n", .{ fnSymbol.typeInfo.Function.argsLen, fnCall.args.items.len, fnCall.name });
+                std.log.warn("Expected {d} arguments but found {d} arguments in {s}\n", .{ fnSymbol.typeInfo.Function.argsLen, fnCall.args.items.len, fnCall.name });
                 return TypeError.TypeMismatch;
             }
             _ = try convert(self.allocator, expr, fnSymbol.typeInfo.Function.returnType);
@@ -964,180 +955,18 @@ fn typecheckExpr(self: *Typechecker, expr: *AST.Expression) TypeError!AST.Type {
     }
 }
 
-pub fn resolveDeclaration(declaration: *AST.Declaration, varMap: *std.StringHashMap([]u8)) SemanticError!void {
-    if (!varMap.contains(declaration.name)) {
-        const temp = try AST.tempGen.genTemp(varMap.allocator);
-        try varMap.put(declaration.name, temp);
-        declaration.name = temp;
-        return;
-    }
-    if (varMap.get(declaration.name)) |resolvedVar| {
-        declaration.name = resolvedVar;
-    }
-    return SemanticError.VarNotDeclared;
-}
-
-pub fn resolveExpression(expression: *AST.Expression, varMap: *std.StringHashMap([]u8)) SemanticError!void {
-    switch (expression.*) {
-        .Cast => {},
-        .Unary => |unary| {
-            try resolveExpression(unary.exp, varMap);
-        },
-        .Binary => |binary| {
-            try resolveExpression(binary.lhs, varMap);
-            try resolveExpression(binary.rhs, varMap);
-        },
-        .Constant => {},
-        .Identifier => {
-            if (varMap.get(expression.Identifier.name)) |resolvedVar| {
-                expression.Identifier.name = resolvedVar;
-            } else {
-                return SemanticError.VarNotDeclared;
-            }
-        },
-        .Assignment => |assignment| {
-            try resolveExpression(assignment.lhs, varMap);
-            try resolveExpression(assignment.rhs, varMap);
-        },
-        .Ternary => |ternary| {
-            try resolveExpression(ternary.condition, varMap);
-            try resolveExpression(ternary.lhs, varMap);
-            try resolveExpression(ternary.rhs, varMap);
-        },
-        .FunctionCall => |fnCall| {
-            for (fnCall.args.items) |arg| {
-                try resolveExpression(arg, varMap);
-            }
-        },
-    }
-}
-
-pub fn resolveStatement(statement: *AST.Statement, varMap: *std.StringHashMap([]u8), allocator: std.mem.Allocator) SemanticError!void {
-    switch (statement.*) {
-        .Return => |ret| {
-            try resolveExpression(ret.expression, varMap);
-        },
-        .Expression => |expression| {
-            try resolveExpression(expression, varMap);
-        },
-        .Null => {},
-        .If => |ifNode| {
-            try resolveExpression(ifNode.condition, varMap);
-            try resolveStatement(ifNode.thenStmt, varMap, allocator);
-            if (ifNode.elseStmt) |elseStmt| {
-                try resolveStatement(elseStmt, varMap, allocator);
-            }
-        },
-        .Label => {},
-        .Goto => {},
-        .Compound => |compound| {
-            var compoundMap = std.StringHashMap([]u8).init(allocator);
-            var varMapIter = varMap.iterator();
-            while (varMapIter.next()) |iterator| {
-                try compoundMap.put(iterator.key_ptr.*, iterator.value_ptr.*);
-            }
-            for (compound.items) |blockItemInCompound| {
-                try resolveBlockItem(blockItemInCompound, &compoundMap, allocator);
-            }
-        },
-        .For => |forStmt| {
-            if (std.mem.eql(u8, @tagName(forStmt.init.*), "Expression")) {
-                try resolveExpression(forStmt.init.Expression, varMap);
-            }
-            if (forStmt.condition) |condition|
-                try resolveExpression(condition, varMap);
-            if (forStmt.post) |post|
-                try resolveExpression(post, varMap);
-            try resolveStatement(forStmt.body, varMap, allocator);
-        },
-        .DoWhile => |doWhile| {
-            try resolveExpression(doWhile.condition, varMap);
-            try resolveStatement(doWhile.body, varMap, allocator);
-        },
-        .While => |whileStmt| {
-            try resolveExpression(whileStmt.condition, varMap);
-            try resolveStatement(whileStmt.body, varMap, allocator);
-        },
-        .Break => {},
-        .Continue => {},
-    }
-}
-
-pub fn resolveBlockItem(blockItem: *AST.BlockItem, varMap: *std.StringHashMap([]u8), allocator: std.mem.Allocator) SemanticError!void {
-    switch (blockItem.*) {
-        .Statement => |statement| {
-            try resolveStatement(statement, varMap, allocator);
-        },
-        .Declaration => |declaration| {
-            try resolveDeclaration(
-                declaration,
-                varMap,
-            );
-        },
-    }
-}
-
-pub fn varResolutionPass(allocator: std.mem.Allocator, node: *AST.Program) SemanticError!void {
-    // TODO: Support for global variables
-    for (node.externalDecls.items) |externalDecl| {
-        switch (externalDecl.*) {
-            .FunctionDecl => |functionDecl| {
-                var varMap = std.StringHashMap([]u8).init(allocator);
-                for (functionDecl.args.items) |arg| {
-                    std.debug.assert(std.mem.eql(u8, @tagName(arg.*), "NonVoidArg"));
-                    try varMap.put(arg.NonVoidArg.identifier, @constCast(arg.NonVoidArg.identifier));
-                }
-                for (functionDecl.blockItems.items) |blockItem| {
-                    try resolveBlockItem(blockItem, @constCast(&varMap), allocator);
-                }
-            },
-            .VarDeclaration => {
-                unreachable();
-            },
-        }
-    }
-}
-
-pub fn resolveLocals(allocator: std.mem.Allocator, program: *AST.Program) SemanticError!void {
+pub fn resolveLabels(allocator: std.mem.Allocator, program: *AST.Program) SemanticError!void {
     // Collect locals
     const localsSet = std.BufSet.init(allocator);
     for (program.function.blockItems.items) |blockItem| {
-        switch (blockItem.*) {
-            .Statement => |statement| {
-                switch (statement.*) {
-                    .Label => |label| {
-                        try localsSet.insert(label);
-                    },
-                }
-            },
+        if ((std.meta.activeTag(blockItem.*) == .Statement) and std.meta.activeTag(blockItem.Statement.*) == .Local) {
+            try localsSet.insert(blockItem.Statement.Local);
         }
     }
     // Check gotos
     for (program.function.blockItems.items) |blockItem| {
-        switch (blockItem.*) {
-            .Statement => |statement| {
-                switch (statement.*) {
-                    .Goto => |goto| {
-                        if (!localsSet.contains(goto)) return SemanticError.UnknownLabel;
-                    },
-                }
-            },
+        if ((std.meta.activeTag(blockItem.*) == .Statement) and std.meta.activeTag(blockItem.Statement.*) == .Goto) {
+            if (!localsSet.contains(blockItem.Statement.Goto)) return SemanticError.UnknownLabel;
         }
     }
-
-    localsSet.insert();
-}
-
-pub fn gotoResolutionPass(allocator: std.mem.Allocator, node: *AST.Program) SemanticError!void {
-    _ = allocator;
-    _ = node;
-    //for(node.function.blockItems.items) |blockItem| {
-    //    switch(blockItem.*){
-    //      .Statement  => |statement| {
-    //          switch(statement.*){
-    //          }
-    //      },
-    //    }
-    //  }
-    //
 }
