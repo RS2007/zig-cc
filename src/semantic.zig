@@ -100,7 +100,7 @@ pub const TypeKind = enum {
     }
 };
 pub const FnSymbol = struct {
-    argsLen: u32,
+    args: std.ArrayList(AST.Type),
     returnType: AST.Type,
 };
 
@@ -207,7 +207,7 @@ pub fn typecheckExternalDecl(self: *Typechecker, externalDecl: *AST.ExternalDecl
                     );
                 }
 
-                if (functionDecl.args.items.len != sym.typeInfo.Function.argsLen) {
+                if (functionDecl.args.items.len != sym.typeInfo.Function.args.items.len) {
                     return TypeErrorStruct.typeError(
                         self.allocator,
                         TypeError.FnArgNumMismatch,
@@ -220,10 +220,14 @@ pub fn typecheckExternalDecl(self: *Typechecker, externalDecl: *AST.ExternalDecl
                 }
             }
             const fnSym = try self.allocator.create(Symbol);
+            var fnArgsList = std.ArrayList(AST.Type).init(self.allocator);
+            for (functionDecl.args.items) |arg| {
+                try fnArgsList.append(arg.NonVoidArg.type);
+            }
             fnSym.* = .{
                 .typeInfo = .{
                     .Function = .{
-                        .argsLen = @intCast(functionDecl.args.items.len),
+                        .args = fnArgsList,
                         .returnType = functionDecl.returnType,
                     },
                 },
@@ -919,9 +923,25 @@ fn typecheckExpr(self: *Typechecker, expr: *AST.Expression) TypeError!AST.Type {
                 std.log.warn("Unknown function: {s}\n", .{fnCall.name});
                 return TypeError.UnknownFunction;
             };
-            if (fnCall.args.items.len != fnSymbol.typeInfo.Function.argsLen) {
-                std.log.warn("Expected {d} arguments but found {d} arguments in {s}\n", .{ fnSymbol.typeInfo.Function.argsLen, fnCall.args.items.len, fnCall.name });
+            if (fnCall.args.items.len != fnSymbol.typeInfo.Function.args.items.len) {
+                std.log.warn("Expected {d} arguments but found {d} arguments in {s}\n", .{
+                    fnSymbol.typeInfo.Function.args.items.len,
+                    fnCall.args.items.len,
+                    fnCall.name,
+                });
                 return TypeError.TypeMismatch;
+            }
+            for (0..fnSymbol.typeInfo.Function.args.items.len) |i| {
+                const argType = try typecheckExpr(self, fnCall.args.items[i]);
+                if (fnSymbol.typeInfo.Function.args.items[i] != argType) {
+                    std.log.warn("Casting function argument in fn: {s} from {any} to {any}\n", .{
+                        fnCall.name,
+                        fnCall.args.items[i].getType(),
+                        fnSymbol.typeInfo.Function.args.items[i],
+                    });
+                    const converted = try convert(self.allocator, fnCall.args.items[i], fnSymbol.typeInfo.Function.args.items[i]);
+                    fnCall.args.items[i] = converted;
+                }
             }
             _ = try convert(self.allocator, expr, fnSymbol.typeInfo.Function.returnType);
             expr.FunctionCall.type = fnSymbol.typeInfo.Function.returnType;

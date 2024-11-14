@@ -279,9 +279,9 @@ pub const BinaryOp = enum {
     Multiply,
     pub fn stringify(self: BinaryOp, allocator: std.mem.Allocator) ast.CodegenError![]u8 {
         return (try std.fmt.allocPrint(allocator, "{s}", .{switch (self) {
-            .Add => "addl",
-            .Subtract => "subl",
-            .Multiply => "imull",
+            .Add => "add",
+            .Subtract => "sub",
+            .Multiply => "imul",
         }}));
     }
 };
@@ -393,7 +393,7 @@ pub const Instruction = union(InstructionType) {
                 const lhsOperand = try @constCast(&binary.lhs).stringify(allocator);
                 const rhsOperand = try @constCast(&binary.rhs).stringify(allocator);
                 const instrString = try binary.op.stringify(allocator);
-                return (try std.fmt.allocPrint(allocator, "{s} {s},{s}", .{ instrString, rhsOperand, lhsOperand }));
+                return (try std.fmt.allocPrint(allocator, "{s}{c} {s},{s}", .{ instrString, binary.type.suffix(), rhsOperand, lhsOperand }));
             },
             .Cdq => {
                 return (try std.fmt.allocPrint(allocator, "cdq", .{}));
