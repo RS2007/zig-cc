@@ -37,11 +37,11 @@ pub fn astSymTabToTacSymTab(allocator: std.mem.Allocator, astSymTab: std.StringH
         asmSymbol.* = switch (sym.typeInfo) {
             .Integer => .{ .Obj = .{
                 .type = assembly.AsmType.LongWord,
-                .static = std.mem.eql(u8, @tagName(sym.attributes), "StaticAttr"),
+                .static = std.meta.activeTag(sym.attributes) == .StaticAttr,
             } },
             .Long => .{ .Obj = .{
                 .type = assembly.AsmType.QuadWord,
-                .static = std.mem.eql(u8, @tagName(sym.attributes), "StaticAttr"),
+                .static = std.meta.activeTag(sym.attributes) == .StaticAttr,
             } },
             .Function => .{ .Function = .{
                 .defined = sym.attributes.FunctionAttr.defined,
@@ -245,7 +245,13 @@ pub const Instruction = union(InstructionType) {
     FunctionCall: FunctionCall,
     SignExtend: SignExtend,
     Truncate: Truncate,
-    pub fn codegen(instruction: *Instruction, symbolTable: std.StringHashMap(*assembly.Symbol), instructions: *std.ArrayList(*assembly.Instruction), allocator: std.mem.Allocator) ast.CodegenError!void {
+
+    pub fn codegen(
+        instruction: *Instruction,
+        symbolTable: std.StringHashMap(*assembly.Symbol),
+        instructions: *std.ArrayList(*assembly.Instruction),
+        allocator: std.mem.Allocator,
+    ) ast.CodegenError!void {
         switch (instruction.*) {
             .SignExtend => |signExt| {
                 const src = try signExt.src.codegen(symbolTable, allocator);
@@ -257,10 +263,6 @@ pub const Instruction = union(InstructionType) {
                     .dest = assembly.Operand{ .Reg = assembly.Reg.R10 },
                     .type = signExt.src.getTypeFromSymTab(symbolTable).?,
                 } };
-                //movsxInst.* = assembly.Instruction{ .Movsx = assembly.Movsx{
-                //    .src = assembly.Operand{ .Reg = assembly.Reg.R10 },
-                //    .dest = assembly.Operand{ .Reg = assembly.Reg.R11 },
-                //} };
                 const movR11ToDest = try allocator.create(assembly.Instruction);
                 try instructions.append(movSrcToR10);
                 movsxInst.* = assembly.Instruction{ .Movsx = assembly.Movsx{
@@ -276,8 +278,15 @@ pub const Instruction = union(InstructionType) {
                 try instructions.append(movR11ToDest);
             },
             .Truncate => |trunc| {
-                _ = trunc;
-                unreachable;
+                const src = try trunc.src.codegen(symbolTable, allocator);
+                const dest = try trunc.dest.codegen(symbolTable, allocator);
+                const movInstruction = try allocator.create(assembly.Instruction);
+                movInstruction.* = assembly.Instruction{ .Mov = assembly.MovInst{
+                    .src = src,
+                    .dest = dest,
+                    .type = trunc.dest.getTypeFromSymTab(symbolTable).?,
+                } };
+                try instructions.append(movInstruction);
             },
             .Return => |ret| {
                 const val = try ret.val.codegen(symbolTable, allocator);

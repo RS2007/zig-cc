@@ -482,7 +482,7 @@ fn typecheckBlkItem(self: *Typechecker, blkItem: *AST.BlockItem) TypeCheckerErro
             // Typecheck the expression
             if (decl.expression) |declExpression| {
                 // INFO: Type error witin expression
-                _ = typecheckExpr(self, declExpression) catch |err| {
+                const exprType = typecheckExpr(self, declExpression) catch |err| {
                     const typeErrorStruct = try self.allocator.create(TypeErrorStruct);
                     typeErrorStruct.* = .{
                         .errorType = err,
@@ -490,7 +490,10 @@ fn typecheckBlkItem(self: *Typechecker, blkItem: *AST.BlockItem) TypeCheckerErro
                     };
                     return typeErrorStruct;
                 };
+                std.log.warn("Conversion from {any} to {any}\n", .{ exprType, decl.type });
+                std.log.warn("Expression: {any}\n", .{declExpression});
                 decl.expression = try convert(self.allocator, decl.expression.?, decl.type);
+                std.log.warn("Expression post conversion: {any}\n", .{declExpression});
                 std.debug.assert(if (decl.expression == null) true else decl.expression.?.getType() == decl.type);
 
                 //INFO: Checking type equality
@@ -602,7 +605,11 @@ fn typecheckBlkItem(self: *Typechecker, blkItem: *AST.BlockItem) TypeCheckerErro
                 // No decl
                 const sym = try self.allocator.create(Symbol);
                 sym.* = .{
-                    .typeInfo = .Integer,
+                    .typeInfo = switch (decl.type) {
+                        .Integer => .Integer,
+                        .Long => .Long,
+                        else => unreachable,
+                    },
                     .attributes = .LocalAttr,
                 };
                 try self.symbolTable.put(decl.name, sym);
@@ -870,7 +877,8 @@ fn typecheckExpr(self: *Typechecker, expr: *AST.Expression) TypeError!AST.Type {
         },
         .Assignment => |assignment| {
             const lhsType = try typecheckExpr(self, assignment.lhs);
-            _ = try typecheckExpr(self, assignment.rhs);
+            const rhsType = try typecheckExpr(self, assignment.rhs);
+            std.log.warn("Conversion from {any} to {any}\n", .{ rhsType, lhsType });
             expr.Assignment.rhs = try convert(self.allocator, assignment.rhs, lhsType);
             expr.Assignment.type = lhsType;
             std.log.warn("Returning lhsType: {any}\n", .{lhsType});
