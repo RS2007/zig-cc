@@ -295,7 +295,12 @@ pub const Instruction = union(InstructionType) {
                 movInst.* = assembly.Instruction{ .Mov = assembly.MovInst{
                     .type = instType,
                     .src = val,
-                    .dest = assembly.Operand{ .Reg = assembly.Reg.AX },
+                    .dest = assembly.Operand{
+                        .Reg = switch (instType) {
+                            .LongWord => .EAX,
+                            .QuadWord => .RAX,
+                        },
+                    },
                 } };
                 const retInst = try allocator.create(assembly.Instruction);
                 retInst.* = assembly.Instruction{ .Ret = {} };
@@ -368,7 +373,12 @@ pub const Instruction = union(InstructionType) {
                         const movAXToDest = try allocator.create(assembly.Instruction);
                         movLeftToAX.* = assembly.Instruction{ .Mov = assembly.MovInst{
                             .src = left,
-                            .dest = assembly.Operand{ .Reg = assembly.Reg.AX },
+                            .dest = assembly.Operand{
+                                .Reg = switch (binary.left.getTypeFromSymTab(symbolTable).?) {
+                                    .LongWord => .EAX,
+                                    .QuadWord => .RAX,
+                                },
+                            },
                             .type = binary.left.getTypeFromSymTab(symbolTable).?,
                         } };
                         cdqInstr.* = assembly.Instruction{
@@ -378,7 +388,12 @@ pub const Instruction = union(InstructionType) {
                             .Idiv = right,
                         };
                         movAXToDest.* = assembly.Instruction{ .Mov = assembly.MovInst{
-                            .src = assembly.Operand{ .Reg = assembly.Reg.AX },
+                            .src = assembly.Operand{
+                                .Reg = switch (storeDestType) {
+                                    .LongWord => .EAX,
+                                    .QuadWord => .RAX,
+                                },
+                            },
                             .dest = storeDest,
                             .type = storeDestType,
                         } };
@@ -394,7 +409,12 @@ pub const Instruction = union(InstructionType) {
                         const movDXToDest = try allocator.create(assembly.Instruction);
                         movLeftToDX.* = assembly.Instruction{ .Mov = assembly.MovInst{
                             .src = left,
-                            .dest = assembly.Operand{ .Reg = assembly.Reg.AX },
+                            .dest = assembly.Operand{
+                                .Reg = switch (binary.left.getTypeFromSymTab(symbolTable).?) {
+                                    .LongWord => .EAX,
+                                    .QuadWord => .RAX,
+                                },
+                            },
                             .type = binary.left.getTypeFromSymTab(symbolTable).?,
                         } };
                         cdqInstr.* = assembly.Instruction{

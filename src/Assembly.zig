@@ -146,6 +146,7 @@ pub const Reg = enum {
     R8,
     R9,
     EAX,
+    RAX,
     R11_64, // TODO: Rename this later
     R10_64,
     pub fn stringify(register: Reg, allocator: std.mem.Allocator) ast.CodegenError![]u8 {
@@ -188,6 +189,9 @@ pub const Reg = enum {
             },
             .EAX => {
                 return (try std.fmt.allocPrint(allocator, "%eax", .{}));
+            },
+            .RAX => {
+                return (try std.fmt.allocPrint(allocator, "%rax", .{}));
             },
         }
     }
