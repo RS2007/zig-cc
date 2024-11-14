@@ -576,29 +576,29 @@ test "extern conflict int and longs" {
     _ = try std.testing.expect(hasErr);
 }
 
-//test "function definition with different types" {
-//    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-//    const allocator = arena.allocator();
-//    defer arena.deinit();
-//    const programStr =
-//        \\ long add(int a, int b);
-//        \\ long add(long a, long b);
-//        \\ int main(){
-//        \\     extern int k;
-//        \\     return 0;
-//        \\ }
-//    ;
-//    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
-//    var p = try parser.Parser.init(allocator, l);
-//    const program = try p.parseProgram();
-//    const varResolver = try ast.VarResolver.init(allocator);
-//    try varResolver.resolve(program);
-//    const typechecker = try semantic.Typechecker.init(allocator);
-//    const hasTypeErr = try typechecker.check(program);
-//    var hasErr = false;
-//    if (hasTypeErr) |typeErr| {
-//        std.log.warn("Type error: {s}\n", .{typeErr});
-//        hasErr = true;
-//    }
-//    _ = try std.testing.expect(hasErr);
-//}
+test "function definition with different types" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const programStr =
+        \\ long add(int a, int b);
+        \\ long add(long a, long b);
+        \\ int main(){
+        \\     extern int k;
+        \\     return 0;
+        \\ }
+    ;
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    const program = try p.parseProgram();
+    const varResolver = try ast.VarResolver.init(allocator);
+    try varResolver.resolve(program);
+    const typechecker = try semantic.Typechecker.init(allocator);
+    const hasTypeErr = try typechecker.check(program);
+    var hasErr = false;
+    if (hasTypeErr) |typeErr| {
+        std.log.warn("Type error: {s}\n", .{typeErr});
+        hasErr = true;
+    }
+    _ = try std.testing.expect(hasErr);
+}

@@ -65,6 +65,7 @@ pub const TypeError = error{
     ExternVarDeclared,
     FnRedeclaredAsVar,
     ConflictingDeclarations,
+    FnPrevDeclArgMismatch,
 };
 
 const TypeCheckerError = error{OutOfMemory} || TypeError;
@@ -205,6 +206,20 @@ pub fn typecheckExternalDecl(self: *Typechecker, externalDecl: *AST.ExternalDecl
                             .{functionDecl.name},
                         ),
                     );
+                }
+
+                for (0..functionDecl.args.items.len) |i| {
+                    if (functionDecl.args.items[i].NonVoidArg.type != sym.typeInfo.Function.args.items[i]) {
+                        return TypeErrorStruct.typeError(
+                            self.allocator,
+                            TypeError.FnPrevDeclArgMismatch,
+                            try std.fmt.allocPrint(self.allocator, "Argument mismatch in function redeclaration: function name = {s}, function arg mismatch between {any} and {any}\n", .{
+                                functionDecl.name,
+                                functionDecl.args.items[i].NonVoidArg.type,
+                                sym.typeInfo.Function.args.items[i],
+                            }),
+                        );
+                    }
                 }
 
                 if (functionDecl.args.items.len != sym.typeInfo.Function.args.items.len) {
