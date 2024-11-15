@@ -145,6 +145,12 @@ pub const Reg = enum {
     ECX,
     R8,
     R9,
+    RDI,
+    RSI,
+    RDX,
+    RCX,
+    R8_64,
+    R9_64,
     EAX,
     RAX,
     R11_64, // TODO: Rename this later
@@ -181,11 +187,29 @@ pub const Reg = enum {
             .ECX => {
                 return (try std.fmt.allocPrint(allocator, "%ecx", .{}));
             },
+            .RDI => {
+                return (try std.fmt.allocPrint(allocator, "%rdi", .{}));
+            },
+            .RSI => {
+                return (try std.fmt.allocPrint(allocator, "%rsi", .{}));
+            },
+            .RDX => {
+                return (try std.fmt.allocPrint(allocator, "%rdx", .{}));
+            },
+            .RCX => {
+                return (try std.fmt.allocPrint(allocator, "%rcx", .{}));
+            },
             .R8 => {
                 return (try std.fmt.allocPrint(allocator, "%r8d", .{}));
             },
             .R9 => {
                 return (try std.fmt.allocPrint(allocator, "%r9d", .{}));
+            },
+            .R8_64 => {
+                return (try std.fmt.allocPrint(allocator, "%r8", .{}));
+            },
+            .R9_64 => {
+                return (try std.fmt.allocPrint(allocator, "%r9", .{}));
             },
             .EAX => {
                 return (try std.fmt.allocPrint(allocator, "%eax", .{}));
@@ -426,7 +450,7 @@ pub const Instruction = union(InstructionType) {
             },
             .Movsx => |movsx| {
                 std.log.warn("Hey I am hit\n", .{});
-                return (try std.fmt.allocPrint(allocator, "movsx {s},{s}", .{ try Operand.stringify(@constCast(&movsx.src), allocator), try Operand.stringify(@constCast(&movsx.dest), allocator) }));
+                return (try std.fmt.allocPrint(allocator, "movslq {s},{s}", .{ try Operand.stringify(@constCast(&movsx.src), allocator), try Operand.stringify(@constCast(&movsx.dest), allocator) }));
             },
         }
     }
@@ -437,7 +461,10 @@ inline fn fixMultiply(inst: *Instruction, allocator: std.mem.Allocator, fixedIns
         const movLeftToR11 = try allocator.create(Instruction);
         movLeftToR11.* = Instruction{
             .Mov = MovInst{
-                .dest = Operand{ .Reg = Reg.R11 },
+                .dest = Operand{ .Reg = switch (inst.Binary.type) {
+                    .LongWord => .R11,
+                    .QuadWord => .R11_64,
+                } },
                 .src = inst.Binary.lhs,
                 .type = inst.Binary.type,
             },
@@ -445,10 +472,18 @@ inline fn fixMultiply(inst: *Instruction, allocator: std.mem.Allocator, fixedIns
         const movR11ToLeft = try allocator.create(Instruction);
         movR11ToLeft.* = Instruction{ .Mov = MovInst{
             .dest = inst.Binary.lhs,
-            .src = Operand{ .Reg = Reg.R11 },
+            .src = Operand{ .Reg = switch (inst.Binary.type) {
+                .QuadWord => .R11_64,
+                .LongWord => .R11,
+            } },
             .type = inst.Binary.type,
         } };
-        inst.Binary.lhs = Operand{ .Reg = Reg.R11 };
+        inst.Binary.lhs = Operand{
+            .Reg = switch (inst.Binary.type) {
+                .LongWord => .R11,
+                .QuadWord => .R11_64,
+            },
+        };
         try fixedInstructions.append(movLeftToR11);
         try fixedInstructions.append(inst);
         try fixedInstructions.append(movR11ToLeft);
@@ -465,7 +500,11 @@ pub fn fixupInstructions(instructions: *std.ArrayList(*Instruction), allocator: 
             .Mov => |mov| {
                 const isSrcMem = mov.src.isOfKind(.Data) or mov.src.isOfKind(.Stack);
                 const isDestMem = mov.dest.isOfKind(.Data) or mov.dest.isOfKind(.Stack);
-                if (isSrcMem and isDestMem) {
+                // in case of quad word mov instructions, a quadword immediate
+                // cannot be moved directly into memory, hence require an
+                // intermediate register move
+                const quadWordImmMov = (mov.type == .QuadWord) and mov.src.isOfKind(.Imm);
+                if ((isSrcMem and isDestMem) or quadWordImmMov) {
                     //_ = instructions.orderedRemove(i);
                     const movInstSrc = try allocator.create(Instruction);
                     const movInstDest = try allocator.create(Instruction);
@@ -534,7 +573,7 @@ pub fn fixupInstructions(instructions: *std.ArrayList(*Instruction), allocator: 
                 }
             },
             .Cmp => |cmp| {
-                const isOp1Mem = cmp.op1.isOfKind(.Data) or cmp.op1.isOfKind(.Stack);
+                const isOp1Mem = cmp.op1.isOfKind(.Data) or cmp.op1.isOfKind(.Stack) or cmp.op1.isOfKind(.Imm);
                 const isOp2Mem = cmp.op2.isOfKind(.Data) or cmp.op2.isOfKind(.Stack);
                 if (isOp1Mem and isOp2Mem) {
                     const movInst = try allocator.create(Instruction);

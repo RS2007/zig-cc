@@ -145,13 +145,32 @@ pub const Typechecker = struct {
         return typechecker;
     }
     pub fn check(self: *Self, program: *AST.Program) TypeCheckerError!?[]u8 {
+        // INFO: Typechecks a program and constructs a table
+        // Then it resolves the return labels
         const typeErrorStruct = try typecheckProgram(self, program);
         if (typeErrorStruct != null and typeErrorStruct.?.errorType != null) {
             return typeErrorStruct.?.errorPayload;
         }
+        try self.resolveReturns(program);
         return null;
     }
+
+    pub fn resolveReturns(self: *Self, program: *AST.Program) !void {
+        for (program.externalDecls.items) |externalDecl| {
+            if (std.meta.activeTag(externalDecl.*) == .FunctionDecl) {
+                for (externalDecl.FunctionDecl.blockItems.items) |blkItem| {
+                    try resolveBlockReturns(self, blkItem, externalDecl.FunctionDecl.returnType);
+                }
+            }
+        }
+    }
 };
+
+pub fn resolveBlockReturns(self: *Typechecker, blockItem: *AST.BlockItem, fnReturnType: AST.Type) !void {
+    if (std.meta.activeTag(blockItem.*) == .Statement and std.meta.activeTag(blockItem.Statement.*) == .Return) {
+        _ = try convert(self.allocator, blockItem.Statement.Return.expression, fnReturnType);
+    }
+}
 
 //1. Break typechecker down into smaller functions
 pub fn typecheckProgram(self: *Typechecker, program: *AST.Program) TypeCheckerError!?*TypeErrorStruct {

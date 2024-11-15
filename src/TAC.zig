@@ -424,7 +424,10 @@ pub const Instruction = union(InstructionType) {
                             .Idiv = right,
                         };
                         movDXToDest.* = assembly.Instruction{ .Mov = assembly.MovInst{
-                            .src = assembly.Operand{ .Reg = assembly.Reg.DX },
+                            .src = assembly.Operand{ .Reg = switch (storeDestType) {
+                                .LongWord => assembly.Reg.EDX,
+                                .QuadWord => assembly.Reg.RDX,
+                            } },
                             .dest = storeDest,
                             .type = storeDestType,
                         } };
@@ -546,7 +549,8 @@ pub const Instruction = union(InstructionType) {
                 try instructions.append(label);
             },
             .FunctionCall => |fnCall| {
-                const registers = [_]assembly.Reg{ assembly.Reg.EDI, assembly.Reg.ESI, assembly.Reg.EDX, assembly.Reg.ECX, assembly.Reg.R8, assembly.Reg.R9 };
+                const registers32 = [_]assembly.Reg{ assembly.Reg.EDI, assembly.Reg.ESI, assembly.Reg.EDX, assembly.Reg.ECX, assembly.Reg.R8, assembly.Reg.R9 };
+                const registers64 = [_]assembly.Reg{ assembly.Reg.RDI, assembly.Reg.RSI, assembly.Reg.RDX, assembly.Reg.RCX, assembly.Reg.R8_64, assembly.Reg.R9_64 };
                 if (fnCall.args.items.len < 6) {
                     for (fnCall.args.items, 0..) |arg, i| {
                         const movArgToReg = try allocator.create(assembly.Instruction);
@@ -555,7 +559,10 @@ pub const Instruction = union(InstructionType) {
                         movArgToReg.* = assembly.Instruction{
                             .Mov = assembly.MovInst{
                                 .src = assemblyArg,
-                                .dest = assembly.Operand{ .Reg = registers[i] },
+                                .dest = assembly.Operand{ .Reg = switch (assemblyArgType) {
+                                    .LongWord => registers32[i],
+                                    .QuadWord => registers64[i],
+                                } },
                                 .type = assemblyArgType,
                             },
                         };
