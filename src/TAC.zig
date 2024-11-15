@@ -37,11 +37,11 @@ pub fn astSymTabToTacSymTab(allocator: std.mem.Allocator, astSymTab: std.StringH
         asmSymbol.* = switch (sym.typeInfo) {
             .Integer => .{ .Obj = .{
                 .type = assembly.AsmType.LongWord,
-                .static = std.mem.eql(u8, @tagName(sym.attributes), "StaticAttr"),
+                .static = std.meta.activeTag(sym.attributes) == .StaticAttr,
             } },
             .Long => .{ .Obj = .{
                 .type = assembly.AsmType.QuadWord,
-                .static = std.mem.eql(u8, @tagName(sym.attributes), "StaticAttr"),
+                .static = std.meta.activeTag(sym.attributes) == .StaticAttr,
             } },
             .Function => .{ .Function = .{
                 .defined = sym.attributes.FunctionAttr.defined,
@@ -245,7 +245,13 @@ pub const Instruction = union(InstructionType) {
     FunctionCall: FunctionCall,
     SignExtend: SignExtend,
     Truncate: Truncate,
-    pub fn codegen(instruction: *Instruction, symbolTable: std.StringHashMap(*assembly.Symbol), instructions: *std.ArrayList(*assembly.Instruction), allocator: std.mem.Allocator) ast.CodegenError!void {
+
+    pub fn codegen(
+        instruction: *Instruction,
+        symbolTable: std.StringHashMap(*assembly.Symbol),
+        instructions: *std.ArrayList(*assembly.Instruction),
+        allocator: std.mem.Allocator,
+    ) ast.CodegenError!void {
         switch (instruction.*) {
             .SignExtend => |signExt| {
                 const src = try signExt.src.codegen(symbolTable, allocator);
@@ -257,10 +263,6 @@ pub const Instruction = union(InstructionType) {
                     .dest = assembly.Operand{ .Reg = assembly.Reg.R10 },
                     .type = signExt.src.getTypeFromSymTab(symbolTable).?,
                 } };
-                //movsxInst.* = assembly.Instruction{ .Movsx = assembly.Movsx{
-                //    .src = assembly.Operand{ .Reg = assembly.Reg.R10 },
-                //    .dest = assembly.Operand{ .Reg = assembly.Reg.R11 },
-                //} };
                 const movR11ToDest = try allocator.create(assembly.Instruction);
                 try instructions.append(movSrcToR10);
                 movsxInst.* = assembly.Instruction{ .Movsx = assembly.Movsx{
@@ -276,8 +278,15 @@ pub const Instruction = union(InstructionType) {
                 try instructions.append(movR11ToDest);
             },
             .Truncate => |trunc| {
-                _ = trunc;
-                unreachable;
+                const src = try trunc.src.codegen(symbolTable, allocator);
+                const dest = try trunc.dest.codegen(symbolTable, allocator);
+                const movInstruction = try allocator.create(assembly.Instruction);
+                movInstruction.* = assembly.Instruction{ .Mov = assembly.MovInst{
+                    .src = src,
+                    .dest = dest,
+                    .type = trunc.dest.getTypeFromSymTab(symbolTable).?,
+                } };
+                try instructions.append(movInstruction);
             },
             .Return => |ret| {
                 const val = try ret.val.codegen(symbolTable, allocator);
@@ -286,7 +295,12 @@ pub const Instruction = union(InstructionType) {
                 movInst.* = assembly.Instruction{ .Mov = assembly.MovInst{
                     .type = instType,
                     .src = val,
-                    .dest = assembly.Operand{ .Reg = assembly.Reg.AX },
+                    .dest = assembly.Operand{
+                        .Reg = switch (instType) {
+                            .LongWord => .EAX,
+                            .QuadWord => .RAX,
+                        },
+                    },
                 } };
                 const retInst = try allocator.create(assembly.Instruction);
                 retInst.* = assembly.Instruction{ .Ret = {} };
@@ -359,7 +373,12 @@ pub const Instruction = union(InstructionType) {
                         const movAXToDest = try allocator.create(assembly.Instruction);
                         movLeftToAX.* = assembly.Instruction{ .Mov = assembly.MovInst{
                             .src = left,
-                            .dest = assembly.Operand{ .Reg = assembly.Reg.AX },
+                            .dest = assembly.Operand{
+                                .Reg = switch (binary.left.getTypeFromSymTab(symbolTable).?) {
+                                    .LongWord => .EAX,
+                                    .QuadWord => .RAX,
+                                },
+                            },
                             .type = binary.left.getTypeFromSymTab(symbolTable).?,
                         } };
                         cdqInstr.* = assembly.Instruction{
@@ -369,7 +388,12 @@ pub const Instruction = union(InstructionType) {
                             .Idiv = right,
                         };
                         movAXToDest.* = assembly.Instruction{ .Mov = assembly.MovInst{
-                            .src = assembly.Operand{ .Reg = assembly.Reg.AX },
+                            .src = assembly.Operand{
+                                .Reg = switch (storeDestType) {
+                                    .LongWord => .EAX,
+                                    .QuadWord => .RAX,
+                                },
+                            },
                             .dest = storeDest,
                             .type = storeDestType,
                         } };
@@ -385,7 +409,12 @@ pub const Instruction = union(InstructionType) {
                         const movDXToDest = try allocator.create(assembly.Instruction);
                         movLeftToDX.* = assembly.Instruction{ .Mov = assembly.MovInst{
                             .src = left,
-                            .dest = assembly.Operand{ .Reg = assembly.Reg.AX },
+                            .dest = assembly.Operand{
+                                .Reg = switch (binary.left.getTypeFromSymTab(symbolTable).?) {
+                                    .LongWord => .EAX,
+                                    .QuadWord => .RAX,
+                                },
+                            },
                             .type = binary.left.getTypeFromSymTab(symbolTable).?,
                         } };
                         cdqInstr.* = assembly.Instruction{
@@ -395,7 +424,10 @@ pub const Instruction = union(InstructionType) {
                             .Idiv = right,
                         };
                         movDXToDest.* = assembly.Instruction{ .Mov = assembly.MovInst{
-                            .src = assembly.Operand{ .Reg = assembly.Reg.DX },
+                            .src = assembly.Operand{ .Reg = switch (storeDestType) {
+                                .LongWord => assembly.Reg.EDX,
+                                .QuadWord => assembly.Reg.RDX,
+                            } },
                             .dest = storeDest,
                             .type = storeDestType,
                         } };
@@ -517,7 +549,8 @@ pub const Instruction = union(InstructionType) {
                 try instructions.append(label);
             },
             .FunctionCall => |fnCall| {
-                const registers = [_]assembly.Reg{ assembly.Reg.EDI, assembly.Reg.ESI, assembly.Reg.EDX, assembly.Reg.ECX, assembly.Reg.R8, assembly.Reg.R9 };
+                const registers32 = [_]assembly.Reg{ assembly.Reg.EDI, assembly.Reg.ESI, assembly.Reg.EDX, assembly.Reg.ECX, assembly.Reg.R8, assembly.Reg.R9 };
+                const registers64 = [_]assembly.Reg{ assembly.Reg.RDI, assembly.Reg.RSI, assembly.Reg.RDX, assembly.Reg.RCX, assembly.Reg.R8_64, assembly.Reg.R9_64 };
                 if (fnCall.args.items.len < 6) {
                     for (fnCall.args.items, 0..) |arg, i| {
                         const movArgToReg = try allocator.create(assembly.Instruction);
@@ -526,7 +559,10 @@ pub const Instruction = union(InstructionType) {
                         movArgToReg.* = assembly.Instruction{
                             .Mov = assembly.MovInst{
                                 .src = assemblyArg,
-                                .dest = assembly.Operand{ .Reg = registers[i] },
+                                .dest = assembly.Operand{ .Reg = switch (assemblyArgType) {
+                                    .LongWord => registers32[i],
+                                    .QuadWord => registers64[i],
+                                } },
                                 .type = assemblyArgType,
                             },
                         };

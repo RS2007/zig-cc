@@ -481,7 +481,9 @@ pub const Parser = struct {
         // Identifier
         const currToken = try self.l.nextToken(self.allocator);
         const identifier = try self.allocator.create(AST.Expression);
-        identifier.* = AST.Expression{ .Identifier = .{ .name = self.l.buffer[currToken.start .. currToken.end + 1] } };
+        identifier.* = AST.Expression{ .Identifier = .{
+            .name = self.l.buffer[currToken.start .. currToken.end + 1],
+        } };
         return identifier;
     }
 

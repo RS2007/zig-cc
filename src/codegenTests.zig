@@ -634,3 +634,130 @@ test "casting with div" {
     try asmProgram.stringify(sFileWriter, allocator, tacRenderer.asmSymbolTable);
     try cFileWriter.writeAll(programStr);
 }
+
+test "truncation" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const cFileWriter = (try std.fs.cwd().createFile("./cFiles/C/truncation.c", .{})).writer();
+    const sFileWriter = (try std.fs.cwd().createFile("./cFiles/S/truncation.s", .{})).writer();
+    const programStr =
+        \\int main() {
+        \\    long l = 2147483653;
+        \\    int i = l;
+        \\    return i;
+        \\}
+    ;
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    const program = try p.parseProgram();
+    const varResolver = try ast.VarResolver.init(allocator);
+    try varResolver.resolve(program);
+    const typechecker = try semantic.Typechecker.init(allocator);
+    const hasTypeErr = try typechecker.check(program);
+    if (hasTypeErr) |typeError| {
+        std.log.warn("\x1b[33mError\x1b[0m: {s}\n", .{typeError});
+        std.debug.assert(false);
+    }
+    try ast.loopLabelPass(program, allocator);
+    const tacRenderer = try ast.TACRenderer.init(allocator, typechecker.symbolTable);
+    const tacProgram = try tacRenderer.render(program);
+    const asmRenderer = try tac.AsmRenderer.init(allocator, tacRenderer.asmSymbolTable);
+    const asmProgram = try asmRenderer.render(tacProgram);
+    try asmProgram.stringify(sFileWriter, allocator, tacRenderer.asmSymbolTable);
+    try cFileWriter.writeAll(programStr);
+}
+
+test "big test for casting" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const cFileWriter = (try std.fs.cwd().createFile("./cFiles/C/allCasting.c", .{})).writer();
+    const sFileWriter = (try std.fs.cwd().createFile("./cFiles/S/allCasting.s", .{})).writer();
+    const programStr =
+        \\
+        \\long a;
+        \\long b;
+        \\
+        \\int addition() {
+        \\    return (a + b == 4294967295L);
+        \\}
+        \\
+        \\int subtraction() {
+        \\    return (a - b == -4294967380L);
+        \\}
+        \\
+        \\int multiplication() {
+        \\    return (a * 4L == 17179869160L);
+        \\}
+        \\
+        \\int division() {
+        \\    b = a / 128L;
+        \\    return (b == 33554431L);
+        \\}
+        \\
+        \\int remaind() {
+        \\    b = -a % 4294967290L;
+        \\    return (b == -5L);
+        \\}
+        \\
+        \\int complement() {
+        \\    return (~a == -9223372036854775807L);
+        \\}
+        \\
+        \\int main() {
+        \\    a = 4294967290L;
+        \\    b = 5L;
+        \\    if (addition() != 0) {
+        \\        return 1;
+        \\    }
+        \\
+        \\    a = -4294967290L;
+        \\    b = 90L;
+        \\    if (subtraction() != 0) {
+        \\        return 2;
+        \\    }
+        \\
+        \\    a = 4294967290L;
+        \\    if (multiplication() == 0) {
+        \\        return 3;
+        \\    }
+        \\
+        \\    a = 4294967290L;
+        \\    if (division() == 0) {
+        \\        return 4;
+        \\    }
+        \\
+        \\    a = 8589934585L;
+        \\    if (remaind() == 0) {
+        \\        return 5;
+        \\    }
+        \\
+        \\    a = 9223372036854775806L;
+        \\    if (complement() == 0) {
+        \\        return 6;
+        \\    }
+        \\
+        \\    return 0;
+        \\}
+    ;
+
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    const program = try p.parseProgram();
+    const varResolver = try ast.VarResolver.init(allocator);
+    try varResolver.resolve(program);
+    const typechecker = try semantic.Typechecker.init(allocator);
+    const hasTypeErr = try typechecker.check(program);
+    if (hasTypeErr) |typeError| {
+        std.log.warn("\x1b[33mError\x1b[0m: {s}\n", .{typeError});
+        std.debug.assert(false);
+    }
+    try ast.loopLabelPass(program, allocator);
+    const tacRenderer = try ast.TACRenderer.init(allocator, typechecker.symbolTable);
+    const tacProgram = try tacRenderer.render(program);
+    const asmRenderer = try tac.AsmRenderer.init(allocator, tacRenderer.asmSymbolTable);
+    const asmProgram = try asmRenderer.render(tacProgram);
+    try asmProgram.stringify(sFileWriter, allocator, tacRenderer.asmSymbolTable);
+    try cFileWriter.writeAll(programStr);
+}

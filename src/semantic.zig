@@ -65,6 +65,7 @@ pub const TypeError = error{
     ExternVarDeclared,
     FnRedeclaredAsVar,
     ConflictingDeclarations,
+    FnPrevDeclArgMismatch,
 };
 
 const TypeCheckerError = error{OutOfMemory} || TypeError;
@@ -100,7 +101,7 @@ pub const TypeKind = enum {
     }
 };
 pub const FnSymbol = struct {
-    argsLen: u32,
+    args: std.ArrayList(AST.Type),
     returnType: AST.Type,
 };
 
@@ -144,13 +145,32 @@ pub const Typechecker = struct {
         return typechecker;
     }
     pub fn check(self: *Self, program: *AST.Program) TypeCheckerError!?[]u8 {
+        // INFO: Typechecks a program and constructs a table
+        // Then it resolves the return labels
         const typeErrorStruct = try typecheckProgram(self, program);
         if (typeErrorStruct != null and typeErrorStruct.?.errorType != null) {
             return typeErrorStruct.?.errorPayload;
         }
+        try self.resolveReturns(program);
         return null;
     }
+
+    pub fn resolveReturns(self: *Self, program: *AST.Program) !void {
+        for (program.externalDecls.items) |externalDecl| {
+            if (std.meta.activeTag(externalDecl.*) == .FunctionDecl) {
+                for (externalDecl.FunctionDecl.blockItems.items) |blkItem| {
+                    try resolveBlockReturns(self, blkItem, externalDecl.FunctionDecl.returnType);
+                }
+            }
+        }
+    }
 };
+
+pub fn resolveBlockReturns(self: *Typechecker, blockItem: *AST.BlockItem, fnReturnType: AST.Type) !void {
+    if (std.meta.activeTag(blockItem.*) == .Statement and std.meta.activeTag(blockItem.Statement.*) == .Return) {
+        _ = try convert(self.allocator, blockItem.Statement.Return.expression, fnReturnType);
+    }
+}
 
 //1. Break typechecker down into smaller functions
 pub fn typecheckProgram(self: *Typechecker, program: *AST.Program) TypeCheckerError!?*TypeErrorStruct {
@@ -207,7 +227,21 @@ pub fn typecheckExternalDecl(self: *Typechecker, externalDecl: *AST.ExternalDecl
                     );
                 }
 
-                if (functionDecl.args.items.len != sym.typeInfo.Function.argsLen) {
+                for (0..functionDecl.args.items.len) |i| {
+                    if (functionDecl.args.items[i].NonVoidArg.type != sym.typeInfo.Function.args.items[i]) {
+                        return TypeErrorStruct.typeError(
+                            self.allocator,
+                            TypeError.FnPrevDeclArgMismatch,
+                            try std.fmt.allocPrint(self.allocator, "Argument mismatch in function redeclaration: function name = {s}, function arg mismatch between {any} and {any}\n", .{
+                                functionDecl.name,
+                                functionDecl.args.items[i].NonVoidArg.type,
+                                sym.typeInfo.Function.args.items[i],
+                            }),
+                        );
+                    }
+                }
+
+                if (functionDecl.args.items.len != sym.typeInfo.Function.args.items.len) {
                     return TypeErrorStruct.typeError(
                         self.allocator,
                         TypeError.FnArgNumMismatch,
@@ -220,10 +254,14 @@ pub fn typecheckExternalDecl(self: *Typechecker, externalDecl: *AST.ExternalDecl
                 }
             }
             const fnSym = try self.allocator.create(Symbol);
+            var fnArgsList = std.ArrayList(AST.Type).init(self.allocator);
+            for (functionDecl.args.items) |arg| {
+                try fnArgsList.append(arg.NonVoidArg.type);
+            }
             fnSym.* = .{
                 .typeInfo = .{
                     .Function = .{
-                        .argsLen = @intCast(functionDecl.args.items.len),
+                        .args = fnArgsList,
                         .returnType = functionDecl.returnType,
                     },
                 },
@@ -482,7 +520,7 @@ fn typecheckBlkItem(self: *Typechecker, blkItem: *AST.BlockItem) TypeCheckerErro
             // Typecheck the expression
             if (decl.expression) |declExpression| {
                 // INFO: Type error witin expression
-                _ = typecheckExpr(self, declExpression) catch |err| {
+                const exprType = typecheckExpr(self, declExpression) catch |err| {
                     const typeErrorStruct = try self.allocator.create(TypeErrorStruct);
                     typeErrorStruct.* = .{
                         .errorType = err,
@@ -490,7 +528,10 @@ fn typecheckBlkItem(self: *Typechecker, blkItem: *AST.BlockItem) TypeCheckerErro
                     };
                     return typeErrorStruct;
                 };
+                std.log.warn("Conversion from {any} to {any}\n", .{ exprType, decl.type });
+                std.log.warn("Expression: {any}\n", .{declExpression});
                 decl.expression = try convert(self.allocator, decl.expression.?, decl.type);
+                std.log.warn("Expression post conversion: {any}\n", .{declExpression});
                 std.debug.assert(if (decl.expression == null) true else decl.expression.?.getType() == decl.type);
 
                 //INFO: Checking type equality
@@ -602,7 +643,11 @@ fn typecheckBlkItem(self: *Typechecker, blkItem: *AST.BlockItem) TypeCheckerErro
                 // No decl
                 const sym = try self.allocator.create(Symbol);
                 sym.* = .{
-                    .typeInfo = .Integer,
+                    .typeInfo = switch (decl.type) {
+                        .Integer => .Integer,
+                        .Long => .Long,
+                        else => unreachable,
+                    },
                     .attributes = .LocalAttr,
                 };
                 try self.symbolTable.put(decl.name, sym);
@@ -870,7 +915,8 @@ fn typecheckExpr(self: *Typechecker, expr: *AST.Expression) TypeError!AST.Type {
         },
         .Assignment => |assignment| {
             const lhsType = try typecheckExpr(self, assignment.lhs);
-            _ = try typecheckExpr(self, assignment.rhs);
+            const rhsType = try typecheckExpr(self, assignment.rhs);
+            std.log.warn("Conversion from {any} to {any}\n", .{ rhsType, lhsType });
             expr.Assignment.rhs = try convert(self.allocator, assignment.rhs, lhsType);
             expr.Assignment.type = lhsType;
             std.log.warn("Returning lhsType: {any}\n", .{lhsType});
@@ -911,9 +957,25 @@ fn typecheckExpr(self: *Typechecker, expr: *AST.Expression) TypeError!AST.Type {
                 std.log.warn("Unknown function: {s}\n", .{fnCall.name});
                 return TypeError.UnknownFunction;
             };
-            if (fnCall.args.items.len != fnSymbol.typeInfo.Function.argsLen) {
-                std.log.warn("Expected {d} arguments but found {d} arguments in {s}\n", .{ fnSymbol.typeInfo.Function.argsLen, fnCall.args.items.len, fnCall.name });
+            if (fnCall.args.items.len != fnSymbol.typeInfo.Function.args.items.len) {
+                std.log.warn("Expected {d} arguments but found {d} arguments in {s}\n", .{
+                    fnSymbol.typeInfo.Function.args.items.len,
+                    fnCall.args.items.len,
+                    fnCall.name,
+                });
                 return TypeError.TypeMismatch;
+            }
+            for (0..fnSymbol.typeInfo.Function.args.items.len) |i| {
+                const argType = try typecheckExpr(self, fnCall.args.items[i]);
+                if (fnSymbol.typeInfo.Function.args.items[i] != argType) {
+                    std.log.warn("Casting function argument in fn: {s} from {any} to {any}\n", .{
+                        fnCall.name,
+                        fnCall.args.items[i].getType(),
+                        fnSymbol.typeInfo.Function.args.items[i],
+                    });
+                    const converted = try convert(self.allocator, fnCall.args.items[i], fnSymbol.typeInfo.Function.args.items[i]);
+                    fnCall.args.items[i] = converted;
+                }
             }
             _ = try convert(self.allocator, expr, fnSymbol.typeInfo.Function.returnType);
             expr.FunctionCall.type = fnSymbol.typeInfo.Function.returnType;
