@@ -204,11 +204,15 @@ fn convertSymToTAC(tacProgram: *tac.Program, symbolTable: std.StringHashMap(*sem
                             .init = switch (value.typeInfo) {
                                 .Integer => .{ .Integer = 0 },
                                 .Long => .{ .Long = 0 },
+                                .ULong => .{ .ULong = 0 },
+                                .UInteger => .{ .UInt = 0 },
                                 else => unreachable,
                             },
                             .type = switch (value.typeInfo) {
-                                .Integer => tac.ConstantType.Integer,
-                                .Long => tac.ConstantType.Long,
+                                .Integer => .Integer,
+                                .Long => .Long,
+                                .ULong => .ULong,
+                                .UInteger => .UInt,
                                 else => unreachable,
                             },
                         };

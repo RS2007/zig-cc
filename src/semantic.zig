@@ -497,6 +497,8 @@ pub fn typecheckExternalDecl(self: *Typechecker, externalDecl: *AST.ExternalDecl
                 .typeInfo = switch (varDecl.type) {
                     .Integer => .Integer,
                     .Long => .Long,
+                    .UInteger => .UInteger,
+                    .ULong => .ULong,
                     else => unreachable,
                 },
                 .attributes = .{

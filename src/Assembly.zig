@@ -119,13 +119,14 @@ pub const StaticVar = struct {
         const code = try std.fmt.allocPrint(allocator,
             \\ {s} {s}
             \\ {s}
-            \\ .align 4
+            \\ .align {d}
             \\ {s}:
             \\ {s} 4
         , .{
             if (self.global) ".globl" else ".local",
             self.name,
             if (self.init.isZero()) ".bss" else ".data",
+            self.alignment,
             self.name,
             if (self.init.isZero()) ".zero" else ".long",
         });
@@ -156,8 +157,12 @@ pub const Reg = enum {
     RAX,
     R11_64, // TODO: Rename this later
     R10_64,
+    AL,
     pub fn stringify(register: Reg, allocator: std.mem.Allocator) ast.CodegenError![]u8 {
         switch (register) {
+            .AL => {
+                return (try std.fmt.allocPrint(allocator, "%al", .{}));
+            },
             .AX => {
                 return (try std.fmt.allocPrint(allocator, "%eax", .{}));
             },
@@ -471,7 +476,7 @@ pub const Instruction = union(InstructionType) {
             .SetCC => |setCC| {
                 const destStringified = try @constCast(&setCC.dest).stringify(allocator);
                 const code = try setCC.code.stringify(allocator);
-                return (try std.fmt.allocPrint(allocator, "set{s} {s}", .{ code, destStringified }));
+                return (try std.fmt.allocPrint(allocator, "set{s} %al\nmovzbl %al,%eax\n movl %eax,{s}", .{ code, destStringified }));
             },
             .Label => |label| {
                 return (try std.fmt.allocPrint(allocator, ".L{s}:", .{label}));
