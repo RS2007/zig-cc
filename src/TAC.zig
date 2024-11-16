@@ -21,8 +21,10 @@ pub const StaticVar = struct {
     name: []u8,
     global: bool,
     init: union(ConstantType) {
-        Integer: u32,
-        Long: u64,
+        Integer: i32,
+        Long: i64,
+        UInt: u32,
+        ULong: u64,
     },
     type: ConstantType,
 };
@@ -36,12 +38,24 @@ pub fn astSymTabToTacSymTab(allocator: std.mem.Allocator, astSymTab: std.StringH
         const asmSymbol = try allocator.create(assembly.Symbol);
         asmSymbol.* = switch (sym.typeInfo) {
             .Integer => .{ .Obj = .{
-                .type = assembly.AsmType.LongWord,
+                .type = .LongWord,
                 .static = std.meta.activeTag(sym.attributes) == .StaticAttr,
+                .signed = true,
+            } },
+            .UInteger => .{ .Obj = .{
+                .type = .LongWord,
+                .static = std.meta.activeTag(sym.attributes) == .StaticAttr,
+                .signed = false,
             } },
             .Long => .{ .Obj = .{
-                .type = assembly.AsmType.QuadWord,
+                .type = .QuadWord,
                 .static = std.meta.activeTag(sym.attributes) == .StaticAttr,
+                .signed = true,
+            } },
+            .ULong => .{ .Obj = .{
+                .type = .QuadWord,
+                .static = std.meta.activeTag(sym.attributes) == .StaticAttr,
+                .signed = false,
             } },
             .Function => .{ .Function = .{
                 .defined = sym.attributes.FunctionAttr.defined,
@@ -81,10 +95,12 @@ pub const AsmRenderer = struct {
                         .init = (switch (statItem.type) {
                             .Integer => .{ .Integer = statItem.init.Integer },
                             .Long => .{ .Long = statItem.init.Long },
+                            .UInt => .{ .Integer = @intCast(statItem.init.UInt) },
+                            .ULong => .{ .Long = @intCast(statItem.init.ULong) },
                         }),
                         .alignment = switch (statItem.type) {
-                            .Integer => 4,
-                            .Long => 8,
+                            .Integer, .UInt => 4,
+                            .Long, .ULong => 8,
                         },
                     };
                     asmTopLevelDecl.* = .{
@@ -152,6 +168,7 @@ pub const InstructionType = enum {
     FunctionCall,
     SignExtend,
     Truncate,
+    ZeroExtend,
 };
 
 pub const Return = struct {
@@ -233,6 +250,11 @@ pub const Truncate = struct {
     dest: *Val,
 };
 
+pub const ZeroExtend = struct {
+    src: *Val,
+    dest: *Val,
+};
+
 pub const Instruction = union(InstructionType) {
     Return: Return,
     Unary: Unary,
@@ -245,6 +267,7 @@ pub const Instruction = union(InstructionType) {
     FunctionCall: FunctionCall,
     SignExtend: SignExtend,
     Truncate: Truncate,
+    ZeroExtend: ZeroExtend,
 
     pub fn codegen(
         instruction: *Instruction,
@@ -261,7 +284,7 @@ pub const Instruction = union(InstructionType) {
                 movSrcToR10.* = assembly.Instruction{ .Mov = assembly.MovInst{
                     .src = src,
                     .dest = assembly.Operand{ .Reg = assembly.Reg.R10 },
-                    .type = signExt.src.getTypeFromSymTab(symbolTable).?,
+                    .type = signExt.src.getAsmTypeFromSymTab(symbolTable).?,
                 } };
                 const movR11ToDest = try allocator.create(assembly.Instruction);
                 try instructions.append(movSrcToR10);
@@ -273,7 +296,7 @@ pub const Instruction = union(InstructionType) {
                 movR11ToDest.* = assembly.Instruction{ .Mov = assembly.MovInst{
                     .src = assembly.Operand{ .Reg = assembly.Reg.R11_64 },
                     .dest = dest,
-                    .type = signExt.dest.getTypeFromSymTab(symbolTable).?,
+                    .type = signExt.dest.getAsmTypeFromSymTab(symbolTable).?,
                 } };
                 try instructions.append(movR11ToDest);
             },
@@ -284,14 +307,26 @@ pub const Instruction = union(InstructionType) {
                 movInstruction.* = assembly.Instruction{ .Mov = assembly.MovInst{
                     .src = src,
                     .dest = dest,
-                    .type = trunc.dest.getTypeFromSymTab(symbolTable).?,
+                    .type = trunc.dest.getAsmTypeFromSymTab(symbolTable).?,
                 } };
                 try instructions.append(movInstruction);
+            },
+            .ZeroExtend => |zeroExt| {
+                const src = try zeroExt.src.codegen(symbolTable, allocator);
+                const dest = try zeroExt.dest.codegen(symbolTable, allocator);
+                const movZeroExtend = try allocator.create(assembly.Instruction);
+                movZeroExtend.* = .{
+                    .Movzx = .{
+                        .src = src,
+                        .dest = dest,
+                    },
+                };
+                try instructions.append(movZeroExtend);
             },
             .Return => |ret| {
                 const val = try ret.val.codegen(symbolTable, allocator);
                 const movInst = try allocator.create(assembly.Instruction);
-                const instType = ret.val.getTypeFromSymTab(symbolTable).?;
+                const instType = ret.val.getAsmTypeFromSymTab(symbolTable).?;
                 movInst.* = assembly.Instruction{ .Mov = assembly.MovInst{
                     .type = instType,
                     .src = val,
@@ -312,7 +347,7 @@ pub const Instruction = union(InstructionType) {
                 const src = try unary.src.codegen(symbolTable, allocator);
                 const movInst = try allocator.create(assembly.Instruction);
                 const unaryInst = try allocator.create(assembly.Instruction);
-                const destType = unary.dest.getTypeFromSymTab(symbolTable).?;
+                const destType = unary.dest.getAsmTypeFromSymTab(symbolTable).?;
                 movInst.* = assembly.Instruction{
                     .Mov = assembly.MovInst{
                         .type = destType,
@@ -345,7 +380,7 @@ pub const Instruction = union(InstructionType) {
             },
             .Binary => |binary| {
                 const storeDest = try binary.dest.codegen(symbolTable, allocator);
-                const storeDestType = binary.dest.getTypeFromSymTab(symbolTable).?;
+                const storeDestType = binary.dest.getAsmTypeFromSymTab(symbolTable).?;
                 const left = try binary.left.codegen(symbolTable, allocator);
                 const right = try binary.right.codegen(symbolTable, allocator);
                 switch (binary.op) {
@@ -368,25 +403,54 @@ pub const Instruction = union(InstructionType) {
                     },
                     .DIVIDE => {
                         const movLeftToAX = try allocator.create(assembly.Instruction);
-                        const cdqInstr = try allocator.create(assembly.Instruction);
-                        const idivWithRight = try allocator.create(assembly.Instruction);
                         const movAXToDest = try allocator.create(assembly.Instruction);
                         movLeftToAX.* = assembly.Instruction{ .Mov = assembly.MovInst{
                             .src = left,
                             .dest = assembly.Operand{
-                                .Reg = switch (binary.left.getTypeFromSymTab(symbolTable).?) {
+                                .Reg = switch (binary.left.getAsmTypeFromSymTab(symbolTable).?) {
                                     .LongWord => .EAX,
                                     .QuadWord => .RAX,
                                 },
                             },
-                            .type = binary.left.getTypeFromSymTab(symbolTable).?,
+                            .type = binary.left.getAsmTypeFromSymTab(symbolTable).?,
                         } };
-                        cdqInstr.* = assembly.Instruction{
-                            .Cdq = storeDestType,
-                        };
-                        idivWithRight.* = assembly.Instruction{
-                            .Idiv = right,
-                        };
+                        try instructions.append(movLeftToAX);
+                        if (binary.left.isSignedFromSymTab(symbolTable) and binary.right.isSignedFromSymTab(symbolTable)) {
+                            const cdqInstr = try allocator.create(assembly.Instruction);
+                            const idivWithRight = try allocator.create(assembly.Instruction);
+                            cdqInstr.* = assembly.Instruction{
+                                .Cdq = storeDestType,
+                            };
+                            idivWithRight.* = assembly.Instruction{
+                                .Idiv = .{
+                                    .src = right,
+                                    .type = storeDestType,
+                                },
+                            };
+                            try instructions.append(cdqInstr);
+                            try instructions.append(idivWithRight);
+                        } else {
+                            const zeroEdx = try allocator.create(assembly.Instruction);
+                            const divWithRight = try allocator.create(assembly.Instruction);
+                            zeroEdx.* = .{
+                                .Mov = .{
+                                    .src = .{ .Imm = 0 },
+                                    .dest = .{ .Reg = switch (binary.left.getAsmTypeFromSymTab(symbolTable).?) {
+                                        .LongWord => .EDX,
+                                        .QuadWord => .RDX,
+                                    } },
+                                    .type = binary.left.getAsmTypeFromSymTab(symbolTable).?,
+                                },
+                            };
+                            divWithRight.* = assembly.Instruction{
+                                .Div = .{
+                                    .src = right,
+                                    .type = storeDestType,
+                                },
+                            };
+                            try instructions.append(zeroEdx);
+                            try instructions.append(divWithRight);
+                        }
                         movAXToDest.* = assembly.Instruction{ .Mov = assembly.MovInst{
                             .src = assembly.Operand{
                                 .Reg = switch (storeDestType) {
@@ -397,9 +461,6 @@ pub const Instruction = union(InstructionType) {
                             .dest = storeDest,
                             .type = storeDestType,
                         } };
-                        try instructions.append(movLeftToAX);
-                        try instructions.append(cdqInstr);
-                        try instructions.append(idivWithRight);
                         try instructions.append(movAXToDest);
                     },
                     .REMAINDER => {
@@ -410,18 +471,18 @@ pub const Instruction = union(InstructionType) {
                         movLeftToDX.* = assembly.Instruction{ .Mov = assembly.MovInst{
                             .src = left,
                             .dest = assembly.Operand{
-                                .Reg = switch (binary.left.getTypeFromSymTab(symbolTable).?) {
+                                .Reg = switch (binary.left.getAsmTypeFromSymTab(symbolTable).?) {
                                     .LongWord => .EAX,
                                     .QuadWord => .RAX,
                                 },
                             },
-                            .type = binary.left.getTypeFromSymTab(symbolTable).?,
+                            .type = binary.left.getAsmTypeFromSymTab(symbolTable).?,
                         } };
                         cdqInstr.* = assembly.Instruction{
                             .Cdq = storeDestType,
                         };
                         idivWithRight.* = assembly.Instruction{
-                            .Idiv = right,
+                            .Idiv = .{ .src = right, .type = storeDestType },
                         };
                         movDXToDest.* = assembly.Instruction{ .Mov = assembly.MovInst{
                             .src = assembly.Operand{ .Reg = switch (storeDestType) {
@@ -450,8 +511,15 @@ pub const Instruction = union(InstructionType) {
                             .type = storeDestType,
                         } };
                         const setCC = try allocator.create(assembly.Instruction);
+                        const lhsSigned = binary.left.isSignedFromSymTab(symbolTable);
+                        const rhsSigned = binary.right.isSignedFromSymTab(symbolTable);
+                        if (lhsSigned != rhsSigned) {
+                            std.log.warn("binary: {any}\n", .{binary});
+                            unreachable;
+                        }
+
                         setCC.* = assembly.Instruction{ .SetCC = assembly.SetCC{
-                            .code = assembly.CondCode.getFromTacOp(binary.op),
+                            .code = assembly.CondCode.getFromTacOp(binary.op, lhsSigned),
                             .dest = storeDest,
                         } };
                         try instructions.append(movLeftToDest);
@@ -470,7 +538,7 @@ pub const Instruction = union(InstructionType) {
                 const cpInstr = try allocator.create(assembly.Instruction);
                 const src = try cp.src.codegen(symbolTable, allocator);
                 const dest = try cp.dest.codegen(symbolTable, allocator);
-                const destType = cp.dest.getTypeFromSymTab(symbolTable).?;
+                const destType = cp.dest.getAsmTypeFromSymTab(symbolTable).?;
                 cpInstr.* = assembly.Instruction{ .Mov = assembly.MovInst{
                     .src = src,
                     .dest = dest,
@@ -491,11 +559,11 @@ pub const Instruction = union(InstructionType) {
                 const val = try jmp.condition.codegen(symbolTable, allocator);
                 movToTemp.* = assembly.Instruction{ .Mov = assembly.MovInst{
                     .src = val,
-                    .dest = assembly.Operand{ .Reg = switch (jmp.condition.getTypeFromSymTab(symbolTable).?) {
+                    .dest = assembly.Operand{ .Reg = switch (jmp.condition.getAsmTypeFromSymTab(symbolTable).?) {
                         .LongWord => assembly.Reg.R10,
                         .QuadWord => assembly.Reg.R10_64,
                     } },
-                    .type = jmp.condition.getTypeFromSymTab(symbolTable).?,
+                    .type = jmp.condition.getAsmTypeFromSymTab(symbolTable).?,
                 } };
                 checkZero.* = assembly.Instruction{ .Cmp = assembly.Cmp{
                     .op2 = assembly.Operand{ .Reg = assembly.Reg.R10 },
@@ -519,11 +587,11 @@ pub const Instruction = union(InstructionType) {
                 const val = try jmp.condition.codegen(symbolTable, allocator);
                 movToTemp.* = assembly.Instruction{ .Mov = assembly.MovInst{
                     .src = val,
-                    .dest = assembly.Operand{ .Reg = switch (jmp.condition.getTypeFromSymTab(symbolTable).?) {
+                    .dest = assembly.Operand{ .Reg = switch (jmp.condition.getAsmTypeFromSymTab(symbolTable).?) {
                         .LongWord => assembly.Reg.R10,
                         .QuadWord => assembly.Reg.R10_64,
                     } },
-                    .type = jmp.condition.getTypeFromSymTab(symbolTable).?,
+                    .type = jmp.condition.getAsmTypeFromSymTab(symbolTable).?,
                 } };
                 checkZero.* = assembly.Instruction{ .Cmp = assembly.Cmp{
                     .op2 = assembly.Operand{ .Reg = assembly.Reg.R10 },
@@ -555,7 +623,7 @@ pub const Instruction = union(InstructionType) {
                     for (fnCall.args.items, 0..) |arg, i| {
                         const movArgToReg = try allocator.create(assembly.Instruction);
                         const assemblyArg = try arg.codegen(symbolTable, allocator);
-                        const assemblyArgType = arg.getTypeFromSymTab(symbolTable).?;
+                        const assemblyArgType = arg.getAsmTypeFromSymTab(symbolTable).?;
                         movArgToReg.* = assembly.Instruction{
                             .Mov = assembly.MovInst{
                                 .src = assemblyArg,
@@ -581,7 +649,7 @@ pub const Instruction = union(InstructionType) {
                         .Mov = assembly.MovInst{
                             .dest = asmDest,
                             .src = assembly.Operand{ .Reg = assembly.Reg.EAX },
-                            .type = fnCall.dest.getTypeFromSymTab(symbolTable).?,
+                            .type = fnCall.dest.getAsmTypeFromSymTab(symbolTable).?,
                         },
                     };
                     try instructions.append(movReturnToReg);
@@ -603,11 +671,15 @@ pub const ValType = enum {
 pub const ConstantType = enum {
     Integer,
     Long,
+    UInt,
+    ULong,
 };
 
 pub const Constant = union(ConstantType) {
-    Integer: u32,
-    Long: u64,
+    Integer: i32,
+    Long: i64,
+    UInt: u32,
+    ULong: u64,
 };
 
 pub const Val = union(ValType) {
@@ -615,11 +687,24 @@ pub const Val = union(ValType) {
     Variable: []u8,
 
     const Self = @This();
-    pub fn getTypeFromSymTab(self: *Self, symbolTable: std.StringHashMap(*assembly.Symbol)) ?assembly.AsmType {
+
+    pub fn isSignedFromSymTab(self: *Self, symbolTable: std.StringHashMap(*assembly.Symbol)) bool {
         return switch (self.*) {
             .Constant => |constant| switch (constant) {
-                .Long => assembly.AsmType.QuadWord,
-                .Integer => assembly.AsmType.LongWord,
+                .Long, .Integer => true,
+                .ULong, .UInt => false,
+            },
+            .Variable => |varName| if (symbolTable.get(varName)) |sym| sym.Obj.signed else {
+                std.log.warn("Not found: {s}\n", .{varName});
+                unreachable;
+            },
+        };
+    }
+    pub fn getAsmTypeFromSymTab(self: *Self, symbolTable: std.StringHashMap(*assembly.Symbol)) ?assembly.AsmType {
+        return switch (self.*) {
+            .Constant => |constant| switch (constant) {
+                .Long, .ULong => assembly.AsmType.QuadWord,
+                .Integer, .UInt => assembly.AsmType.LongWord,
             },
             .Variable => |varName| if (symbolTable.get(varName)) |sym| sym.Obj.type else blk: {
                 std.log.warn("Not found: {s}\n", .{varName});
@@ -632,9 +717,11 @@ pub const Val = union(ValType) {
             .Constant => |constant| {
                 const operand = try allocator.create(assembly.Operand);
                 operand.* = assembly.Operand{
-                    .Imm = @intCast(switch (constant) {
-                        .Integer => constant.Integer,
-                        .Long => constant.Long,
+                    .Imm = (switch (constant) {
+                        .Integer => @intCast(constant.Integer),
+                        .Long => @intCast(constant.Long),
+                        .ULong => @intCast(constant.ULong),
+                        .UInt => @intCast(constant.UInt),
                     }),
                 };
                 return operand.*;

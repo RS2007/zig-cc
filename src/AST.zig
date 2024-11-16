@@ -235,6 +235,8 @@ pub const Type = enum {
     Integer,
     Void,
     Long,
+    UInteger,
+    ULong,
 
     const Self = @This();
     pub fn from(tokenType: lexer.TokenType) Self {
@@ -242,6 +244,8 @@ pub const Type = enum {
             .INT_TYPE => .Integer,
             .VOID => .Void,
             .LONG_TYPE => .Long,
+            .UNSIGNED_LONG => .ULong,
+            .UNSIGNED_INTEGER => .UInteger,
             else => unreachable,
         };
     }
@@ -251,7 +255,25 @@ pub const Type = enum {
             .Integer => .Integer,
             .Void => .Void,
             .Long => .Long,
+            .ULong => .ULong,
+            .UInteger => .UInteger,
             .Function => unreachable,
+        };
+    }
+
+    pub fn size(self: Self) usize {
+        return switch (self) {
+            .Integer, .UInteger => 4,
+            .Long, .ULong => 8,
+            else => unreachable,
+        };
+    }
+
+    pub fn signed(self: Self) bool {
+        return switch (self) {
+            .Long, .Integer => true,
+            .UInteger, .ULong => false,
+            else => unreachable,
         };
     }
 };
@@ -665,13 +687,26 @@ pub const FunctionCall = struct {
 pub const ConstantKind = enum {
     Integer,
     Long,
+    ULong,
+    UInteger,
 };
 pub const Constant = struct {
     type: Type,
     value: union(ConstantKind) {
-        Integer: u32,
-        Long: u64,
+        Integer: i32,
+        Long: i64,
+        ULong: u64,
+        UInteger: u32,
     },
+    const Self = @This();
+    pub inline fn to(self: *Self, comptime T: type) T {
+        return switch (self.value) {
+            .Integer => |integer| @intCast(integer),
+            .Long => |long| @intCast(long),
+            .ULong => |ulong| @intCast(ulong),
+            .UInteger => |uint| @intCast(uint),
+        };
+    }
 };
 pub const Cast = struct {
     type: Type,
@@ -768,8 +803,13 @@ pub const Expression = union(ExpressionType) {
                 asmSymbol.* = .{
                     .Obj = .{
                         .type = switch (cast.type) {
-                            .Integer => assembly.AsmType.LongWord,
-                            .Long => assembly.AsmType.QuadWord,
+                            .Integer, .UInteger => assembly.AsmType.LongWord,
+                            .Long, .ULong => assembly.AsmType.QuadWord,
+                            .Void => unreachable,
+                        },
+                        .signed = switch (cast.type) {
+                            .Integer, .Long => true,
+                            .UInteger, .ULong => false,
                             else => unreachable,
                         },
                         .static = false,
@@ -778,7 +818,7 @@ pub const Expression = union(ExpressionType) {
                 try renderer.asmSymbolTable.put(destName, asmSymbol);
                 dest.* = tac.Val{ .Variable = destName };
                 switch (cast.type) {
-                    .Integer => {
+                    .Integer, .UInteger => {
                         const trunc = try allocator.create(tac.Instruction);
                         trunc.* = tac.Instruction{ .Truncate = .{
                             .src = inner,
@@ -793,6 +833,14 @@ pub const Expression = union(ExpressionType) {
                             .dest = dest,
                         } };
                         try instructions.append(signExt);
+                    },
+                    .ULong => {
+                        const zeroExtend = try allocator.create(tac.Instruction);
+                        zeroExtend.* = .{ .ZeroExtend = .{
+                            .src = inner,
+                            .dest = dest,
+                        } };
+                        try instructions.append(zeroExtend);
                     },
                     else => unreachable,
                 }
@@ -810,6 +858,16 @@ pub const Expression = union(ExpressionType) {
                         val.* = tac.Val{ .Constant = .{ .Long = long } };
                         return val;
                     },
+                    .UInteger => |uint| {
+                        const val = try allocator.create(tac.Val);
+                        val.* = .{ .Constant = .{ .UInt = uint } };
+                        return val;
+                    },
+                    .ULong => |ulong| {
+                        const val = try allocator.create(tac.Val);
+                        val.* = .{ .Constant = .{ .ULong = ulong } };
+                        return val;
+                    },
                 }
             },
             .Unary => |unary| {
@@ -822,8 +880,13 @@ pub const Expression = union(ExpressionType) {
                         asmSymbol.* = .{
                             .Obj = .{
                                 .type = switch (unary.type.?) {
-                                    .Integer => assembly.AsmType.LongWord,
-                                    .Long => assembly.AsmType.QuadWord,
+                                    .Integer, .UInteger => assembly.AsmType.LongWord,
+                                    .Long, .ULong => assembly.AsmType.QuadWord,
+                                    else => unreachable,
+                                },
+                                .signed = switch (unary.type.?) {
+                                    .Integer, .Long => true,
+                                    .UInteger, .ULong => false,
                                     else => unreachable,
                                 },
                                 .static = false,
@@ -850,8 +913,13 @@ pub const Expression = union(ExpressionType) {
                         asmSymbol.* = .{
                             .Obj = .{
                                 .type = switch (unary.type.?) {
-                                    .Integer => assembly.AsmType.LongWord,
-                                    .Long => assembly.AsmType.QuadWord,
+                                    .Integer, .UInteger => assembly.AsmType.LongWord,
+                                    .Long, .ULong => assembly.AsmType.QuadWord,
+                                    else => unreachable,
+                                },
+                                .signed = switch (unary.type.?) {
+                                    .Integer, .Long => true,
+                                    .UInteger, .ULong => false,
                                     else => unreachable,
                                 },
                                 .static = false,
@@ -885,8 +953,13 @@ pub const Expression = union(ExpressionType) {
                     asmSymbol.* = .{
                         .Obj = .{
                             .type = switch (binary.type.?) {
-                                .Integer => assembly.AsmType.LongWord,
-                                .Long => assembly.AsmType.QuadWord,
+                                .Integer, .UInteger => assembly.AsmType.LongWord,
+                                .Long, .ULong => assembly.AsmType.QuadWord,
+                                else => unreachable,
+                            },
+                            .signed = switch (binary.type.?) {
+                                .Integer, .Long => true,
+                                .UInteger, .ULong => false,
                                 else => unreachable,
                             },
                             .static = false,
@@ -986,8 +1059,13 @@ pub const Expression = union(ExpressionType) {
                 asmSymbol.* = .{
                     .Obj = .{
                         .type = switch (binary.type.?) {
-                            .Integer => assembly.AsmType.LongWord,
-                            .Long => assembly.AsmType.QuadWord,
+                            .Integer, .UInteger => assembly.AsmType.LongWord,
+                            .Long, .ULong => assembly.AsmType.QuadWord,
+                            else => unreachable,
+                        },
+                        .signed = switch (binary.type.?) {
+                            .Integer, .Long => true,
+                            .UInteger, .ULong => false,
                             else => unreachable,
                         },
                         .static = false,
@@ -1031,8 +1109,13 @@ pub const Expression = union(ExpressionType) {
                 asmSymbol.* = .{
                     .Obj = .{
                         .type = switch (ternary.type.?) {
-                            .Integer => assembly.AsmType.LongWord,
-                            .Long => assembly.AsmType.QuadWord,
+                            .Integer, .UInteger => assembly.AsmType.LongWord,
+                            .Long, .ULong => assembly.AsmType.QuadWord,
+                            else => unreachable,
+                        },
+                        .signed = switch (ternary.type.?) {
+                            .Integer, .Long => true,
+                            .UInteger, .ULong => false,
                             else => unreachable,
                         },
                         .static = false,
@@ -1094,8 +1177,13 @@ pub const Expression = union(ExpressionType) {
                 asmSymbol.* = .{
                     .Obj = .{
                         .type = switch (fnCall.type.?) {
-                            .Integer => assembly.AsmType.LongWord,
-                            .Long => assembly.AsmType.QuadWord,
+                            .Integer, .UInteger => .LongWord,
+                            .Long, .ULong => .QuadWord,
+                            else => unreachable,
+                        },
+                        .signed = switch (fnCall.type.?) {
+                            .Integer, .Long => true,
+                            .UInteger, .ULong => false,
                             else => unreachable,
                         },
                         .static = false,

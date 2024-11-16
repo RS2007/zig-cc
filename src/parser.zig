@@ -51,9 +51,34 @@ pub const Parser = struct {
         }
         return program;
     }
+    pub fn parseType(self: *Parser) ParserError!AST.Type {
+        const next = try self.l.nextToken(self.allocator);
+        return switch (next.type) {
+            .INT_TYPE => .Integer,
+            .LONG_TYPE => .Long,
+            .UNSIGNED => blk: {
+                break :blk switch ((try self.l.nextToken(self.allocator)).type) {
+                    .INT_TYPE => .UInteger,
+                    .LONG_TYPE => .ULong,
+                    else => unreachable,
+                };
+            },
+            .VOID => .Void,
+            .SIGNED => blk: {
+                break :blk switch ((try self.l.nextToken(self.allocator)).type) {
+                    .INT_TYPE => .Integer,
+                    .LONG_TYPE => .Long,
+                    else => unreachable,
+                };
+            },
+            else => {
+                std.log.warn("next type: {any}\n", .{next.type});
+                unreachable;
+            },
+        };
+    }
 
-    inline fn parseFunctionDecl(self: *Parser, qualifier: ?AST.Qualifier) ParserError!*AST.ExternalDecl {
-        const returnType = self.l.currentToken.?;
+    inline fn parseFunctionDecl(self: *Parser, qualifier: ?AST.Qualifier, returnType: AST.Type) ParserError!*AST.ExternalDecl {
         const fnNameToken = try self.l.nextToken(self.allocator);
         var argList = std.ArrayList(*AST.Arg).init(self.allocator);
         std.debug.assert(fnNameToken.type == lexer.TokenType.IDENTIFIER);
@@ -78,7 +103,7 @@ pub const Parser = struct {
             .name = self.l.buffer[fnNameToken.start .. fnNameToken.end + 1],
             .blockItems = blockItems,
             .args = argList,
-            .returnType = AST.Type.from(returnType.type),
+            .returnType = returnType,
             .storageClass = qualifier,
         };
         functionDecl.* = .{
@@ -104,15 +129,14 @@ pub const Parser = struct {
         return functionDecl;
     }
 
-    inline fn parseVarDecl(self: *Parser, qualifier: ?AST.Qualifier) ParserError!*AST.Declaration {
-        const returnType = self.l.currentToken.?;
+    inline fn parseVarDecl(self: *Parser, qualifier: ?AST.Qualifier, returnType: AST.Type) ParserError!*AST.Declaration {
         const varName = try self.l.nextToken(self.allocator);
         std.log.warn("Return type: {any} and varName: {any}\n", .{ returnType, varName });
         const declaration = try self.allocator.create(AST.Declaration);
         declaration.* = .{
             .name = self.l.buffer[varName.start .. varName.end + 1],
             .expression = null,
-            .type = AST.Type.from(returnType.type),
+            .type = returnType,
             .storageClass = qualifier,
         };
 
@@ -129,6 +153,7 @@ pub const Parser = struct {
                 return declaration;
             },
             else => {
+                std.log.warn("semicolon or assign expected,got: {any}\n", .{semicolonOrAssign});
                 unreachable;
             },
         }
@@ -139,49 +164,33 @@ pub const Parser = struct {
         if (qualifier != null) {
             _ = try self.l.nextToken(self.allocator);
         }
-        _ = try self.l.nextToken(self.allocator);
+        const returnType = try self.parseType();
         const peekTwo = try self.l.peekTwoTokens(self.allocator);
+        std.log.warn("peekTwo: {s}\n", .{self.l.buffer[peekTwo[0].?.start .. peekTwo[0].?.end + 1]});
         if (peekTwo[1].?.type != lexer.TokenType.LPAREN) {
-            const varDecl = try self.parseVarDecl(qualifier);
+            const varDecl = try self.parseVarDecl(qualifier, returnType);
             const externalDecl = try self.allocator.create(AST.ExternalDecl);
             externalDecl.* = .{
                 .VarDeclaration = varDecl,
             };
             return externalDecl;
         }
-        return try self.parseFunctionDecl(qualifier);
+        return try self.parseFunctionDecl(qualifier, returnType);
     }
 
     pub fn parseArg(self: *Parser) ParserError!*AST.Arg {
-        const hasPeeked = try self.l.peekToken(self.allocator);
-        std.debug.assert(hasPeeked != null);
-        switch (hasPeeked.?.type) {
-            .INT_TYPE => {
-                const arg = try self.allocator.create(AST.Arg);
-                _ = try self.l.nextToken(self.allocator);
-                const argName = try self.l.nextToken(self.allocator);
-                arg.* = .{ .NonVoidArg = .{ .type = AST.Type.Integer, .identifier = self.l.buffer[argName.start .. argName.end + 1] } };
-                return arg;
-            },
-            .LONG_TYPE => {
-                const arg = try self.allocator.create(AST.Arg);
-                _ = try self.l.nextToken(self.allocator);
-                const argName = try self.l.nextToken(self.allocator);
-                arg.* = .{ .NonVoidArg = .{ .type = AST.Type.Long, .identifier = self.l.buffer[argName.start .. argName.end + 1] } };
-                return arg;
-            },
-            //.VOID => {
-            //    const arg = self.allocator.create(AST.Arg);
-            //    arg.* = .{
-            //        .Void = {},
-            //    };
-            //    return arg;
-            //},
-            else => {
-                std.log.warn("Unexpected peeked token in parseArg: {any}\n", .{hasPeeked});
-            },
-        }
-        return ParserError.Unexpected;
+        const argType = try self.parseType();
+        const arg = try self.allocator.create(AST.Arg);
+        arg.* = if (argType == .Void) .{ .Void = {} } else blk: {
+            const argName = try self.l.nextToken(self.allocator);
+            break :blk .{
+                .NonVoidArg = .{
+                    .type = argType,
+                    .identifier = self.l.buffer[argName.start .. argName.end + 1],
+                },
+            };
+        };
+        return arg;
     }
 
     pub fn parseBlockItem(self: *Parser) ParserError!*AST.BlockItem {
@@ -189,7 +198,7 @@ pub const Parser = struct {
         const blockItem = try self.allocator.create(AST.BlockItem);
         if (nextToken) |nextTok| {
             switch (nextTok.type) {
-                .EXTERN, .STATIC, .INT_TYPE, .LONG_TYPE => {
+                .EXTERN, .STATIC, .INT_TYPE, .LONG_TYPE, .UNSIGNED => {
                     blockItem.* = AST.BlockItem{
                         .Declaration = (try self.parseDeclaration()),
                     };
@@ -207,13 +216,13 @@ pub const Parser = struct {
     }
 
     pub fn parseDeclaration(self: *Parser) ParserError!*AST.Declaration {
-        const nextToken = try self.l.nextToken(self.allocator);
+        const nextToken = (try self.l.peekToken(self.allocator)).?;
         const qualifier = AST.Qualifier.from(nextToken.type);
         if (qualifier != null) {
             _ = try self.l.nextToken(self.allocator);
         }
-        // _ = try self.l.nextToken(self.allocator);
-        return try self.parseVarDecl(qualifier);
+        const returnType = try self.parseType();
+        return try self.parseVarDecl(qualifier, returnType);
     }
 
     pub fn parseForInit(self: *Parser) ParserError!*AST.ForInit {
@@ -511,7 +520,7 @@ pub const Parser = struct {
         integerNode.* = AST.Expression{
             .Constant = AST.Constant{
                 .type = .Integer,
-                .value = .{ .Integer = try std.fmt.parseInt(u32, self.l.buffer[currToken.start .. currToken.end + 1], 10) },
+                .value = .{ .Integer = try std.fmt.parseInt(i32, self.l.buffer[currToken.start .. currToken.end + 1], 10) },
             },
         };
         return integerNode;
@@ -524,7 +533,31 @@ pub const Parser = struct {
         const suffixRemovedSlice = if (self.l.buffer[currToken.end - 1] == 'L') self.l.buffer[currToken.start .. currToken.end - 1] else self.l.buffer[currToken.start..currToken.end];
         longNode.* = AST.Expression{ .Constant = AST.Constant{
             .type = .Long,
-            .value = .{ .Long = try std.fmt.parseInt(u64, suffixRemovedSlice, 10) },
+            .value = .{ .Long = try std.fmt.parseInt(i64, suffixRemovedSlice, 10) },
+        } };
+        return longNode;
+    }
+
+    pub inline fn parseUnsignedInt(self: *Parser) ParserError!*AST.Expression {
+        const currToken = try self.l.nextToken(self.allocator);
+
+        const longNode = try self.allocator.create(AST.Expression);
+        const suffixRemovedSlice = if (self.l.buffer[currToken.end - 1] == 'U') self.l.buffer[currToken.start .. currToken.end - 1] else self.l.buffer[currToken.start..currToken.end];
+        longNode.* = AST.Expression{ .Constant = AST.Constant{
+            .type = .UInteger,
+            .value = .{ .UInteger = try std.fmt.parseInt(u32, suffixRemovedSlice, 10) },
+        } };
+        return longNode;
+    }
+
+    pub inline fn parseUnsignedLong(self: *Parser) ParserError!*AST.Expression {
+        const currToken = try self.l.nextToken(self.allocator);
+
+        const longNode = try self.allocator.create(AST.Expression);
+        const suffixRemovedSlice = if (std.mem.eql(u8, self.l.buffer[currToken.end - 2 ..], "UL")) self.l.buffer[currToken.start .. currToken.end - 1] else self.l.buffer[currToken.start .. currToken.end - 1];
+        longNode.* = AST.Expression{ .Constant = AST.Constant{
+            .type = .ULong,
+            .value = .{ .ULong = try std.fmt.parseInt(u64, suffixRemovedSlice, 10) },
         } };
         return longNode;
     }
@@ -537,6 +570,8 @@ pub const Parser = struct {
             .MINUS, .TILDE => try self.parseUnaryExp(),
             .LPAREN => try self.parseBracketed(),
             .IDENTIFIER => try self.parseVarOrFn(),
+            .UNSIGNED_INT => try self.parseUnsignedInt(),
+            .UNSIGNED_LONG => try self.parseUnsignedLong(),
             else => |tokType| {
                 std.log.warn("Parse factor unknown type: {any}\n", .{tokType});
                 unreachable;

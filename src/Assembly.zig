@@ -89,12 +89,13 @@ pub const Symbol = union(enum) {
     Obj: struct {
         type: AsmType,
         static: bool,
+        signed: bool,
     },
 };
 
 pub const StaticInit = union(enum) {
-    Integer: u32,
-    Long: u64,
+    Integer: i32,
+    Long: i64,
 
     pub fn isZero(self: StaticInit) bool {
         return switch (self) {
@@ -228,6 +229,10 @@ pub const CondCode = enum {
     GE,
     L,
     LE,
+    A,
+    AE,
+    B,
+    BE,
 
     const Self = @This();
 
@@ -239,17 +244,31 @@ pub const CondCode = enum {
             .GE => try std.fmt.allocPrint(allocator, "ge", .{}),
             .L => try std.fmt.allocPrint(allocator, "l", .{}),
             .LE => try std.fmt.allocPrint(allocator, "le", .{}),
+            .A => try std.fmt.allocPrint(allocator, "a", .{}),
+            .B => try std.fmt.allocPrint(allocator, "b", .{}),
+            .AE => try std.fmt.allocPrint(allocator, "ae", .{}),
+            .BE => try std.fmt.allocPrint(allocator, "be", .{}),
         };
     }
 
-    pub fn getFromTacOp(op: tac.BinaryOp) Self {
-        return switch (op) {
+    pub fn getFromTacOp(op: tac.BinaryOp, signed: bool) Self {
+        return if (signed)
+            switch (op) {
+                .EQ => CondCode.E,
+                .NOT_EQ => CondCode.NE,
+                .LT => CondCode.L,
+                .LT_EQ => CondCode.LE,
+                .GT => CondCode.G,
+                .GT_EQ => CondCode.GE,
+                else => unreachable,
+            }
+        else switch (op) {
             .EQ => CondCode.E,
             .NOT_EQ => CondCode.NE,
-            .LT => CondCode.L,
-            .LT_EQ => CondCode.LE,
-            .GT => CondCode.G,
-            .GT_EQ => CondCode.GE,
+            .LT => CondCode.B,
+            .LT_EQ => CondCode.BE,
+            .GT => CondCode.A,
+            .GT_EQ => CondCode.AE,
             else => unreachable,
         };
     }
@@ -317,6 +336,7 @@ pub const InstructionType = enum {
     Ret,
     Binary,
     Idiv,
+    Div,
     Cdq,
     Cmp,
     Jmp,
@@ -325,6 +345,7 @@ pub const InstructionType = enum {
     Label,
     FnCall,
     Movsx,
+    Movzx, // move zero extend
 };
 
 pub const MovInst = struct {
@@ -375,13 +396,18 @@ pub const Movsx = struct {
     dest: Operand,
 };
 
+pub const Movzx = struct {
+    src: Operand,
+    dest: Operand,
+};
 pub const Instruction = union(InstructionType) {
     Mov: MovInst,
     Unary: UnaryInst,
     AllocateStack: u32,
     Ret: void,
     Binary: BinaryInst,
-    Idiv: Operand,
+    Idiv: Idiv,
+    Div: Idiv,
     Cdq: AsmType,
     Cmp: Cmp,
     Jmp: []u8,
@@ -390,6 +416,7 @@ pub const Instruction = union(InstructionType) {
     Label: []u8,
     FnCall: FnCall,
     Movsx: Movsx,
+    Movzx: Movzx,
 
     pub fn stringify(instruction: *Instruction, allocator: std.mem.Allocator) ast.CodegenError![]u8 {
         switch (instruction.*) {
@@ -422,9 +449,13 @@ pub const Instruction = union(InstructionType) {
             .Cdq => {
                 return (try std.fmt.allocPrint(allocator, "cdq", .{}));
             },
-            .Idiv => |operand| {
-                const operandStringified = try @constCast(&operand).stringify(allocator);
+            .Idiv => |idiv| {
+                const operandStringified = try @constCast(&idiv.src).stringify(allocator);
                 return (try std.fmt.allocPrint(allocator, "idiv {s}", .{operandStringified}));
+            },
+            .Div => |div| {
+                const operandStringified = try @constCast(&div.src).stringify(allocator);
+                return (try std.fmt.allocPrint(allocator, "div {s}", .{operandStringified}));
             },
             .Cmp => |cmp| {
                 const op1Stringified = try @constCast(&cmp.op1).stringify(allocator);
@@ -449,8 +480,10 @@ pub const Instruction = union(InstructionType) {
                 return (try std.fmt.allocPrint(allocator, "call {s}", .{fnCall.name}));
             },
             .Movsx => |movsx| {
-                std.log.warn("Hey I am hit\n", .{});
                 return (try std.fmt.allocPrint(allocator, "movslq {s},{s}", .{ try Operand.stringify(@constCast(&movsx.src), allocator), try Operand.stringify(@constCast(&movsx.dest), allocator) }));
+            },
+            .Movzx => {
+                @panic("Never hit this, movzx should be replaced by two mov instructions");
             },
         }
     }
@@ -539,6 +572,22 @@ pub fn fixupInstructions(instructions: *std.ArrayList(*Instruction), allocator: 
             .Movsx => {
                 try fixedInstructions.append(inst);
             },
+            .Movzx => |movzx| {
+                const movSrcToEax = try allocator.create(Instruction);
+                movSrcToEax.* = .{ .Mov = .{
+                    .src = movzx.src,
+                    .dest = .{ .Reg = Reg.EAX },
+                    .type = .LongWord,
+                } };
+                const movRaxToDest = try allocator.create(Instruction);
+                movRaxToDest.* = .{ .Mov = .{
+                    .src = .{ .Reg = Reg.RAX },
+                    .dest = movzx.dest,
+                    .type = .QuadWord,
+                } };
+                try instructions.append(movSrcToEax);
+                try instructions.append(movRaxToDest);
+            },
             .Binary => |binary| {
                 if (binary.op == BinaryOp.Multiply) {
                     try fixMultiply(inst, allocator, &fixedInstructions);
@@ -606,6 +655,13 @@ pub fn fixupInstructions(instructions: *std.ArrayList(*Instruction), allocator: 
                     &fixedInstructions,
                 );
             },
+            .Div => {
+                try fixupDiv(
+                    inst,
+                    allocator,
+                    &fixedInstructions,
+                );
+            },
             else => {
                 try fixedInstructions.append(inst);
             },
@@ -622,11 +678,11 @@ inline fn fixupIdiv(
     allocator: std.mem.Allocator,
     fixedInstructions: *std.ArrayList(*Instruction),
 ) ast.CodegenError!void {
-    switch (instruction.Idiv) {
+    switch (instruction.Idiv.src) {
         .Reg => {
             const movIdivArgToR10 = try allocator.create(Instruction);
             movIdivArgToR10.* = Instruction{ .Mov = MovInst{
-                .src = instruction.Idiv,
+                .src = instruction.Idiv.src,
                 .dest = Operand{ .Reg = Reg.R10 },
                 .type = AsmType.LongWord,
             } };
@@ -635,7 +691,10 @@ inline fn fixupIdiv(
             );
             const divInstruction = try allocator.create(Instruction);
             divInstruction.* = .{
-                .Idiv = Operand{ .Reg = Reg.R10 },
+                .Idiv = .{
+                    .src = Operand{ .Reg = Reg.R10 },
+                    .type = instruction.Idiv.type,
+                },
             };
             try fixedInstructions.append(divInstruction);
         },
@@ -654,7 +713,10 @@ inline fn fixupIdiv(
             );
             const divInstruction = try allocator.create(Instruction);
             divInstruction.* = .{
-                .Idiv = Operand{ .Reg = Reg.R10 },
+                .Idiv = .{
+                    .src = Operand{ .Reg = Reg.R10 },
+                    .type = instruction.Idiv.type,
+                },
             };
             try fixedInstructions.append(divInstruction);
         },
@@ -670,7 +732,10 @@ inline fn fixupIdiv(
             );
             const divInstruction = try allocator.create(Instruction);
             divInstruction.* = .{
-                .Idiv = Operand{ .Reg = Reg.R10 },
+                .Idiv = .{
+                    .src = Operand{ .Reg = Reg.R10 },
+                    .type = instruction.Idiv.type,
+                },
             };
             try fixedInstructions.append(divInstruction);
         },
@@ -686,7 +751,98 @@ inline fn fixupIdiv(
             );
             const divInstruction = try allocator.create(Instruction);
             divInstruction.* = .{
-                .Idiv = Operand{ .Reg = Reg.R10 },
+                .Idiv = .{
+                    .src = Operand{ .Reg = Reg.R10 },
+                    .type = instruction.Idiv.type,
+                },
+            };
+            try fixedInstructions.append(divInstruction);
+        },
+    }
+}
+
+inline fn fixupDiv(
+    instruction: *Instruction,
+    allocator: std.mem.Allocator,
+    fixedInstructions: *std.ArrayList(*Instruction),
+) ast.CodegenError!void {
+    switch (instruction.Div.src) {
+        .Reg => {
+            const movDivArgToR10 = try allocator.create(Instruction);
+            movDivArgToR10.* = Instruction{ .Mov = MovInst{
+                .src = instruction.Div.src,
+                .dest = Operand{ .Reg = Reg.R10 },
+                .type = AsmType.LongWord,
+            } };
+            try fixedInstructions.append(
+                movDivArgToR10,
+            );
+            const divInstruction = try allocator.create(Instruction);
+            divInstruction.* = .{
+                .Div = .{
+                    .src = Operand{ .Reg = Reg.R10 },
+                    .type = instruction.Div.type,
+                },
+            };
+            try fixedInstructions.append(divInstruction);
+        },
+        .Pseudo => {
+            unreachable;
+        },
+        .Imm => |imm| {
+            const movDivArgToR10 = try allocator.create(Instruction);
+            movDivArgToR10.* = Instruction{ .Mov = MovInst{
+                .src = Operand{ .Imm = imm },
+                .dest = Operand{ .Reg = Reg.R10 },
+                .type = AsmType.LongWord,
+            } };
+            try fixedInstructions.append(
+                movDivArgToR10,
+            );
+            const divInstruction = try allocator.create(Instruction);
+            divInstruction.* = .{
+                .Div = .{
+                    .src = Operand{ .Reg = Reg.R10 },
+                    .type = instruction.Div.type,
+                },
+            };
+            try fixedInstructions.append(divInstruction);
+        },
+        .Data => |data| {
+            const movDivArgToR10 = try allocator.create(Instruction);
+            movDivArgToR10.* = Instruction{ .Mov = MovInst{
+                .src = Operand{ .Data = data },
+                .dest = Operand{ .Reg = Reg.R10 },
+                .type = AsmType.LongWord,
+            } };
+            try fixedInstructions.append(
+                movDivArgToR10,
+            );
+            const divInstruction = try allocator.create(Instruction);
+            divInstruction.* = .{
+                .Div = .{
+                    .src = Operand{ .Reg = Reg.R10 },
+                    .type = instruction.Div.type,
+                },
+            };
+            try fixedInstructions.append(divInstruction);
+        },
+        .Stack => |stack| {
+            const movDivArgToR10 = try allocator.create(Instruction);
+            movDivArgToR10.* = Instruction{ .Mov = MovInst{
+                .src = Operand{ .Stack = stack },
+                .dest = Operand{ .Reg = Reg.R10 },
+                .type = AsmType.LongWord,
+            } };
+            try fixedInstructions.append(
+                movDivArgToR10,
+            );
+            const divInstruction = try allocator.create(Instruction);
+            divInstruction.* = .{
+                .Div = .{
+                    .src = Operand{ .Reg = Reg.R10 },
+                    .type = instruction.Div.type,
+                },
             };
             try fixedInstructions.append(divInstruction);
         },
@@ -737,6 +893,24 @@ pub fn replacePseudoRegs(function: *Function, allocator: std.mem.Allocator, asmS
                     );
                 }
             },
+            .Movzx => |movzx| {
+                if (movzx.src.isOfKind(.Pseudo)) {
+                    try replacePseudo(
+                        &inst.Movzx.src,
+                        &lookup,
+                        @constCast(&asmSymbolTable),
+                        &topOfStack,
+                    );
+                }
+                if (movzx.dest.isOfKind(.Pseudo)) {
+                    try replacePseudo(
+                        &inst.Movzx.dest,
+                        &lookup,
+                        @constCast(&asmSymbolTable),
+                        &topOfStack,
+                    );
+                }
+            },
             .Unary => |unary| {
                 if (unary.rhs.isOfKind(.Pseudo)) {
                     try replacePseudo(
@@ -766,9 +940,19 @@ pub fn replacePseudoRegs(function: *Function, allocator: std.mem.Allocator, asmS
                 }
             },
             .Idiv => |idiv| {
-                if (idiv.isOfKind(.Pseudo)) {
+                if (idiv.src.isOfKind(.Pseudo)) {
                     try replacePseudo(
-                        &inst.Idiv,
+                        &inst.Idiv.src,
+                        &lookup,
+                        @constCast(&asmSymbolTable),
+                        &topOfStack,
+                    );
+                }
+            },
+            .Div => |div| {
+                if (div.src.isOfKind(.Pseudo)) {
+                    try replacePseudo(
+                        &inst.Div.src,
                         &lookup,
                         @constCast(&asmSymbolTable),
                         &topOfStack,

@@ -274,3 +274,30 @@ int main(){
 symbol
 * Hence a TAC symbol table needs to be constructed
 
+
+### Adding unsigned
+
+#### In parser
+- unsigned long as an entirely different type 
+    - just handle it within the switches for different types (compiler will aid
+    refactoring in this case)
+- add unsigned as a modifier (have to keep track of this everywhere, lots of
+places can be missed in the code)
+
+#### Type conversions
+* In asm, integers are integers, neither signed nor unsigned(cause they are
+represented as 2s complements)
+* Addition,subtraction and multiplication? remains the same, no casting required between integer
+  and unsigned
+    * `CF` and `OF` flags
+
+* division and compare operations change:
+    * Idiv vs div:
+        * Need for a different div instructions
+        * 
+    * cmp using the `CF` flag instead of the `ZF` flag 
+        * different set of conditional codes
+    
+
+
+

@@ -234,6 +234,17 @@ test "long lexing" {
     _ = try std.testing.expectEqual(lexer.TokenType.LONG, long.type);
 }
 
+test "unsigned long and unsigned integer" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    const programStr = "unsigned 73UL 46U";
+    var l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    _ = try std.testing.expectEqual(lexer.TokenType.UNSIGNED, (try l.nextToken(allocator)).type);
+    _ = try std.testing.expectEqual(lexer.TokenType.UNSIGNED_LONG, (try l.nextToken(allocator)).type);
+    _ = try std.testing.expectEqual(lexer.TokenType.UNSIGNED_INT, (try l.nextToken(allocator)).type);
+}
+
 test "testing basic parser" {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     const allocator = arena.allocator();
@@ -255,6 +266,16 @@ test "parse factor" {
     const factor2 = try p2.parseFactor();
     _ = try std.testing.expectEqual(factor2.Unary.unaryOp, ast.UnaryOp.NEGATE);
     _ = try std.testing.expectEqual(factor2.Unary.exp.Constant.value.Integer, 42);
+}
+
+test "parse type" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const programStr = "unsigned int";
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    const p = try parser.Parser.init(allocator, l);
+    _ = try std.testing.expectEqual(try p.parseType(), ast.Type.UInteger);
 }
 
 test "parsing expression with precedence" {

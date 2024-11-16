@@ -46,6 +46,10 @@ pub const TokenType = enum {
     EXTERN,
     LONG_TYPE,
     LONG,
+    UNSIGNED,
+    SIGNED,
+    UNSIGNED_LONG,
+    UNSIGNED_INT,
 };
 
 pub const Token = struct {
@@ -213,9 +217,19 @@ pub const Lexer = struct {
                     while (finalPtr < lexer.buffer.len and std.ascii.isDigit(lexer.buffer[finalPtr])) {
                         finalPtr += 1;
                     }
-                    if ((finalPtr < lexer.buffer.len) and lexer.buffer[finalPtr] == 'L') {
-                        token.type = TokenType.LONG;
-                        finalPtr += 1;
+                    if (finalPtr < lexer.buffer.len) {
+                        if ((finalPtr + 1 < lexer.buffer.len) and std.mem.eql(u8, lexer.buffer[finalPtr .. finalPtr + 2], "UL")) {
+                            token.type = TokenType.UNSIGNED_LONG;
+                            finalPtr += 2;
+                        } else if (lexer.buffer[finalPtr] == 'U') {
+                            token.type = TokenType.UNSIGNED_INT;
+                            finalPtr += 1;
+                        } else if (lexer.buffer[finalPtr] == 'L') {
+                            token.type = TokenType.LONG;
+                            finalPtr += 1;
+                        } else {
+                            token.type = TokenType.INTEGER;
+                        }
                     } else token.type = TokenType.INTEGER;
                     token.start = initialPtr;
                     token.end = finalPtr;
@@ -243,6 +257,8 @@ pub const Lexer = struct {
                     "static",
                     "extern",
                     "long",
+                    "unsigned",
+                    "signed",
                 }, &[_]TokenType{
                     TokenType.INT_TYPE,
                     TokenType.RETURN,
@@ -258,6 +274,8 @@ pub const Lexer = struct {
                     TokenType.STATIC,
                     TokenType.EXTERN,
                     TokenType.LONG_TYPE,
+                    TokenType.UNSIGNED,
+                    TokenType.SIGNED,
                 }, lexer, token);
             },
         }
@@ -388,9 +406,20 @@ pub const Lexer = struct {
                     while (lexer.current < lexer.buffer.len and std.ascii.isDigit(lexer.buffer[lexer.current])) {
                         lexer.current += 1;
                     }
-                    if ((lexer.current < lexer.buffer.len) and (lexer.buffer[lexer.current] == 'L')) {
-                        token.type = TokenType.LONG;
-                        lexer.current += 1;
+
+                    if ((lexer.current < lexer.buffer.len)) {
+                        if ((lexer.current + 1 < lexer.buffer.len) and std.mem.eql(u8, lexer.buffer[lexer.current .. lexer.current + 2], "UL")) {
+                            token.type = TokenType.UNSIGNED_LONG;
+                            lexer.current += 2;
+                        } else if (lexer.buffer[lexer.current] == 'U') {
+                            token.type = TokenType.UNSIGNED_INT;
+                            lexer.current += 1;
+                        } else if (lexer.buffer[lexer.current] == 'L') {
+                            token.type = TokenType.LONG;
+                            lexer.current += 1;
+                        } else {
+                            token.type = TokenType.INTEGER;
+                        }
                     } else token.type = TokenType.INTEGER;
                     token.start = initialPtr;
                     token.end = lexer.current - 1;
@@ -412,6 +441,8 @@ pub const Lexer = struct {
                     "static",
                     "extern",
                     "long",
+                    "unsigned",
+                    "signed",
                 }, &[_]TokenType{
                     TokenType.INT_TYPE,
                     TokenType.RETURN,
@@ -427,6 +458,8 @@ pub const Lexer = struct {
                     TokenType.STATIC,
                     TokenType.EXTERN,
                     TokenType.LONG_TYPE,
+                    TokenType.UNSIGNED,
+                    TokenType.SIGNED,
                 }, lexer, token);
             },
         }

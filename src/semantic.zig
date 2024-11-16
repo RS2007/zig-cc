@@ -28,8 +28,10 @@ pub const ConstantKind = enum {
 pub const Constant = struct {
     type: AST.Type,
     value: union(enum) {
-        Integer: u32,
-        Long: u64,
+        Integer: i32,
+        Long: i64,
+        UInteger: u32,
+        ULong: u64,
     },
 };
 
@@ -90,6 +92,8 @@ pub const TypeKind = enum {
     Void,
     Integer,
     Long,
+    ULong,
+    UInteger,
 
     const Self = @This();
     pub fn from(self: AST.Type) Self {
@@ -97,6 +101,8 @@ pub const TypeKind = enum {
             .Integer => .Integer,
             .Void => .Void,
             .Long => .Long,
+            .UInteger => .UInteger,
+            .ULong => .ULong,
         };
     }
 };
@@ -112,6 +118,8 @@ pub const TypeInfo = union(TypeKind) {
     Void,
     Integer,
     Long,
+    ULong,
+    UInteger,
 
     const Self = @This();
     pub inline fn isOfKind(self: *Self, other: TypeKind) bool {
@@ -282,6 +290,8 @@ pub fn typecheckExternalDecl(self: *Typechecker, externalDecl: *AST.ExternalDecl
                         .Integer => .Integer,
                         .Long => .Long,
                         .Function => unreachable,
+                        .ULong => .ULong,
+                        .UInteger => .UInteger,
                     },
                     .attributes = .LocalAttr,
                 };
@@ -344,14 +354,20 @@ pub fn typecheckExternalDecl(self: *Typechecker, externalDecl: *AST.ExternalDecl
                         .value = expression,
                     } };
                     varDecl.expression = castExpr;
-                    const unwrappedConst: u64 = switch (expression.Constant.value) {
-                        .Integer => |integer| @intCast(integer),
-
-                        .Long => |long| long,
-                    };
+                    // INFO: This is shady
                     initializer = .{ .Initial = switch (varDecl.type) {
-                        .Integer => .{ .type = .Integer, .value = .{ .Integer = @intCast(unwrappedConst) } },
-                        .Long => .{ .type = .Long, .value = .{ .Long = @intCast(unwrappedConst) } },
+                        .Integer => .{ .type = .Integer, .value = .{
+                            .Integer = expression.Constant.to(i32),
+                        } },
+                        .Long => .{ .type = .Long, .value = .{
+                            .Long = expression.Constant.to(i64),
+                        } },
+                        .UInteger => .{ .type = .UInteger, .value = .{
+                            .UInteger = expression.Constant.to(u32),
+                        } },
+                        .ULong => .{ .type = .ULong, .value = .{
+                            .ULong = expression.Constant.to(u64),
+                        } },
                         else => unreachable,
                     } };
                 } else {
@@ -646,6 +662,8 @@ fn typecheckBlkItem(self: *Typechecker, blkItem: *AST.BlockItem) TypeCheckerErro
                     .typeInfo = switch (decl.type) {
                         .Integer => .Integer,
                         .Long => .Long,
+                        .ULong => .ULong,
+                        .UInteger => .UInteger,
                         else => unreachable,
                     },
                     .attributes = .LocalAttr,
@@ -905,6 +923,22 @@ inline fn convert(allocator: std.mem.Allocator, expr: *AST.Expression, toType: A
     }
 }
 
+fn getCommonType(type1: AST.Type, type2: AST.Type) AST.Type {
+    // INFO: same types => return the type
+    if (type1 == type2) return type1;
+    if (type1.size() == type2.size()) {
+        // INFO: for same sized type
+        // Otherwise, if both operands have signed integer types or both
+        // have unsigned integer types, the operand with the type of the
+        // lesser integer conversion rank is converted to the type of the
+        // operand with greater rank.
+        // Rank is proportional to size, rank(unsigned size) > rank(signed size)
+        return if (type1.signed()) type2 else type1;
+    }
+    // Size is greater, more priority in case the sizes are unequal
+    return if (type1.size() > type2.size()) type1 else type2;
+}
+
 fn typecheckExpr(self: *Typechecker, expr: *AST.Expression) TypeError!AST.Type {
     // Expr can error because of a type issue,
     // for now we can just return a generic type error
@@ -915,11 +949,9 @@ fn typecheckExpr(self: *Typechecker, expr: *AST.Expression) TypeError!AST.Type {
         },
         .Assignment => |assignment| {
             const lhsType = try typecheckExpr(self, assignment.lhs);
-            const rhsType = try typecheckExpr(self, assignment.rhs);
-            std.log.warn("Conversion from {any} to {any}\n", .{ rhsType, lhsType });
+            _ = try typecheckExpr(self, assignment.rhs);
             expr.Assignment.rhs = try convert(self.allocator, assignment.rhs, lhsType);
             expr.Assignment.type = lhsType;
-            std.log.warn("Returning lhsType: {any}\n", .{lhsType});
             return lhsType;
         },
         .Binary => {
@@ -927,29 +959,14 @@ fn typecheckExpr(self: *Typechecker, expr: *AST.Expression) TypeError!AST.Type {
             const rhsType = try typecheckExpr(self, expr.Binary.rhs);
 
             //INFO: Conversion logic
-            expr.Binary.type = switch (expr.Binary.op) {
-                .ADD, .SUBTRACT, .MULTIPLY, .DIVIDE, .REMAINDER => blk: {
-                    if (lhsType == AST.Type.Long or rhsType == AST.Type.Long) {
-                        expr.Binary.lhs = try convert(self.allocator, expr.Binary.lhs, AST.Type.Long);
-                        expr.Binary.rhs = try convert(self.allocator, expr.Binary.rhs, AST.Type.Long);
-                        break :blk AST.Type.Long;
-                    } else {
-                        break :blk AST.Type.Integer;
-                    }
-                },
-                else => blk: {
-                    if (lhsType == AST.Type.Long or rhsType == AST.Type.Long) {
-                        expr.Binary.lhs = try convert(self.allocator, expr.Binary.lhs, AST.Type.Long);
-                        expr.Binary.rhs = try convert(self.allocator, expr.Binary.rhs, AST.Type.Long);
-                    }
-                    break :blk AST.Type.Integer;
-                },
-            };
+            const commonType = getCommonType(lhsType, rhsType);
+            expr.Binary.lhs = try convert(self.allocator, expr.Binary.lhs, commonType);
+            expr.Binary.rhs = try convert(self.allocator, expr.Binary.rhs, commonType);
 
-            std.log.warn("Returning from binary expr({any}): {any}\n", .{
-                expr.Binary.op,
-                expr.Binary.type.?,
-            });
+            expr.Binary.type = switch (expr.Binary.op) {
+                .ADD, .SUBTRACT, .MULTIPLY, .DIVIDE, .REMAINDER => commonType,
+                else => AST.Type.Integer,
+            };
             return expr.Binary.type.?;
         },
         .FunctionCall => |fnCall| {
@@ -992,9 +1009,11 @@ fn typecheckExpr(self: *Typechecker, expr: *AST.Expression) TypeError!AST.Type {
             return astType;
         },
         .Constant => |constant| {
-            const t = switch (constant.value) {
-                .Integer => AST.Type.Integer,
-                .Long => AST.Type.Long,
+            const t: AST.Type = switch (constant.value) {
+                .Integer => .Integer,
+                .Long => .Long,
+                .ULong => .ULong,
+                .UInteger => .UInteger,
             };
             // TODO: Should we store this type?
             // expr.Constant.type = t;

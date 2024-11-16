@@ -575,7 +575,7 @@ test "casting program" {
     const sFileWriter = (try std.fs.cwd().createFile("./cFiles/S/casting.s", .{})).writer();
     const programStr =
         \\ int main() {
-        \\  long l = 2147483653;
+        \\  long l = 2147483653L;
         \\  int i = 10;
         \\  long result = i + l;
         \\  return (result == 2147483663L);
@@ -609,7 +609,7 @@ test "casting with div" {
     const sFileWriter = (try std.fs.cwd().createFile("./cFiles/S/castingDiv.s", .{})).writer();
     const programStr =
         \\int main() {
-        \\    long l = 2147483653;
+        \\    long l = 2147483653L;
         \\    int i = 10;
         \\    int intResult = l / i;
         \\    return 0;
@@ -643,7 +643,7 @@ test "truncation" {
     const sFileWriter = (try std.fs.cwd().createFile("./cFiles/S/truncation.s", .{})).writer();
     const programStr =
         \\int main() {
-        \\    long l = 2147483653;
+        \\    long l = 2147483653L;
         \\    int i = l;
         \\    return i;
         \\}
@@ -756,6 +756,120 @@ test "big test for casting" {
     try ast.loopLabelPass(program, allocator);
     const tacRenderer = try ast.TACRenderer.init(allocator, typechecker.symbolTable);
     const tacProgram = try tacRenderer.render(program);
+    const asmRenderer = try tac.AsmRenderer.init(allocator, tacRenderer.asmSymbolTable);
+    const asmProgram = try asmRenderer.render(tacProgram);
+    try asmProgram.stringify(sFileWriter, allocator, tacRenderer.asmSymbolTable);
+    try cFileWriter.writeAll(programStr);
+}
+
+test "basic unsigned numbers" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const cFileWriter = (try std.fs.cwd().createFile("./cFiles/C/unsignedBasic.c", .{})).writer();
+    const sFileWriter = (try std.fs.cwd().createFile("./cFiles/S/unsignedBasic.s", .{})).writer();
+    const programStr =
+        \\unsigned int getLargeUnsigned(){
+        \\    return 4294967290U;
+        \\}
+        \\int main() {
+        \\    unsigned int notCasted = getLargeUnsigned();
+        \\    int casted = getLargeUnsigned();
+        \\    if(notCasted == casted){
+        \\      return -1;
+        \\    }
+        \\    return 0;
+        \\}
+    ;
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    const program = try p.parseProgram();
+    const varResolver = try ast.VarResolver.init(allocator);
+    try varResolver.resolve(program);
+    const typechecker = try semantic.Typechecker.init(allocator);
+    const hasTypeErr = try typechecker.check(program);
+    if (hasTypeErr) |typeError| {
+        std.log.warn("\x1b[33mError\x1b[0m: {s}\n", .{typeError});
+        std.debug.assert(false);
+    }
+    try ast.loopLabelPass(program, allocator);
+    const tacRenderer = try ast.TACRenderer.init(allocator, typechecker.symbolTable);
+    const tacProgram = try tacRenderer.render(program);
+    _ = try std.fs.cwd().createFile("./tacDump.log", .{});
+    const tacDump = try std.fs.cwd().openFile("./tacDump.log", std.fs.File.OpenFlags{ .mode = .read_write });
+    defer tacDump.close();
+    const tacDumpWriter = tacDump.writer();
+    for (tacProgram.topLevelDecls.items) |topLevelDecl| {
+        switch (topLevelDecl.*) {
+            .Function => |tacFn| {
+                try tacDumpWriter.writeAll(tacFn.name);
+                try tacDumpWriter.writeAll("\n\n");
+                for (tacFn.instructions.items) |tacFnInst| {
+                    try tacDumpWriter.writeAll(try std.fmt.allocPrint(allocator, "{any}\n", .{tacFnInst}));
+                }
+            },
+            .StaticVar => |statVar| {
+                try tacDumpWriter.writeAll(try std.fmt.allocPrint(allocator, "Var with name: {s}, global: {any} and init: {any}\n", .{ statVar.name, statVar.global, statVar.init }));
+            },
+        }
+    }
+    const asmRenderer = try tac.AsmRenderer.init(allocator, tacRenderer.asmSymbolTable);
+    const asmProgram = try asmRenderer.render(tacProgram);
+    try asmProgram.stringify(sFileWriter, allocator, tacRenderer.asmSymbolTable);
+    try cFileWriter.writeAll(programStr);
+}
+
+test "test unsigned divide" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const cFileWriter = (try std.fs.cwd().createFile("./cFiles/C/unsignedDiv.c", .{})).writer();
+    const sFileWriter = (try std.fs.cwd().createFile("./cFiles/S/unsignedDiv.s", .{})).writer();
+    const programStr =
+        \\unsigned int getLargeUnsigned(){
+        \\    return 4294967290U;
+        \\}
+        \\int main() {
+        \\    unsigned int notCasted = getLargeUnsigned();
+        \\    int casted = -1;
+        \\    if(0 == (notCasted/casted)){
+        \\      return -1;
+        \\    }
+        \\    return 0;
+        \\}
+    ;
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    const program = try p.parseProgram();
+    const varResolver = try ast.VarResolver.init(allocator);
+    try varResolver.resolve(program);
+    const typechecker = try semantic.Typechecker.init(allocator);
+    const hasTypeErr = try typechecker.check(program);
+    if (hasTypeErr) |typeError| {
+        std.log.warn("\x1b[33mError\x1b[0m: {s}\n", .{typeError});
+        std.debug.assert(false);
+    }
+    try ast.loopLabelPass(program, allocator);
+    const tacRenderer = try ast.TACRenderer.init(allocator, typechecker.symbolTable);
+    const tacProgram = try tacRenderer.render(program);
+    _ = try std.fs.cwd().createFile("./tacDump.log", .{});
+    const tacDump = try std.fs.cwd().openFile("./tacDump.log", std.fs.File.OpenFlags{ .mode = .read_write });
+    defer tacDump.close();
+    const tacDumpWriter = tacDump.writer();
+    for (tacProgram.topLevelDecls.items) |topLevelDecl| {
+        switch (topLevelDecl.*) {
+            .Function => |tacFn| {
+                try tacDumpWriter.writeAll(tacFn.name);
+                try tacDumpWriter.writeAll("\n\n");
+                for (tacFn.instructions.items) |tacFnInst| {
+                    try tacDumpWriter.writeAll(try std.fmt.allocPrint(allocator, "{any}\n", .{tacFnInst}));
+                }
+            },
+            .StaticVar => |statVar| {
+                try tacDumpWriter.writeAll(try std.fmt.allocPrint(allocator, "Var with name: {s}, global: {any} and init: {any}\n", .{ statVar.name, statVar.global, statVar.init }));
+            },
+        }
+    }
     const asmRenderer = try tac.AsmRenderer.init(allocator, tacRenderer.asmSymbolTable);
     const asmProgram = try asmRenderer.render(tacProgram);
     try asmProgram.stringify(sFileWriter, allocator, tacRenderer.asmSymbolTable);
