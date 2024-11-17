@@ -2,6 +2,7 @@ const std = @import("std");
 
 pub const TokenType = enum {
     INT_TYPE,
+    FLOAT_TYPE,
     SEMICOLON,
     LPAREN,
     RPAREN,
@@ -50,6 +51,7 @@ pub const TokenType = enum {
     SIGNED,
     UNSIGNED_LONG,
     UNSIGNED_INT,
+    FLOAT,
 };
 
 pub const Token = struct {
@@ -58,11 +60,19 @@ pub const Token = struct {
     end: u32,
 };
 
+pub const suffixMap = std.StaticStringMap(Suffix).initComptime(.{
+    .{ "u", .U },
+    .{ "L", .L },
+    .{ "UL", .UL },
+});
+
 pub const LexerError = error{ BufferEmpty, OutOfMemory, InvalidToken };
 
 pub const MemoryError = error{
     OutOfMemory,
 };
+
+pub const Suffix = enum { U, L, UL };
 
 pub const Lexer = struct {
     buffer: []u8,
@@ -143,6 +153,123 @@ pub const Lexer = struct {
         return token;
     }
 
+    inline fn lexFloatLike(lexer: *Lexer, allocator: std.mem.Allocator) LexerError!?*Token {
+        if (!(lexer.current < lexer.buffer.len and std.ascii.isDigit(lexer.buffer[lexer.current]))) {
+            // Early return, no digit found
+            return null;
+        }
+        var token = try allocator.create(Token);
+        const initialPtr = lexer.current;
+        // lexes the numeric part
+        while (lexer.current < lexer.buffer.len and std.ascii.isDigit(lexer.buffer[lexer.current])) {
+            lexer.current += 1;
+        }
+        if (lexer.current < lexer.buffer.len and lexer.buffer[lexer.current] == '.') {
+            lexer.current += 1;
+        }
+        while (lexer.current < lexer.buffer.len and std.ascii.isDigit(lexer.buffer[lexer.current])) {
+            lexer.current += 1;
+        }
+        token.type = TokenType.FLOAT;
+        token.start = initialPtr;
+        token.end = lexer.current - 1;
+        return token;
+    }
+
+    inline fn lexIntegerLike(lexer: *Lexer, allocator: std.mem.Allocator) LexerError!?*Token {
+        if (!(lexer.current < lexer.buffer.len and std.ascii.isDigit(lexer.buffer[lexer.current]))) {
+            // Early return, no digit found
+            return null;
+        }
+        var token = try allocator.create(Token);
+        const initialPtr = lexer.current;
+        // lexes the numeric part
+        while (lexer.current < lexer.buffer.len and std.ascii.isDigit(lexer.buffer[lexer.current])) {
+            lexer.current += 1;
+        }
+        // After integer parsing is done, check for a '.'. If a dot is
+        // encountered, integer parsing fails and returns null
+        if (lexer.current < lexer.buffer.len and lexer.buffer[lexer.current] == '.') {
+            lexer.current = initialPtr;
+            return null;
+        }
+        token.type = TokenType.INTEGER;
+        token.start = initialPtr;
+        token.end = lexer.current - 1;
+        return token;
+    }
+
+    inline fn peekLexFloatLike(lexer: *Lexer, allocator: std.mem.Allocator) LexerError!?*Token {
+        if (!(lexer.current < lexer.buffer.len and std.ascii.isDigit(lexer.buffer[lexer.current]))) {
+            // Early return, no digit found
+            return null;
+        }
+        var token = try allocator.create(Token);
+        const initialPtr = lexer.current;
+        var finalPtr = lexer.current;
+        // lexes the numeric part
+        while (finalPtr < lexer.buffer.len and std.ascii.isDigit(lexer.buffer[finalPtr])) {
+            finalPtr += 1;
+        }
+        if (finalPtr < lexer.buffer.len and lexer.buffer[finalPtr] == '.') {
+            finalPtr += 1;
+        }
+        while (finalPtr < lexer.buffer.len and std.ascii.isDigit(lexer.buffer[finalPtr])) {
+            finalPtr += 1;
+        }
+        token.type = TokenType.FLOAT;
+        token.start = initialPtr;
+        token.end = finalPtr - 1;
+        return token;
+    }
+
+    inline fn peekLexIntegerLike(lexer: *Lexer, allocator: std.mem.Allocator) LexerError!?*Token {
+        if (!(lexer.current < lexer.buffer.len and std.ascii.isDigit(lexer.buffer[lexer.current]))) {
+            // Early return, no digit found
+            return null;
+        }
+        var token = try allocator.create(Token);
+        const initialPtr = lexer.current;
+        var finalPtr = lexer.current;
+        // lexes the numeric part
+        while (finalPtr < lexer.buffer.len and std.ascii.isDigit(lexer.buffer[finalPtr])) {
+            finalPtr += 1;
+        }
+        // After integer parsing is done, check for a '.'. If a dot is
+        // encountered, integer parsing fails and returns null
+        if (finalPtr < lexer.buffer.len and lexer.buffer[finalPtr] == '.') return null;
+        token.type = TokenType.INTEGER;
+        token.start = initialPtr;
+        token.end = finalPtr - 1;
+        return token;
+    }
+    inline fn peekNumericSuffix(lexer: *Lexer, token: *Token) ?Suffix {
+        if (token.end + 2 < lexer.buffer.len and std.mem.eql(u8, lexer.buffer[token.end + 1 .. token.end + 3], "UL")) return .UL;
+        if (token.end + 1 < lexer.buffer.len and lexer.buffer[token.end + 1] == 'U') return .U;
+        if (token.end + 1 < lexer.buffer.len and lexer.buffer[token.end + 1] == 'L') return .L;
+        return null;
+    }
+
+    inline fn convert(token: *Token, suffix: ?Suffix) void {
+        if (suffix == null) {
+            return;
+        }
+        switch (suffix.?) {
+            .L => {
+                token.type = .LONG;
+                token.end += 1;
+            },
+            .U => {
+                token.type = .UNSIGNED_INT;
+                token.end += 1;
+            },
+            .UL => {
+                token.type = .UNSIGNED_LONG;
+                token.end += 2;
+            },
+        }
+    }
+
     pub fn peekToken(lexer: *Lexer, allocator: std.mem.Allocator) LexerError!?*Token {
         lexer.skipWhitespace();
         if (lexer.current >= lexer.buffer.len) {
@@ -210,37 +337,17 @@ pub const Lexer = struct {
                 return (try createSingleWidthToken(TokenType.DIVIDE, allocator, lexer));
             },
             else => {
-                if (std.ascii.isDigit(lexer.buffer[lexer.current])) {
-                    var token = try allocator.create(Token);
-                    const initialPtr = lexer.current;
-                    var finalPtr = lexer.current;
-                    while (finalPtr < lexer.buffer.len and std.ascii.isDigit(lexer.buffer[finalPtr])) {
-                        finalPtr += 1;
-                    }
-                    if (finalPtr < lexer.buffer.len) {
-                        if ((finalPtr + 1 < lexer.buffer.len) and std.mem.eql(u8, lexer.buffer[finalPtr .. finalPtr + 2], "UL")) {
-                            token.type = TokenType.UNSIGNED_LONG;
-                            finalPtr += 2;
-                        } else if (lexer.buffer[finalPtr] == 'U') {
-                            token.type = TokenType.UNSIGNED_INT;
-                            finalPtr += 1;
-                        } else if (lexer.buffer[finalPtr] == 'L') {
-                            token.type = TokenType.LONG;
-                            finalPtr += 1;
-                        } else {
-                            token.type = TokenType.INTEGER;
-                        }
-                    } else token.type = TokenType.INTEGER;
-                    token.start = initialPtr;
-                    token.end = finalPtr;
-                    return token;
+                if (try lexer.peekLexIntegerLike(allocator)) |integerNode| {
+                    const suffix = lexer.peekNumericSuffix(integerNode);
+                    convert(integerNode, suffix); // Mutates in place
+                    return integerNode;
+                }
+
+                if (try lexer.peekLexFloatLike(allocator)) |floatNode| {
+                    // TODO: handle float suffixes
+                    return floatNode;
                 }
                 const token = try allocator.create(Token);
-                const initialPtr = lexer.current;
-                var offset: u32 = 0;
-                while (initialPtr + offset < lexer.buffer.len and !std.ascii.isWhitespace(lexer.buffer[initialPtr + offset]) and (std.ascii.isLower(lexer.buffer[initialPtr + offset]) or std.ascii.isUpper(lexer.buffer[initialPtr + offset]))) {
-                    offset += 1;
-                }
 
                 return peekKeyword(&[_][]const u8{
                     "int",
@@ -259,6 +366,7 @@ pub const Lexer = struct {
                     "long",
                     "unsigned",
                     "signed",
+                    "float",
                 }, &[_]TokenType{
                     TokenType.INT_TYPE,
                     TokenType.RETURN,
@@ -276,6 +384,7 @@ pub const Lexer = struct {
                     TokenType.LONG_TYPE,
                     TokenType.UNSIGNED,
                     TokenType.SIGNED,
+                    TokenType.FLOAT_TYPE,
                 }, lexer, token);
             },
         }
@@ -338,7 +447,7 @@ pub const Lexer = struct {
         if (lexer.current >= lexer.buffer.len) {
             return LexerError.BufferEmpty;
         }
-        var token = try allocator.create(Token);
+        const token = try allocator.create(Token);
         switch (lexer.buffer[lexer.current]) {
             '(' => {
                 nextSingleWidthTokMacro(TokenType.LPAREN, token, lexer);
@@ -401,30 +510,42 @@ pub const Lexer = struct {
                 nextSingleWidthTokMacro(TokenType.TILDE, token, lexer);
             },
             else => {
-                if (std.ascii.isDigit(lexer.buffer[lexer.current])) {
-                    const initialPtr = lexer.current;
-                    while (lexer.current < lexer.buffer.len and std.ascii.isDigit(lexer.buffer[lexer.current])) {
-                        lexer.current += 1;
-                    }
+                // if (std.ascii.isDigit(lexer.buffer[lexer.current])) {
+                //     const initialPtr = lexer.current;
+                //     while (lexer.current < lexer.buffer.len and std.ascii.isDigit(lexer.buffer[lexer.current])) {
+                //         lexer.current += 1;
+                //     }
 
-                    if ((lexer.current < lexer.buffer.len)) {
-                        if ((lexer.current + 1 < lexer.buffer.len) and std.mem.eql(u8, lexer.buffer[lexer.current .. lexer.current + 2], "UL")) {
-                            token.type = TokenType.UNSIGNED_LONG;
-                            lexer.current += 2;
-                        } else if (lexer.buffer[lexer.current] == 'U') {
-                            token.type = TokenType.UNSIGNED_INT;
-                            lexer.current += 1;
-                        } else if (lexer.buffer[lexer.current] == 'L') {
-                            token.type = TokenType.LONG;
-                            lexer.current += 1;
-                        } else {
-                            token.type = TokenType.INTEGER;
-                        }
-                    } else token.type = TokenType.INTEGER;
-                    token.start = initialPtr;
-                    token.end = lexer.current - 1;
-                    lexer.currentToken = token;
-                    return token;
+                //     if ((lexer.current < lexer.buffer.len)) {
+                //         if ((lexer.current + 1 < lexer.buffer.len) and std.mem.eql(u8, lexer.buffer[lexer.current .. lexer.current + 2], "UL")) {
+                //             token.type = TokenType.UNSIGNED_LONG;
+                //             lexer.current += 2;
+                //         } else if (lexer.buffer[lexer.current] == 'U') {
+                //             token.type = TokenType.UNSIGNED_INT;
+                //             lexer.current += 1;
+                //         } else if (lexer.buffer[lexer.current] == 'L') {
+                //             token.type = TokenType.LONG;
+                //             lexer.current += 1;
+                //         } else {
+                //             token.type = TokenType.INTEGER;
+                //         }
+                //     } else token.type = TokenType.INTEGER;
+                //     token.start = initialPtr;
+                //     token.end = lexer.current - 1;
+                //     lexer.currentToken = token;
+                //     return token;
+                // }
+
+                if (try lexer.lexIntegerLike(allocator)) |integerNode| {
+                    const suffix = lexer.peekNumericSuffix(integerNode);
+                    convert(integerNode, suffix); // Mutates in place
+                    lexer.current = integerNode.end + 1;
+                    return integerNode;
+                }
+
+                if (try lexer.lexFloatLike(allocator)) |floatNode| {
+                    // TODO: handle float suffixes
+                    return floatNode;
                 }
                 return lexKeyword(&[_][]const u8{
                     "int",
@@ -443,6 +564,7 @@ pub const Lexer = struct {
                     "long",
                     "unsigned",
                     "signed",
+                    "float",
                 }, &[_]TokenType{
                     TokenType.INT_TYPE,
                     TokenType.RETURN,
@@ -460,6 +582,7 @@ pub const Lexer = struct {
                     TokenType.LONG_TYPE,
                     TokenType.UNSIGNED,
                     TokenType.SIGNED,
+                    TokenType.FLOAT_TYPE,
                 }, lexer, token);
             },
         }

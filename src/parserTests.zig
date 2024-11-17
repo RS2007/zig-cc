@@ -245,6 +245,18 @@ test "unsigned long and unsigned integer" {
     _ = try std.testing.expectEqual(lexer.TokenType.UNSIGNED_INT, (try l.nextToken(allocator)).type);
 }
 
+test "lexing floats" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    const programStr = "float 32.75";
+    var l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    _ = try std.testing.expectEqual(lexer.TokenType.FLOAT_TYPE, (try l.nextToken(allocator)).type);
+    const floatLiteral = try l.nextToken(allocator);
+    _ = try std.testing.expectEqual(lexer.TokenType.FLOAT, floatLiteral.type);
+    _ = try std.testing.expect(std.mem.eql(u8, l.buffer[floatLiteral.start .. floatLiteral.end + 1], "32.75"));
+}
+
 test "testing basic parser" {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     const allocator = arena.allocator();
