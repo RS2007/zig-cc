@@ -70,7 +70,7 @@ pub const TypeError = error{
     ConflictingDeclarations,
     FnPrevDeclArgMismatch,
     InvalidOperand,
-};
+} || AST.CodegenError;
 
 const TypeCheckerError = error{OutOfMemory} || TypeError;
 
@@ -181,7 +181,7 @@ pub const Typechecker = struct {
 
 pub fn resolveBlockReturns(self: *Typechecker, blockItem: *AST.BlockItem, fnReturnType: AST.Type) !void {
     if (std.meta.activeTag(blockItem.*) == .Statement and std.meta.activeTag(blockItem.Statement.*) == .Return) {
-        _ = try convert(self.allocator, blockItem.Statement.Return.expression, fnReturnType);
+        blockItem.Statement.Return.expression = try convert(self.allocator, blockItem.Statement.Return.expression, fnReturnType);
     }
 }
 
@@ -1045,16 +1045,35 @@ fn typecheckExpr(self: *Typechecker, expr: *AST.Expression) TypeError!AST.Type {
                 .UInteger => .UInteger,
                 .Float => .Float,
             };
-            const tempId = try AST.tempGen.genTemp();
-            const sym = try self.allocator.create(Symbol);
-            sym.* = .{
-                .typeInfo = .{},
-                .attributes = .{},
-            };
+            if (t == .Float) {
+                const tempId = try AST.tempGen.genTemp(self.allocator);
+                const sym = try self.allocator.create(Symbol);
+                sym.* = .{
+                    .typeInfo = .Float,
+                    .attributes = .{
+                        .StaticAttr = .{
+                            .init = .{
+                                .Initial = .{
+                                    .type = .Float,
+                                    .value = .{ .Float = constant.value.Float },
+                                },
+                            },
+                            .global = false,
+                        },
+                    },
+                };
 
-            try self.symbolTable.put(
-                tempId,
-            );
+                try self.symbolTable.put(
+                    tempId,
+                    sym,
+                );
+                expr.* = .{
+                    .Identifier = .{
+                        .type = .Float,
+                        .name = tempId,
+                    },
+                };
+            }
             // TODO: Should we store this type?
             // expr.Constant.type = t;
             return t;

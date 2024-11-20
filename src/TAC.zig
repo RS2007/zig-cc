@@ -78,10 +78,10 @@ pub fn astSymTabToTacSymTab(allocator: std.mem.Allocator, astSymTab: std.StringH
 pub const AsmRenderer = struct {
     asmSymbolTable: std.StringHashMap(*assembly.Symbol),
     allocator: std.mem.Allocator,
-    pub fn init(allocator: std.mem.Allocator, astSymTab: std.StringHashMap(*assembly.Symbol)) ast.CodegenError!*AsmRenderer {
+    pub fn init(allocator: std.mem.Allocator, tacSymTab: std.StringHashMap(*assembly.Symbol)) ast.CodegenError!*AsmRenderer {
         const asmRenderer = try allocator.create(AsmRenderer);
         asmRenderer.* = .{
-            .asmSymbolTable = astSymTab,
+            .asmSymbolTable = tacSymTab,
             .allocator = allocator,
         };
         return asmRenderer;
@@ -137,7 +137,7 @@ pub const AsmRenderer = struct {
                         try func.instructions.append(movInstructoin);
                     }
                     for (fnItem.instructions.items) |instruction| {
-                        try instruction.codegen(self.asmSymbolTable, &func.instructions, self.allocator);
+                        try instruction.codegen(&self.asmSymbolTable, &func.instructions, self.allocator);
                     }
                     asmTopLevelDecl.* = .{
                         .Function = func,
@@ -305,7 +305,7 @@ pub const Instruction = union(InstructionType) {
 
     pub fn codegen(
         instruction: *Instruction,
-        symbolTable: std.StringHashMap(*assembly.Symbol),
+        symbolTable: *std.StringHashMap(*assembly.Symbol),
         instructions: *std.ArrayList(*assembly.Instruction),
         allocator: std.mem.Allocator,
     ) ast.CodegenError!void {
@@ -457,7 +457,7 @@ pub const Instruction = union(InstructionType) {
                             .type = binary.left.getAsmTypeFromSymTab(symbolTable).?,
                         } };
                         try instructions.append(movLeftToAX);
-                        if (binary.left.isSignedFromSymTab(@constCast(&symbolTable)) and binary.right.isSignedFromSymTab(@constCast(&symbolTable))) {
+                        if (binary.left.isSignedFromSymTab(symbolTable) and binary.right.isSignedFromSymTab(symbolTable)) {
                             const cdqInstr = try allocator.create(assembly.Instruction);
                             const idivWithRight = try allocator.create(assembly.Instruction);
                             cdqInstr.* = assembly.Instruction{
@@ -543,8 +543,8 @@ pub const Instruction = union(InstructionType) {
                             .type = storeDestType,
                         } };
                         const setCC = try allocator.create(assembly.Instruction);
-                        const lhsSigned = binary.left.isSignedFromSymTab(@constCast(&symbolTable));
-                        const rhsSigned = binary.right.isSignedFromSymTab(@constCast(&symbolTable));
+                        const lhsSigned = binary.left.isSignedFromSymTab(symbolTable);
+                        const rhsSigned = binary.right.isSignedFromSymTab(symbolTable);
                         if (lhsSigned != rhsSigned) {
                             std.log.warn("binary: {any}\n", .{binary});
                             unreachable;
@@ -734,7 +734,7 @@ pub const Val = union(ValType) {
             },
         };
     }
-    pub fn getAsmTypeFromSymTab(self: *Self, symbolTable: std.StringHashMap(*assembly.Symbol)) ?assembly.AsmType {
+    pub fn getAsmTypeFromSymTab(self: *Self, symbolTable: *std.StringHashMap(*assembly.Symbol)) ?assembly.AsmType {
         return switch (self.*) {
             .Constant => |constant| switch (constant) {
                 .Long, .ULong => assembly.AsmType.QuadWord,
@@ -747,23 +747,11 @@ pub const Val = union(ValType) {
             },
         };
     }
-    pub fn codegen(val: *Val, symbolTable: std.StringHashMap(*assembly.Symbol), allocator: std.mem.Allocator) ast.CodegenError!assembly.Operand {
+    pub fn codegen(val: *Val, symbolTable: *std.StringHashMap(*assembly.Symbol), allocator: std.mem.Allocator) ast.CodegenError!assembly.Operand {
         switch (val.*) {
             .Constant => |constant| {
                 const operand = try allocator.create(assembly.Operand);
-                operand.* = if (std.meta.activeTag(constant) == .Float) blk: {
-                    const asmSymbol = try allocator.create(assembly.Symbol);
-                    asmSymbol.* = .{ .Obj = .{
-                        .type = .Float,
-                        .static = true,
-                        .signed = true,
-                    } };
-                    try symbolTable.put(
-                        ast.tempGen.genTemp(),
-                        asmSymbol,
-                    );
-                    break :blk .{ .Data = constant.Float };
-                } else .{
+                operand.* = .{
                     .Imm = (switch (constant) {
                         .Integer => @intCast(constant.Integer),
                         .Long => @intCast(constant.Long),

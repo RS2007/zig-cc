@@ -45,35 +45,35 @@ pub const AsmType = enum {
     LongWord,
     QuadWord,
     Float,
-    pub fn suffix(asmType: AsmType) u8 {
+    pub inline fn suffix(asmType: AsmType) u8 {
         return switch (asmType) {
             .LongWord => 'l',
             .QuadWord => 'q',
             .Float => unreachable,
         };
     }
-    pub fn getAXVariety(asmType: AsmType) Reg {
+    pub inline fn getAXVariety(asmType: AsmType) Reg {
         return switch (asmType) {
             .LongWord => .EAX,
             .QuadWord => .RAX,
             .Float => unreachable,
         };
     }
-    pub fn getDXVariety(asmType: AsmType) Reg {
+    pub inline fn getDXVariety(asmType: AsmType) Reg {
         return switch (asmType) {
             .LongWord => .EDX,
             .QuadWord => .RDX,
             .Float => unreachable,
         };
     }
-    pub fn getR10Variety(asmType: AsmType) Reg {
+    pub inline fn getR10Variety(asmType: AsmType) Reg {
         return switch (asmType) {
             .LongWord => .R10,
             .QuadWord => .R10_64,
             .Float => unreachable,
         };
     }
-    pub fn getR11Variety(asmType: AsmType) Reg {
+    pub inline fn getR11Variety(asmType: AsmType) Reg {
         return switch (asmType) {
             .LongWord => .R11,
             .QuadWord => .R11_64,
@@ -132,7 +132,21 @@ pub const StaticInit = union(enum) {
         return switch (self) {
             .Integer => |integer| integer == 0,
             .Long => |long| long == 0,
-            .Float => unreachable,
+            .Float => false,
+        };
+    }
+    pub fn asmTypeString(self: StaticInit, allocator: std.mem.Allocator) ast.CodegenError![]u8 {
+        return switch (self) {
+            .Integer => try std.fmt.allocPrint(allocator, ".long", .{}),
+            .Long => try std.fmt.allocPrint(allocator, ".quad", .{}),
+            .Float => try std.fmt.allocPrint(allocator, ".double", .{}),
+        };
+    }
+    pub fn render(self: StaticInit, allocator: std.mem.Allocator) ast.CodegenError![]u8 {
+        return switch (self) {
+            .Integer => |integer| try std.fmt.allocPrint(allocator, "{}", .{integer}),
+            .Long => |long| try std.fmt.allocPrint(allocator, "{}", .{long}),
+            .Float => |float| try std.fmt.allocPrint(allocator, "{}", .{float}),
         };
     }
 };
@@ -143,7 +157,7 @@ pub const StaticVar = struct {
     init: StaticInit,
     alignment: u32,
     const Self = @This();
-    pub fn stringify(self: *Self, allocator: std.mem.Allocator) ![]u8 {
+    pub fn stringify(self: *Self, allocator: std.mem.Allocator) ast.CodegenError![]u8 {
         // TODO: Hack for now, whenever a glob is encountered, emit the data
         // section directive
         // And for functions always start with a .text directive
@@ -153,14 +167,15 @@ pub const StaticVar = struct {
             \\ {s}
             \\ .align {d}
             \\ {s}:
-            \\ {s} 4
+            \\ {s} {s}
         , .{
             if (self.global) ".globl" else ".local",
             self.name,
             if (self.init.isZero()) ".bss" else ".data",
             self.alignment,
             self.name,
-            if (self.init.isZero()) ".zero" else ".long",
+            if (self.init.isZero()) ".zero" else (try self.init.asmTypeString(allocator)),
+            if (self.init.isZero()) (try std.fmt.allocPrint(allocator, "{}", .{self.alignment})) else try self.init.render(allocator),
         });
         try buf.appendSlice(code);
 
@@ -538,7 +553,7 @@ pub const Instruction = union(InstructionType) {
             .Cvttsd2si => |cvttsd2si| {
                 const srcString = try @constCast(&cvttsd2si.src).stringify(allocator);
                 const destString = try @constCast(&cvttsd2si.dest).stringify(allocator);
-                return (try std.fmt.allocPrint(allocator, "cmp{c} {s},{s}", .{
+                return (try std.fmt.allocPrint(allocator, "cvttsd2si{c} {s},{s}", .{
                     cvttsd2si.type.suffix(),
                     srcString,
                     destString,
@@ -640,20 +655,20 @@ pub fn fixupInstructions(instructions: *std.ArrayList(*Instruction), allocator: 
                 const cvt = try allocator.create(Instruction);
                 const movXmmToDest = try allocator.create(Instruction);
                 movSrcToEax.* = .{
-                    .Mov = .{ .src = cvttsd2si.src, .dest = Operand{ .Reg = Reg.EAX }, .type = .LongWord },
+                    .Mov = .{ .src = cvttsd2si.src, .dest = Operand{ .Reg = Reg.XMM0 }, .type = .QuadWord },
                 };
                 cvt.* = .{
                     .Cvttsd2si = .{
-                        .src = Operand{ .Reg = Reg.EAX },
-                        .dest = Operand{ .Reg = Reg.XMM0 },
+                        .dest = Operand{ .Reg = Reg.EAX },
+                        .src = Operand{ .Reg = Reg.XMM0 },
                         .type = cvttsd2si.type,
                     },
                 };
                 movXmmToDest.* = .{
                     .Mov = .{
-                        .src = Operand{ .Reg = Reg.XMM0 },
+                        .src = Operand{ .Reg = Reg.EAX },
                         .dest = cvttsd2si.dest,
-                        .type = .QuadWord,
+                        .type = .LongWord,
                     },
                 };
                 try fixedInstructions.append(movSrcToEax);

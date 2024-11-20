@@ -241,6 +241,7 @@ fn convertSymToTAC(tacProgram: *tac.Program, symbolTable: std.StringHashMap(*sem
                             .type = switch (value.typeInfo) {
                                 .Integer => tac.ConstantType.Integer,
                                 .Long => tac.ConstantType.Long,
+                                .Float => tac.ConstantType.Float,
                                 else => unreachable,
                             },
                         };
@@ -962,7 +963,7 @@ pub const Expression = union(ExpressionType) {
                 try renderer.asmSymbolTable.put(destName, asmSymbol);
                 dest.* = tac.Val{ .Variable = destName };
 
-                if (inner.getAsmTypeFromSymTab(renderer.asmSymbolTable).? == .Float) {
+                if (inner.getAsmTypeFromSymTab(&renderer.asmSymbolTable).? == .Float) {
                     //INFO: floats rouned to integers and longs
                     const castInst = try allocator.create(tac.Instruction);
                     castInst.* = try chooseFloatCastInst(inner, dest, cast.type);
