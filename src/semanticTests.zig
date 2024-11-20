@@ -628,3 +628,108 @@ test "unsigned type conflicts" {
     }
     _ = try std.testing.expect(hasErr);
 }
+
+test "function definition with different types(float)" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const programStr =
+        \\ double add(double a, double b);
+        \\ long add(double a, double b);
+        \\ int main(){
+        \\     extern int k;
+        \\     return 0;
+        \\ }
+    ;
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    const program = try p.parseProgram();
+    const varResolver = try ast.VarResolver.init(allocator);
+    try varResolver.resolve(program);
+    const typechecker = try semantic.Typechecker.init(allocator);
+    const hasTypeErr = try typechecker.check(program);
+    var hasErr = false;
+    if (hasTypeErr) |typeErr| {
+        std.log.warn("Type error: {s}\n", .{typeErr});
+        hasErr = true;
+    }
+    _ = try std.testing.expect(hasErr);
+}
+
+test "extern global type conflict" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const programStr =
+        \\ double k;
+        \\ int main(){
+        \\     extern int k;
+        \\     return 0;
+        \\ }
+    ;
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    const program = try p.parseProgram();
+    const varResolver = try ast.VarResolver.init(allocator);
+    try varResolver.resolve(program);
+    const typechecker = try semantic.Typechecker.init(allocator);
+    const hasTypeErr = try typechecker.check(program);
+    var hasErr = false;
+    if (hasTypeErr) |typeErr| {
+        std.log.warn("Type error: {s}\n", .{typeErr});
+        hasErr = true;
+    }
+    _ = try std.testing.expect(hasErr);
+}
+
+test "invalid operation on float(complement)" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const programStr =
+        \\ double k;
+        \\ int main(){
+        \\     k = 3.0;
+        \\     return ~k;
+        \\ }
+    ;
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    const program = try p.parseProgram();
+    const varResolver = try ast.VarResolver.init(allocator);
+    try varResolver.resolve(program);
+    const typechecker = try semantic.Typechecker.init(allocator);
+    const hasTypeErr = try typechecker.check(program);
+    var hasErr = false;
+    if (hasTypeErr) |typeErr| {
+        std.log.warn("Type error: {s}\n", .{typeErr});
+        hasErr = true;
+    }
+    _ = try std.testing.expect(hasErr);
+}
+
+test "invalid operation on float(remainder)" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const programStr =
+        \\ int main(){
+        \\     double k = 3.0;
+        \\     double l = 2.0;
+        \\     return k % l;
+        \\ }
+    ;
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    const program = try p.parseProgram();
+    const varResolver = try ast.VarResolver.init(allocator);
+    try varResolver.resolve(program);
+    const typechecker = try semantic.Typechecker.init(allocator);
+    const hasTypeErr = try typechecker.check(program);
+    var hasErr = false;
+    if (hasTypeErr) |typeErr| {
+        std.log.warn("Type error: {s}\n", .{typeErr});
+        hasErr = true;
+    }
+    _ = try std.testing.expect(hasErr);
+}

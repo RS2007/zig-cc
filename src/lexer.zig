@@ -366,7 +366,7 @@ pub const Lexer = struct {
                     "long",
                     "unsigned",
                     "signed",
-                    "float",
+                    "double",
                 }, &[_]TokenType{
                     TokenType.INT_TYPE,
                     TokenType.RETURN,
@@ -564,7 +564,7 @@ pub const Lexer = struct {
                     "long",
                     "unsigned",
                     "signed",
-                    "float",
+                    "double",
                 }, &[_]TokenType{
                     TokenType.INT_TYPE,
                     TokenType.RETURN,

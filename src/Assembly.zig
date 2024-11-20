@@ -44,10 +44,40 @@ pub const TopLevelDeclType = enum {
 pub const AsmType = enum {
     LongWord,
     QuadWord,
+    Float,
     pub fn suffix(asmType: AsmType) u8 {
         return switch (asmType) {
             .LongWord => 'l',
             .QuadWord => 'q',
+            .Float => unreachable,
+        };
+    }
+    pub fn getAXVariety(asmType: AsmType) Reg {
+        return switch (asmType) {
+            .LongWord => .EAX,
+            .QuadWord => .RAX,
+            .Float => unreachable,
+        };
+    }
+    pub fn getDXVariety(asmType: AsmType) Reg {
+        return switch (asmType) {
+            .LongWord => .EDX,
+            .QuadWord => .RDX,
+            .Float => unreachable,
+        };
+    }
+    pub fn getR10Variety(asmType: AsmType) Reg {
+        return switch (asmType) {
+            .LongWord => .R10,
+            .QuadWord => .R10_64,
+            .Float => unreachable,
+        };
+    }
+    pub fn getR11Variety(asmType: AsmType) Reg {
+        return switch (asmType) {
+            .LongWord => .R11,
+            .QuadWord => .R11_64,
+            .Float => unreachable,
         };
     }
 };
@@ -96,11 +126,13 @@ pub const Symbol = union(enum) {
 pub const StaticInit = union(enum) {
     Integer: i32,
     Long: i64,
+    Float: f64,
 
     pub fn isZero(self: StaticInit) bool {
         return switch (self) {
             .Integer => |integer| integer == 0,
             .Long => |long| long == 0,
+            .Float => unreachable,
         };
     }
 };
@@ -158,6 +190,7 @@ pub const Reg = enum {
     R11_64, // TODO: Rename this later
     R10_64,
     AL,
+    XMM0,
     pub fn stringify(register: Reg, allocator: std.mem.Allocator) ast.CodegenError![]u8 {
         switch (register) {
             .AL => {
@@ -222,6 +255,9 @@ pub const Reg = enum {
             },
             .RAX => {
                 return (try std.fmt.allocPrint(allocator, "%rax", .{}));
+            },
+            .XMM0 => {
+                return (try std.fmt.allocPrint(allocator, "%xmm0", .{}));
             },
         }
     }
@@ -351,6 +387,7 @@ pub const InstructionType = enum {
     FnCall,
     Movsx,
     Movzx, // move zero extend
+    Cvttsd2si,
 };
 
 pub const MovInst = struct {
@@ -405,6 +442,13 @@ pub const Movzx = struct {
     src: Operand,
     dest: Operand,
 };
+
+pub const Cvttsd2si = struct {
+    src: Operand,
+    dest: Operand,
+    type: AsmType,
+};
+
 pub const Instruction = union(InstructionType) {
     Mov: MovInst,
     Unary: UnaryInst,
@@ -422,6 +466,7 @@ pub const Instruction = union(InstructionType) {
     FnCall: FnCall,
     Movsx: Movsx,
     Movzx: Movzx,
+    Cvttsd2si: Cvttsd2si,
 
     pub fn stringify(instruction: *Instruction, allocator: std.mem.Allocator) ast.CodegenError![]u8 {
         switch (instruction.*) {
@@ -490,6 +535,15 @@ pub const Instruction = union(InstructionType) {
             .Movzx => {
                 @panic("Never hit this, movzx should be replaced by two mov instructions");
             },
+            .Cvttsd2si => |cvttsd2si| {
+                const srcString = try @constCast(&cvttsd2si.src).stringify(allocator);
+                const destString = try @constCast(&cvttsd2si.dest).stringify(allocator);
+                return (try std.fmt.allocPrint(allocator, "cmp{c} {s},{s}", .{
+                    cvttsd2si.type.suffix(),
+                    srcString,
+                    destString,
+                }));
+            },
         }
     }
 };
@@ -499,10 +553,9 @@ inline fn fixMultiply(inst: *Instruction, allocator: std.mem.Allocator, fixedIns
         const movLeftToR11 = try allocator.create(Instruction);
         movLeftToR11.* = Instruction{
             .Mov = MovInst{
-                .dest = Operand{ .Reg = switch (inst.Binary.type) {
-                    .LongWord => .R11,
-                    .QuadWord => .R11_64,
-                } },
+                .dest = Operand{
+                    .Reg = inst.Binary.type.getR11Variety(),
+                },
                 .src = inst.Binary.lhs,
                 .type = inst.Binary.type,
             },
@@ -510,17 +563,13 @@ inline fn fixMultiply(inst: *Instruction, allocator: std.mem.Allocator, fixedIns
         const movR11ToLeft = try allocator.create(Instruction);
         movR11ToLeft.* = Instruction{ .Mov = MovInst{
             .dest = inst.Binary.lhs,
-            .src = Operand{ .Reg = switch (inst.Binary.type) {
-                .QuadWord => .R11_64,
-                .LongWord => .R11,
-            } },
+            .src = Operand{
+                .Reg = inst.Binary.type.getR11Variety(),
+            },
             .type = inst.Binary.type,
         } };
         inst.Binary.lhs = Operand{
-            .Reg = switch (inst.Binary.type) {
-                .LongWord => .R11,
-                .QuadWord => .R11_64,
-            },
+            .Reg = inst.Binary.type.getR11Variety(),
         };
         try fixedInstructions.append(movLeftToR11);
         try fixedInstructions.append(inst);
@@ -548,17 +597,13 @@ pub fn fixupInstructions(instructions: *std.ArrayList(*Instruction), allocator: 
                     const movInstDest = try allocator.create(Instruction);
                     movInstSrc.* = Instruction{ .Mov = MovInst{
                         .src = mov.src,
-                        .dest = Operand{ .Reg = switch (mov.type) {
-                            .LongWord => Reg.R10,
-                            .QuadWord => Reg.R10_64,
-                        } },
+                        .dest = Operand{
+                            .Reg = mov.type.getR10Variety(),
+                        },
                         .type = mov.type,
                     } };
                     movInstDest.* = Instruction{ .Mov = MovInst{
-                        .src = Operand{ .Reg = switch (mov.type) {
-                            .LongWord => Reg.R10,
-                            .QuadWord => Reg.R10_64,
-                        } },
+                        .src = Operand{ .Reg = mov.type.getR10Variety() },
                         .dest = mov.dest,
                         .type = mov.type,
                     } };
@@ -574,9 +619,6 @@ pub fn fixupInstructions(instructions: *std.ArrayList(*Instruction), allocator: 
                     continue;
                 }
             },
-            .Movsx => {
-                try fixedInstructions.append(inst);
-            },
             .Movzx => |movzx| {
                 const movSrcToEax = try allocator.create(Instruction);
                 movSrcToEax.* = .{ .Mov = .{
@@ -590,8 +632,33 @@ pub fn fixupInstructions(instructions: *std.ArrayList(*Instruction), allocator: 
                     .dest = movzx.dest,
                     .type = .QuadWord,
                 } };
-                try instructions.append(movSrcToEax);
-                try instructions.append(movRaxToDest);
+                try fixedInstructions.append(movSrcToEax);
+                try fixedInstructions.append(movRaxToDest);
+            },
+            .Cvttsd2si => |cvttsd2si| {
+                const movSrcToEax = try allocator.create(Instruction);
+                const cvt = try allocator.create(Instruction);
+                const movXmmToDest = try allocator.create(Instruction);
+                movSrcToEax.* = .{
+                    .Mov = .{ .src = cvttsd2si.src, .dest = Operand{ .Reg = Reg.EAX }, .type = .LongWord },
+                };
+                cvt.* = .{
+                    .Cvttsd2si = .{
+                        .src = Operand{ .Reg = Reg.EAX },
+                        .dest = Operand{ .Reg = Reg.XMM0 },
+                        .type = cvttsd2si.type,
+                    },
+                };
+                movXmmToDest.* = .{
+                    .Mov = .{
+                        .src = Operand{ .Reg = Reg.XMM0 },
+                        .dest = cvttsd2si.dest,
+                        .type = .QuadWord,
+                    },
+                };
+                try fixedInstructions.append(movSrcToEax);
+                try fixedInstructions.append(cvt);
+                try fixedInstructions.append(movXmmToDest);
             },
             .Binary => |binary| {
                 if (binary.op == BinaryOp.Multiply) {
@@ -606,18 +673,12 @@ pub fn fixupInstructions(instructions: *std.ArrayList(*Instruction), allocator: 
                     const cpInstruction = try allocator.create(Instruction);
                     cpInstruction.* = Instruction{
                         .Mov = .{
-                            .dest = Operand{ .Reg = switch (binary.type) {
-                                .LongWord => Reg.R10,
-                                .QuadWord => Reg.R10_64,
-                            } },
+                            .dest = Operand{ .Reg = binary.type.getR10Variety() },
                             .src = binary.rhs,
                             .type = binary.type,
                         },
                     };
-                    inst.Binary.rhs = Operand{ .Reg = switch (binary.type) {
-                        .LongWord => Reg.R10,
-                        .QuadWord => Reg.R10_64,
-                    } };
+                    inst.Binary.rhs = Operand{ .Reg = binary.type.getR10Variety() };
                     try fixedInstructions.append(cpInstruction);
                     try fixedInstructions.append(inst);
                     continue;
@@ -634,17 +695,13 @@ pub fn fixupInstructions(instructions: *std.ArrayList(*Instruction), allocator: 
                     movInst.* = Instruction{
                         .Mov = MovInst{
                             .src = cmp.op1,
-                            .dest = Operand{ .Reg = switch (cmp.type) {
-                                .LongWord => Reg.R10,
-                                .QuadWord => Reg.R10_64,
-                            } },
+                            .dest = Operand{
+                                .Reg = cmp.type.getR10Variety(),
+                            },
                             .type = cmp.type,
                         },
                     };
-                    inst.Cmp.op1 = Operand{ .Reg = switch (cmp.type) {
-                        .LongWord => Reg.R10,
-                        .QuadWord => Reg.R10_64,
-                    } };
+                    inst.Cmp.op1 = Operand{ .Reg = cmp.type.getR10Variety() };
                     try fixedInstructions.append(movInst);
                     try fixedInstructions.append(inst);
                     continue;
@@ -898,18 +955,18 @@ pub fn replacePseudoRegs(function: *Function, allocator: std.mem.Allocator, asmS
                     );
                 }
             },
-            .Movzx => |movzx| {
-                if (movzx.src.isOfKind(.Pseudo)) {
+            .Cvttsd2si => |cvttsd2si| {
+                if (cvttsd2si.src.isOfKind(.Pseudo)) {
                     try replacePseudo(
-                        &inst.Movzx.src,
+                        &inst.Cvttsd2si.src,
                         &lookup,
                         @constCast(&asmSymbolTable),
                         &topOfStack,
                     );
                 }
-                if (movzx.dest.isOfKind(.Pseudo)) {
+                if (cvttsd2si.dest.isOfKind(.Pseudo)) {
                     try replacePseudo(
-                        &inst.Movzx.dest,
+                        &inst.Cvttsd2si.dest,
                         &lookup,
                         @constCast(&asmSymbolTable),
                         &topOfStack,
@@ -996,6 +1053,7 @@ pub fn replacePseudoRegs(function: *Function, allocator: std.mem.Allocator, asmS
             .Jmp, .Label, .JmpCC, .FnCall => {
                 // Jmp does not involve any operands
             },
+            else => {},
         }
     }
     if (topOfStack != 0) {
@@ -1022,6 +1080,7 @@ inline fn replacePseudo(
         const offset: i32 = switch (asmSymbolTable.get(operand.Pseudo).?.Obj.type) {
             .QuadWord => 8,
             .LongWord => 4,
+            .Float => unreachable,
         };
         topOfStack.* = topOfStack.* - offset;
         try lookup.put(
