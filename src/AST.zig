@@ -299,6 +299,7 @@ pub const Type = enum {
     Float,
 
     const Self = @This();
+
     pub fn from(tokenType: lexer.TokenType) Self {
         return switch (tokenType) {
             .INT_TYPE => .Integer,
@@ -335,6 +336,7 @@ pub const Type = enum {
         return switch (self) {
             .Long, .Integer => true,
             .UInteger, .ULong => false,
+            .Float => true,
             else => unreachable,
         };
     }
@@ -503,57 +505,45 @@ pub const Statement = union(StatementType) {
         switch (statement.*) {
             .Return => |retStmt| {
                 const returnSymbol = try retStmt.expression.genTACInstructions(renderer, instructions, allocator);
-                const returnInst = try allocator.create(tac.Instruction);
-                returnInst.* = tac.Instruction{ .Return = tac.Return{
-                    .val = returnSymbol,
-                } };
-                try instructions.append(returnInst);
+                try instructions.append(try tac.createInst(
+                    .Return,
+                    tac.Return{
+                        .val = returnSymbol,
+                    },
+                    allocator,
+                ));
             },
             .Expression => |expr| {
                 _ = try expr.genTACInstructions(renderer, instructions, allocator);
             },
             .Null => {},
             .If => |ifStmt| {
-                const jmpIfZero = try allocator.create(tac.Instruction);
-                const condVal = try ifStmt.condition.genTACInstructions(renderer, instructions, allocator);
-                const falseLabel = try allocator.create(tac.Instruction);
                 const falseLabelName = try std.fmt.allocPrint(allocator, "falseLabel_{d}", .{tempGen.genId()});
                 const exitLabelName = try std.fmt.allocPrint(allocator, "exitLabel_{d}", .{tempGen.genId()});
-                const exitLabel = try allocator.create(tac.Instruction);
-                exitLabel.* = tac.Instruction{
-                    .Label = exitLabelName,
-                };
-                const unCondJmpFromTrue = try allocator.create(tac.Instruction);
-                unCondJmpFromTrue.* = tac.Instruction{ .Jump = exitLabelName };
-                falseLabel.* = tac.Instruction{
-                    .Label = falseLabelName,
-                };
-                jmpIfZero.* = tac.Instruction{ .JumpIfZero = tac.Jmp{
-                    .condition = condVal,
-                    .target = falseLabelName,
-                } };
-                try instructions.append(jmpIfZero);
+                const condVal = try ifStmt.condition.genTACInstructions(renderer, instructions, allocator);
+                try instructions.append(
+                    try tac.createInst(
+                        .JumpIfZero,
+                        tac.Jmp{
+                            .condition = condVal,
+                            .target = falseLabelName,
+                        },
+                        allocator,
+                    ),
+                );
                 try ifStmt.thenStmt.genTACInstructions(renderer, instructions, symbolTable, allocator);
-                try instructions.append(unCondJmpFromTrue);
-                try instructions.append(falseLabel);
+                try instructions.append(try tac.createInst(.Jump, exitLabelName, allocator));
+                try instructions.append(try tac.createInst(.Label, falseLabelName, allocator));
                 if (ifStmt.elseStmt) |elseStmt| {
                     try elseStmt.genTACInstructions(renderer, instructions, symbolTable, allocator);
                 }
-                try instructions.append(exitLabel);
+                try instructions.append(try tac.createInst(.Label, exitLabelName, allocator));
             },
             .Label => |label| {
-                const tacLabel = try allocator.create(tac.Instruction);
-                tacLabel.* = tac.Instruction{
-                    .Label = label,
-                };
-                try instructions.append(tacLabel);
+                try instructions.append(try tac.createInst(.Label, label, allocator));
             },
             .Goto => |goto| {
-                const tacUncondJump = try allocator.create(tac.Instruction);
-                tacUncondJump.* = tac.Instruction{
-                    .Jump = goto,
-                };
-                try instructions.append(tacUncondJump);
+                try instructions.append(try tac.createInst(.Jump, goto, allocator));
             },
             .Compound => |compound| {
                 for (compound.items) |compoundStatement| {
@@ -561,104 +551,90 @@ pub const Statement = union(StatementType) {
                 }
             },
             .Continue => |cont| {
-                const jumpUnconditional = try allocator.create(tac.Instruction);
-                jumpUnconditional.* = .{
-                    .Jump = try std.fmt.allocPrint(allocator, "loop_start_{d}", .{cont}),
-                };
-                try instructions.append(jumpUnconditional);
+                try instructions.append(try tac.createInst(
+                    .Jump,
+                    try std.fmt.allocPrint(allocator, "loop_start_{d}", .{cont}),
+                    allocator,
+                ));
             },
             .Break => |brk| {
-                const jumpUnconditional = try allocator.create(tac.Instruction);
-                jumpUnconditional.* = .{
-                    .Jump = try std.fmt.allocPrint(allocator, "loop_end_{d}", .{brk}),
-                };
-                try instructions.append(jumpUnconditional);
+                try instructions.append(try tac.createInst(
+                    .Jump,
+                    try std.fmt.allocPrint(allocator, "loop_end_{d}", .{brk}),
+                    allocator,
+                ));
             },
             .DoWhile => |doWhile| {
                 const doWhileStartLabel = try std.fmt.allocPrint(allocator, "loop_start_{d}", .{doWhile.loopId});
-                const doWhileLabel = try allocator.create(tac.Instruction);
-                doWhileLabel.* = tac.Instruction{
-                    .Label = doWhileStartLabel,
-                };
-                try instructions.append(doWhileLabel);
+                try instructions.append(try tac.createInst(
+                    .Label,
+                    doWhileStartLabel,
+                    allocator,
+                ));
                 try doWhile.body.genTACInstructions(renderer, instructions, symbolTable, allocator);
                 const condition = try doWhile.condition.genTACInstructions(renderer, instructions, allocator);
-                const jmpIfNotZero = try allocator.create(tac.Instruction);
-                jmpIfNotZero.* = tac.Instruction{ .JumpIfNotZero = tac.Jmp{
+                try instructions.append(try tac.createInst(.JumpIfNotZero, tac.Jmp{
                     .condition = condition,
                     .target = doWhileStartLabel,
-                } };
-                try instructions.append(jmpIfNotZero);
+                }, allocator));
                 const doWhileEndLabel = try std.fmt.allocPrint(allocator, "loop_end_{d}", .{doWhile.loopId});
-                const doWhileEnd = try allocator.create(tac.Instruction);
-                doWhileEnd.* = .{
-                    .Label = doWhileEndLabel,
-                };
-                try instructions.append(doWhileEnd);
+                try instructions.append(try tac.createInst(
+                    .Label,
+                    doWhileEndLabel,
+                    allocator,
+                ));
             },
             .While => |whileStmt| {
                 // INFO: The first optimization: This should be an if condition
                 // followed by the do while loop assembly to save jumps
                 const conditionOfIf = try whileStmt.condition.genTACInstructions(renderer, instructions, allocator);
                 const whileEndLabelName = try std.fmt.allocPrint(allocator, "loop_end_{d}", .{whileStmt.loopId});
-                const initJumpIfZero = try allocator.create(tac.Instruction);
-                initJumpIfZero.* = tac.Instruction{ .JumpIfZero = tac.Jmp{
-                    .condition = conditionOfIf,
-                    .target = whileEndLabelName,
-                } };
-                try instructions.append(initJumpIfZero);
                 const whileStartLabelName = try std.fmt.allocPrint(allocator, "loop_start_{d}", .{whileStmt.loopId});
-                const whileStartLabel = try allocator.create(tac.Instruction);
-                whileStartLabel.* = tac.Instruction{
-                    .Label = whileStartLabelName,
-                };
-                try instructions.append(whileStartLabel);
+                try instructions.appendSlice(&[_]*tac.Instruction{
+                    try tac.createInst(.JumpIfZero, tac.Jmp{
+                        .condition = conditionOfIf,
+                        .target = whileEndLabelName,
+                    }, allocator),
+                    try tac.createInst(
+                        .Label,
+                        whileStartLabelName,
+                        allocator,
+                    ),
+                });
                 try whileStmt.body.genTACInstructions(renderer, instructions, symbolTable, allocator);
                 const conditionForInnerDoWhile = try whileStmt.condition.genTACInstructions(renderer, instructions, allocator);
-                const jmpToWhileStart = try allocator.create(tac.Instruction);
-                jmpToWhileStart.* = tac.Instruction{ .JumpIfNotZero = .{
-                    .target = whileStartLabelName,
-                    .condition = conditionForInnerDoWhile,
-                } };
-                try instructions.append(jmpToWhileStart);
-                const whileEndLabel = try allocator.create(tac.Instruction);
-                whileEndLabel.* = tac.Instruction{
-                    .Label = whileEndLabelName,
-                };
-                try instructions.append(whileEndLabel);
+                try instructions.appendSlice(&[_]*tac.Instruction{
+                    try tac.createInst(.JumpIfNotZero, tac.Jmp{
+                        .target = whileStartLabelName,
+                        .condition = conditionForInnerDoWhile,
+                    }, allocator),
+                    try tac.createInst(.Label, whileEndLabelName, allocator),
+                });
             },
             .For => |forStmt| {
                 const forStartLabelName = try std.fmt.allocPrint(allocator, "loop_start_{d}", .{forStmt.loopId});
                 const forEndLabelName = try std.fmt.allocPrint(allocator, "loop_end_{d}", .{forStmt.loopId});
                 try forStmt.init.genTACInstructions(renderer, instructions, symbolTable, allocator);
-                const forStart = try allocator.create(tac.Instruction);
-                forStart.* = .{
-                    .Label = forStartLabelName,
-                };
-                try instructions.append(forStart);
+                try instructions.append(try tac.createInst(
+                    .Label,
+                    forStartLabelName,
+                    allocator,
+                ));
                 if (forStmt.condition) |condition| {
                     const condVal = try condition.genTACInstructions(renderer, instructions, allocator);
-                    const jmpIfZero = try allocator.create(tac.Instruction);
-                    jmpIfZero.* = .{ .JumpIfZero = .{
+                    try instructions.append(try tac.createInst(.JumpIfZero, tac.Jmp{
                         .condition = condVal,
                         .target = forEndLabelName,
-                    } };
-                    try instructions.append(jmpIfZero);
+                    }, allocator));
                 }
                 try forStmt.body.genTACInstructions(renderer, instructions, symbolTable, allocator);
                 if (forStmt.post) |post|
                     _ = try post.genTACInstructions(renderer, instructions, allocator);
 
-                const uncondJumpToStart = try allocator.create(tac.Instruction);
-                uncondJumpToStart.* = .{
-                    .Jump = forStartLabelName,
-                };
-                try instructions.append(uncondJumpToStart);
-                const forEnd = try allocator.create(tac.Instruction);
-                forEnd.* = .{
-                    .Label = forEndLabelName,
-                };
-                try instructions.append(forEnd);
+                try instructions.appendSlice(&[_]*tac.Instruction{
+                    try tac.createInst(.Jump, forStartLabelName, allocator),
+                    try tac.createInst(.Label, forEndLabelName, allocator),
+                });
             },
         }
     }
@@ -946,17 +922,8 @@ pub const Expression = union(ExpressionType) {
                 const asmSymbol = try renderer.allocator.create(assembly.Symbol);
                 asmSymbol.* = .{
                     .Obj = .{
-                        .type = switch (cast.type) {
-                            .Integer, .UInteger => .LongWord,
-                            .Long, .ULong => .QuadWord,
-                            .Float => .Float,
-                            .Void => unreachable,
-                        },
-                        .signed = switch (cast.type) {
-                            .Integer, .Long => true,
-                            .UInteger, .ULong, .Float => false,
-                            else => unreachable,
-                        },
+                        .type = assembly.AsmType.from(Type, cast.type),
+                        .signed = cast.type.signed(),
                         .static = false,
                     },
                 };
@@ -1201,10 +1168,11 @@ pub const Expression = union(ExpressionType) {
                         .type = switch (binary.type.?) {
                             .Integer, .UInteger => assembly.AsmType.LongWord,
                             .Long, .ULong => assembly.AsmType.QuadWord,
+                            .Float => assembly.AsmType.Float,
                             else => unreachable,
                         },
                         .signed = switch (binary.type.?) {
-                            .Integer, .Long => true,
+                            .Integer, .Long, .Float => true,
                             .UInteger, .ULong => false,
                             else => unreachable,
                         },
@@ -1319,10 +1287,11 @@ pub const Expression = union(ExpressionType) {
                         .type = switch (fnCall.type.?) {
                             .Integer, .UInteger => .LongWord,
                             .Long, .ULong => .QuadWord,
+                            .Float => .Float,
                             else => unreachable,
                         },
                         .signed = switch (fnCall.type.?) {
-                            .Integer, .Long => true,
+                            .Integer, .Long, .Float => true,
                             .UInteger, .ULong => false,
                             else => unreachable,
                         },
