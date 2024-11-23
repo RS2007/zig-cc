@@ -386,12 +386,17 @@ pub fn typecheckExternalDecl(self: *Typechecker, externalDecl: *AST.ExternalDecl
                         .ULong => .{ .type = .ULong, .value = .{
                             .ULong = expression.Constant.to(u64),
                         } },
+
+                        .Float => .{ .type = .Float, .value = .{
+                            .Float = expression.Constant.value.Float,
+                        } },
                         else => unreachable,
                     } };
                 } else {
                     initializer = .{ .Initial = switch (varDecl.type) {
                         .Integer => .{ .type = .Integer, .value = .{ .Integer = expression.Constant.value.Integer } },
                         .Long => .{ .type = .Long, .value = .{ .Long = expression.Constant.value.Long } },
+                        .Float => .{ .type = .Float, .value = .{ .Float = expression.Constant.value.Float } },
                         else => unreachable,
                     } };
                 }

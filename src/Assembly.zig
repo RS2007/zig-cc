@@ -47,18 +47,13 @@ pub const TopLevelDeclType = enum {
 };
 
 pub inline fn createInst(comptime kind: InstructionType, contents: anytype, allocator: std.mem.Allocator) ast.CodegenError!*Instruction {
-    inline for (std.meta.tags(InstructionType)) |tag| {
-        if (tag == kind) {
-            const inst = try allocator.create(Instruction);
-            inst.* = @unionInit(
-                Instruction,
-                @tagName(kind),
-                contents,
-            );
-            return inst;
-        }
-    }
-    unreachable;
+    const inst = try allocator.create(Instruction);
+    inst.* = @unionInit(
+        Instruction,
+        @tagName(kind),
+        contents,
+    );
+    return inst;
 }
 
 pub const AsmType = enum {
@@ -112,14 +107,14 @@ pub const AsmType = enum {
         return switch (asmType) {
             .LongWord => .R10,
             .QuadWord => .R10_64,
-            .Float => .XMM1,
+            .Float => .XMM15,
         };
     }
     pub inline fn getR11Variety(asmType: AsmType) Reg {
         return switch (asmType) {
             .LongWord => .R11,
             .QuadWord => .R11_64,
-            .Float => .XMM1,
+            .Float => .XMM14,
         };
     }
 };
@@ -249,6 +244,8 @@ pub const Reg = enum {
     AL,
     XMM0,
     XMM1,
+    XMM15,
+    XMM14,
     pub fn stringify(register: Reg, allocator: std.mem.Allocator) ast.CodegenError![]u8 {
         switch (register) {
             .AL => {
@@ -319,6 +316,12 @@ pub const Reg = enum {
             },
             .XMM1 => {
                 return (try std.fmt.allocPrint(allocator, "%xmm1", .{}));
+            },
+            .XMM14 => {
+                return (try std.fmt.allocPrint(allocator, "%xmm14", .{}));
+            },
+            .XMM15 => {
+                return (try std.fmt.allocPrint(allocator, "%xmm15", .{}));
             },
         }
     }
@@ -551,7 +554,7 @@ pub const Instruction = union(InstructionType) {
             .Unary => |unary| {
                 switch (unary.op) {
                     .Neg => {
-                        return (try std.fmt.allocPrint(allocator, "negl {s}", .{try @constCast(&unary.rhs).stringify(allocator)}));
+                        return (try std.fmt.allocPrint(allocator, "neg{s} {s}", .{ unary.type.suffix(), try @constCast(&unary.rhs).stringify(allocator) }));
                     },
                     .Not => {
                         return (try std.fmt.allocPrint(allocator, "notl {s}", .{try @constCast(&unary.rhs).stringify(allocator)}));
@@ -803,7 +806,7 @@ pub fn fixupInstructions(instructions: *std.ArrayList(*Instruction), allocator: 
                 }
             },
             .Cmp => |cmp| {
-                const isOp1Mem = cmp.op1.isOfKind(.Data) or cmp.op1.isOfKind(.Stack) or cmp.op1.isOfKind(.Imm);
+                const isOp1Mem = cmp.op1.isOfKind(.Data) or cmp.op1.isOfKind(.Stack);
                 const isOp2Mem = cmp.op2.isOfKind(.Data) or cmp.op2.isOfKind(.Stack);
                 if (isOp1Mem and isOp2Mem) {
                     const movInst = try allocator.create(Instruction);
@@ -817,10 +820,47 @@ pub fn fixupInstructions(instructions: *std.ArrayList(*Instruction), allocator: 
                         },
                     };
                     inst.Cmp.op1 = Operand{ .Reg = cmp.type.getR10Variety() };
+
+                    // If cmp is of the comisd variant then the rhs can't be a memory location
+                    if (inst.Cmp.type == .Float) {
+                        try fixedInstructions.append(try createInst(.Mov, MovInst{
+                            .src = cmp.op2,
+                            .dest = .{ .Reg = cmp.type.getR11Variety() },
+                            .type = cmp.type,
+                        }, allocator));
+                        inst.Cmp.op2 = .{ .Reg = cmp.type.getR11Variety() };
+                    }
                     try fixedInstructions.append(movInst);
                     try fixedInstructions.append(inst);
                     continue;
                 } else {
+                    // INFO: cmpq doesn't support 64 bit immediates
+                    if (inst.Cmp.op2.is(.Imm) and inst.Cmp.type == .QuadWord) {
+                        const movRhsToReg = try allocator.create(Instruction);
+                        movRhsToReg.* = .{
+                            .Mov = .{
+                                .src = cmp.op2,
+                                .dest = .{ .Reg = cmp.type.getR11Variety() },
+                                .type = cmp.type,
+                            },
+                        };
+                        try fixedInstructions.append(movRhsToReg);
+                        inst.Cmp.op2 = Operand{ .Reg = cmp.type.getR11Variety() };
+                    }
+
+                    if (inst.Cmp.op1.is(.Imm) and inst.Cmp.type == .QuadWord) {
+                        const movRhsToReg = try allocator.create(Instruction);
+                        movRhsToReg.* = .{
+                            .Mov = .{
+                                .src = cmp.op1,
+                                .dest = .{ .Reg = cmp.type.getR11Variety() },
+                                .type = cmp.type,
+                            },
+                        };
+                        try fixedInstructions.append(movRhsToReg);
+                        inst.Cmp.op1 = Operand{ .Reg = cmp.type.getR11Variety() };
+                    }
+
                     try fixedInstructions.append(inst);
                     continue;
                 }
@@ -839,6 +879,30 @@ pub fn fixupInstructions(instructions: *std.ArrayList(*Instruction), allocator: 
                     &fixedInstructions,
                 );
             },
+            // .Unary => |unary| {
+            //     if ((unary.op == .Neg) and (unary.type == .Float)) {
+            //         try fixedInstructions.appendSlice(&[_]*Instruction{
+            //             try createInst(.Mov, MovInst{
+            //                 .src = .{ .Imm = 0 },
+            //                 .dest = .{.Reg = unary.type.getR10Variety()},
+            //                 .type = unary.type,
+            //             }, allocator),
+
+            //             try createInst(.Binary, BinaryInst{
+            //                 .rhs = unary.rhs,
+            //                 .lhs = .{ .Reg = unary.type.getR10Variety()},
+            //                 .type = unary.type,
+            //                 .op = .Subtract,
+            //             }, allocator),
+            //             try createInst(.Mov, MovInst{
+            //                 .src = .{ .Reg = unary.type.getR10Variety()},
+            //                 .dest = unary.rhs,
+            //             }, allocator);
+            //         });
+            //     } else {
+            //         try fixedInstructions.append(inst);
+            //     }
+            // },
             else => {
                 try fixedInstructions.append(inst);
             },

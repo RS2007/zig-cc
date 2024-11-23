@@ -386,9 +386,7 @@ pub const Instruction = union(InstructionType) {
                     allocator,
                 ));
             },
-            .FloatToUInt => {
-                //const src = try floatToUInt.src.codegen(symbolTable, allocator);
-                //const dest = try floatToUInt.dest.codegen(symbolTable, allocator);
+            .FloatToUInt => |floatToUInt| {
                 //const cvttsd2si = try allocator.create(assembly.Instruction);
                 //const comisd = try allocator.create(assembly.Instruction);
                 //const jae = try allocator.create(assembly.Instruction);
@@ -402,7 +400,59 @@ pub const Instruction = union(InstructionType) {
                 //const cvtOutOfRange = try allocator.create(assembly.Instruction);
                 //const movUpperBoundToRdx = try allocator.create(assembly.Instruction);
                 //const rdxRax = try allocator.create(assembly.Instruction);
-                unreachable;
+                const src = try floatToUInt.src.codegen(symbolTable, allocator);
+                const dest = try floatToUInt.dest.codegen(symbolTable, allocator);
+                const outOfRangeLabel = try std.fmt.allocPrint(allocator, "outOfRange", .{});
+                const longUpperBound = try std.fmt.allocPrint(allocator, "longUpperBound", .{});
+                const endLabel = try std.fmt.allocPrint(allocator, "endLabel", .{});
+                var floatToUIntInst = [_]*assembly.Instruction{
+                    try assembly.createInst(.Cmp, assembly.Cmp{
+                        .op2 = src,
+                        .op1 = .{ .Data = longUpperBound },
+                        .type = .Float,
+                    }, allocator),
+                    try assembly.createInst(.JmpCC, assembly.JmpCC{
+                        .code = .AE,
+                        .label = outOfRangeLabel,
+                    }, allocator),
+                    try assembly.createInst(
+                        .Cvttsd2si,
+                        assembly.Cvttsd2si{ .dest = dest, .src = src, .type = .QuadWord },
+                        allocator,
+                    ),
+                    try assembly.createInst(.Jmp, endLabel, allocator),
+                    try assembly.createInst(.Label, outOfRangeLabel, allocator),
+                    try assembly.createInst(.Mov, assembly.MovInst{
+                        .src = src,
+                        .dest = .{ .Reg = .XMM1 },
+                        .type = .Float,
+                    }, allocator),
+                    try assembly.createInst(.Binary, assembly.BinaryInst{
+                        .op = .Subtract,
+                        .lhs = .{ .Reg = .XMM1 },
+                        .rhs = .{ .Data = longUpperBound },
+                        .type = .Float,
+                    }, allocator),
+                    try assembly.createInst(.Cvttsd2si, assembly.Cvttsd2si{
+                        .src = .{ .Reg = .XMM1 },
+                        .dest = dest,
+                        .type = .QuadWord,
+                    }, allocator),
+                    try assembly.createInst(.Mov, assembly.MovInst{
+                        .type = .QuadWord,
+                        .dest = .{ .Reg = .RDX },
+                        .src = .{ .Imm = 9223372036854775808 },
+                    }, allocator),
+                    try assembly.createInst(.Binary, assembly.BinaryInst{
+                        .type = .QuadWord,
+                        .op = .Add,
+                        .lhs = dest,
+                        .rhs = .{ .Reg = .RDX },
+                    }, allocator),
+                    try assembly.createInst(.Label, endLabel, allocator),
+                };
+
+                try instructions.appendSlice(&floatToUIntInst);
 
                 //    comisd  .L_upper_bound(%rip), %xmm0
                 //    jae     .L_out_of_range

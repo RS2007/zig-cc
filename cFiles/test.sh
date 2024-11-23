@@ -9,11 +9,11 @@ for file in "$C_DIR"/*.c; do
     base_name=${base_name%.c}
     echo "$base_name"
     
-    gcc -o "c$base_name" "$file"
+    gcc -o "c$base_name" "$file" -lm
     ./"c$base_name"
     cExitCode=$?
     
-    gcc -o "s$base_name" "$S_DIR/$base_name.s"
+    gcc -o "s$base_name" "$S_DIR/$base_name.s" -lm
     ./"s$base_name"
     sExitCode=$?
     if [ $cExitCode -ne $sExitCode ]; then

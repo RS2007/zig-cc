@@ -80,6 +80,7 @@ pub const ExternalDecl = union(ExternalDeclType) {
     pub fn genTAC(externalDecl: *Self, renderer: *TACRenderer, symbolTable: std.StringHashMap(*semantic.Symbol), allocator: std.mem.Allocator) CodegenError!?*tac.FunctionDef {
         switch (externalDecl.*) {
             .FunctionDecl => |functionDecl| {
+                if (!functionDecl.isDefined()) return null;
                 const tacFunctionDef = try allocator.create(tac.FunctionDef);
                 var instructions = std.ArrayList(*tac.Instruction).init(allocator);
                 try functionDecl.genTAC(renderer, &instructions, symbolTable, allocator);
@@ -858,7 +859,6 @@ pub const TACRenderer = struct {
         for (program.externalDecls.items) |externalDecl| {
             const functionDef = try externalDecl.genTAC(self, self.astSymbolTable, self.allocator);
             if (functionDef) |resolvedFnDef| {
-                // TODO: Not handling global variables
                 const tacTopLevelDecl = try self.allocator.create(tac.TopLevel);
                 tacTopLevelDecl.* = .{
                     .Function = resolvedFnDef,
@@ -989,11 +989,13 @@ pub const Expression = union(ExpressionType) {
                                 .type = switch (unary.type.?) {
                                     .Integer, .UInteger => assembly.AsmType.LongWord,
                                     .Long, .ULong => assembly.AsmType.QuadWord,
+                                    .Float => .Float,
                                     else => unreachable,
                                 },
                                 .signed = switch (unary.type.?) {
                                     .Integer, .Long => true,
                                     .UInteger, .ULong => false,
+                                    .Float => true,
                                     else => unreachable,
                                 },
                                 .static = false,
