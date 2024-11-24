@@ -516,14 +516,27 @@ pub const Parser = struct {
         } };
         return unaryNode;
     }
+    inline fn handleSignedInt(buffer: []u8) ParserError!AST.Constant {
+        const val = std.fmt.parseInt(i32, buffer, 10) catch |err| {
+            if (err == error.Overflow)
+                return .{
+                    .type = .UInteger,
+                    .value = .{ .UInteger = try std.fmt.parseInt(u32, buffer, 10) },
+                };
+            return err;
+        };
+        return .{
+            .type = .Integer,
+            .value = .{ .Integer = val },
+        };
+    }
     pub inline fn parseInteger(self: *Parser) ParserError!*AST.Expression {
         const currToken = try self.l.nextToken(self.allocator);
         const integerNode = try self.allocator.create(AST.Expression);
+        // std.fmt.parseInt(i32, self.l.buffer[currToken.start .. currToken.end + 1], 10) catch ||
+        //             std.fmt.parseInt(u32, self.l.buffer[currToken.start .. currToken.end + 1], 10);
         integerNode.* = AST.Expression{
-            .Constant = AST.Constant{
-                .type = .Integer,
-                .value = .{ .Integer = try std.fmt.parseInt(i32, self.l.buffer[currToken.start .. currToken.end + 1], 10) },
-            },
+            .Constant = try handleSignedInt(self.l.buffer[currToken.start .. currToken.end + 1]),
         };
         return integerNode;
     }

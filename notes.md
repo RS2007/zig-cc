@@ -307,7 +307,11 @@ int main(){
 
 - writing a pass to replace all longs in the AST with a temp variable,
 
+
 - To fix:
   - [x] Lexing doubles of the form `.\[0-9]*`
   - [x] Lexing doubles of the form `[0-9]*e[0-9]*`
-  - Expressions of this form returning a type error: `(-0.0005 > <var-name>)`
+  - [x] Expressions of this form returning a type error: `(-0.0005 > <var-name>)`
+  - [x] UIntToFloat
+  - [x] Test case with floats and integer arguments
+

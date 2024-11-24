@@ -17,6 +17,10 @@ pub const Program = struct {
             \\ .align 8
             \\ longUpperBound:
             \\ .double 9223372036854775808.0
+            \\ .local uIntUpperBound
+            \\ .align 8 
+            \\ uIntUpperBound: 
+            \\ .double 4294967295.0
             \\ .local negZero 
             \\ .align 16
             \\ negZero:
@@ -423,6 +427,7 @@ pub const Operand = union(OperandType) {
 pub const UnaryOp = enum {
     Neg,
     Not,
+    Shr,
 };
 
 pub const BinaryOp = enum {
@@ -569,6 +574,9 @@ pub const Instruction = union(InstructionType) {
                     },
                     .Not => {
                         return (try std.fmt.allocPrint(allocator, "notl {s}", .{try @constCast(&unary.rhs).stringify(allocator)}));
+                    },
+                    .Shr => {
+                        return (try std.fmt.allocPrint(allocator, "shr{s} {s}", .{ unary.type.suffix(), try @constCast(&unary.rhs).stringify(allocator) }));
                     },
                 }
             },

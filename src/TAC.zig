@@ -387,24 +387,12 @@ pub const Instruction = union(InstructionType) {
                 ));
             },
             .FloatToUInt => |floatToUInt| {
-                //const cvttsd2si = try allocator.create(assembly.Instruction);
-                //const comisd = try allocator.create(assembly.Instruction);
-                //const jae = try allocator.create(assembly.Instruction);
-                //const cvtInRange = try allocator.create(assembly.Instruction);
-                //const cvtOutOfRange = try allocator.create(assembly.Instruction);
-                //const uncondJmp = try allocator.create(assembly.Instruction);
-                //const outOfRangeLabel = try allocator.create(assembly.Instruction);
-                //const movXmm0ToXmm1 = try allocator.create(assembly.Instruction);
-
-                //const subUpperBoundFromSrc = try allocator.create(assembly.Instruction);
-                //const cvtOutOfRange = try allocator.create(assembly.Instruction);
-                //const movUpperBoundToRdx = try allocator.create(assembly.Instruction);
-                //const rdxRax = try allocator.create(assembly.Instruction);
                 const src = try floatToUInt.src.codegen(symbolTable, allocator);
                 const dest = try floatToUInt.dest.codegen(symbolTable, allocator);
-                const outOfRangeLabel = try std.fmt.allocPrint(allocator, "outOfRange", .{});
+                const id = ast.tempGen.genId();
+                const outOfRangeLabel = try std.fmt.allocPrint(allocator, "outOfRange{}", .{id});
                 const longUpperBound = try std.fmt.allocPrint(allocator, "longUpperBound", .{});
-                const endLabel = try std.fmt.allocPrint(allocator, "endLabel", .{});
+                const endLabel = try std.fmt.allocPrint(allocator, "endLabel{}", .{id});
                 var floatToUIntInst = [_]*assembly.Instruction{
                     try assembly.createInst(.Cmp, assembly.Cmp{
                         .op2 = src,
@@ -453,37 +441,6 @@ pub const Instruction = union(InstructionType) {
                 };
 
                 try instructions.appendSlice(&floatToUIntInst);
-
-                //    comisd  .L_upper_bound(%rip), %xmm0
-                //    jae     .L_out_of_range
-                //    cvttsd2siq    %xmm0, %rax
-                //    jmp     .L_end
-                //.L_out_of_range:
-                //    movsd   %xmm0, %xmm1
-                //    subsd   .L_upper_bound(%rip), %xmm1
-                //    cvttsd2siq    %xmm1, %rax
-                //    movq    $9223372036854775808, %rdx
-                //    addq    %rdx, %rax
-                //.L_end:
-
-                //cvttsd2si.* = .{
-                //    .Cvttsd2si = .{
-                //        .src = src,
-                //        .dest = assembly.Operand{ .Reg = .RAX },
-                //        .type = .QuadWord,
-                //    },
-                //};
-                //const truncate = try allocator.create(assembly.Instruction);
-                //truncate.* = .{
-                //    .Mov = .{
-                //        .src = assembly.Operand{ .Reg = .EAX },
-                //        .dest = dest,
-                //        .type = .LongWord,
-                //    },
-                //};
-                //INFO: if value is outside the unsigned integer range, then it is undefined behaviour, should we handle this?
-                //try instructions.append(cvttsd2si);
-                //try instructions.append(truncate);
             },
             .IntToFloat => |intToFloat| {
                 const src = try intToFloat.src.codegen(symbolTable, allocator);
@@ -494,7 +451,59 @@ pub const Instruction = union(InstructionType) {
                     .type = intToFloat.src.getAsmTypeFromSymTab(symbolTable).?,
                 }, allocator));
             },
-            .UIntToFloat => {},
+            .UIntToFloat => |uIntToFloat| {
+                const src = try uIntToFloat.src.codegen(symbolTable, allocator);
+                const dest = try uIntToFloat.dest.codegen(symbolTable, allocator);
+                const id = ast.tempGen.genId();
+                const outOfRangeLabel = try std.fmt.allocPrint(allocator, "outOfRange{}", .{id});
+                const endLabel = try std.fmt.allocPrint(allocator, "endLabel{}", .{id});
+                const convertInstructions = &[_]*assembly.Instruction{
+                    try assembly.createInst(.Cmp, assembly.Cmp{
+                        .type = uIntToFloat.src.getAsmTypeFromSymTab(symbolTable).?,
+                        .op1 = .{ .Imm = 0 },
+                        .op2 = src,
+                    }, allocator),
+                    try assembly.createInst(.JmpCC, assembly.JmpCC{
+                        .code = .L,
+                        .label = outOfRangeLabel,
+                    }, allocator),
+                    try assembly.createInst(.Cvtsi2sd, assembly.Cvtsi2sd{
+                        .src = src,
+                        .dest = dest,
+                        .type = uIntToFloat.src.getAsmTypeFromSymTab(symbolTable).?,
+                    }, allocator),
+                    try assembly.createInst(.Jmp, endLabel, allocator),
+                    try assembly.createInst(.Label, outOfRangeLabel, allocator),
+                    try assembly.createInst(.Mov, assembly.MovInst{
+                        .src = src,
+                        .dest = .{ .Reg = .RAX },
+                        .type = .QuadWord,
+                    }, allocator),
+                    try assembly.createInst(.Unary, assembly.UnaryInst{
+                        .rhs = src,
+                        .op = .Shr,
+                        .type = .QuadWord,
+                    }, allocator),
+                    try assembly.createInst(.Cvtsi2sd, assembly.Cvtsi2sd{
+                        .dest = .{ .Reg = .XMM0 },
+                        .src = .{ .Reg = .RAX },
+                        .type = .QuadWord,
+                    }, allocator),
+                    try assembly.createInst(.Binary, assembly.BinaryInst{
+                        .lhs = .{ .Reg = .XMM0 },
+                        .rhs = .{ .Reg = .XMM0 },
+                        .op = .Add,
+                        .type = .Float,
+                    }, allocator),
+                    try assembly.createInst(.Mov, assembly.MovInst{
+                        .src = .{ .Reg = .XMM0 },
+                        .dest = dest,
+                        .type = .Float,
+                    }, allocator),
+                    try assembly.createInst(.Label, endLabel, allocator),
+                };
+                try instructions.appendSlice(convertInstructions);
+            },
             .FloatToInt => |floatToInt| {
                 const src = try floatToInt.src.codegen(symbolTable, allocator);
                 const dest = try floatToInt.dest.codegen(symbolTable, allocator);
@@ -504,6 +513,7 @@ pub const Instruction = union(InstructionType) {
                     .type = floatToInt.dest.getAsmTypeFromSymTab(symbolTable).?,
                 }, allocator));
             },
+
             .Return => |ret| {
                 const val = try ret.val.codegen(symbolTable, allocator);
                 const instType = ret.val.getAsmTypeFromSymTab(symbolTable).?;
