@@ -64,7 +64,7 @@ pub fn astSymTabToTacSymTab(allocator: std.mem.Allocator, astSymTab: std.StringH
             .Float => .{ .Obj = .{
                 .type = .Float,
                 .static = std.meta.activeTag(sym.attributes) == .StaticAttr,
-                .signed = false,
+                .signed = true,
             } },
             .Void => unreachable,
         };
@@ -835,7 +835,7 @@ pub const Val = union(ValType) {
             .Constant => |constant| switch (constant) {
                 .Long, .Integer => true,
                 .ULong, .UInt => false,
-                .Float => unreachable,
+                .Float => true,
             },
             .Variable => |varName| if (symbolTable.get(varName)) |sym| sym.Obj.signed else {
                 std.log.warn("Not found: {s}\n", .{varName});

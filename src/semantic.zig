@@ -1052,6 +1052,7 @@ fn typecheckExpr(self: *Typechecker, expr: *AST.Expression) TypeError!AST.Type {
             };
             if (t == .Float) {
                 const tempId = try AST.tempGen.genTemp(self.allocator);
+                std.log.warn("tempId: {any}\n", .{tempId});
                 const sym = try self.allocator.create(Symbol);
                 sym.* = .{
                     .typeInfo = .Float,

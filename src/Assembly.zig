@@ -18,7 +18,7 @@ pub const Program = struct {
             \\ longUpperBound:
             \\ .double 9223372036854775808.0
             \\ .local negZero 
-            \\ .align 8
+            \\ .align 16
             \\ negZero:
             \\ .double -0.0
             \\ .section .text

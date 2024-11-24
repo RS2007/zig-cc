@@ -1193,8 +1193,8 @@ test "comparision big for floats" {
     const programStr =
         \\ double fiftyFiveE = 5500000.0;
         \\ double fiftyFourE = 540000.0;
-        \\ double tiny = 0.00004;
-        \\ double four = 4.0;
+        \\ double tiny = .00004;
+        \\ double four = 4.;
         \\ double pointOne = 0.1;
         \\ int main() {
         \\ 

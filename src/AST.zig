@@ -14,6 +14,7 @@ pub const TempGenerator = struct {
     pub fn genTemp(self: *TempGenerator, allocator: std.mem.Allocator) CodegenError![]u8 {
         const tempPrefix = "tmp";
         const tempVar = try std.fmt.allocPrint(allocator, "{s}{d}", .{ tempPrefix, self.genId() });
+        // if (std.mem.eql(u8, tempVar, "tmp10")) unreachable;
         return tempVar;
     }
 

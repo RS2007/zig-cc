@@ -185,10 +185,10 @@ Return(Unary(Negate,
 - Probably make something like a result type.
 - the expression typeerrors are not being printed properly
 - Later typechecker design:
-    - redesign parser to not use strings at all
-    - instead use tokens to give line number errors
-    - print the line and put a ^ at the error
-    - ansii colors to make it look pretty?
+  - redesign parser to not use strings at all
+  - instead use tokens to give line number errors
+  - print the line and put a ^ at the error
+  - ansii colors to make it look pretty?
 
 ## Global compile time evaluator pass
 
@@ -198,35 +198,35 @@ Return(Unary(Negate,
 - compileTimExprEval()
 - assert that the expression if exists is assignment
 - throw error for function calls (non constant)
-- throw error for identifiers that are not part of global symbol table 
+- throw error for identifiers that are not part of global symbol table
 - extract from typechecker? All vars with external linkage can be used
-
 
 ## Global variable stuff
 
-* handle globals    
-* global evaluator pass
-* 
+- handle globals
+- global evaluator pass
+-
 
 > [!NOTE]
 > Qualifier should always proceed the type in this C subset.
 
-* Storage specifier behaviour
-* static variable in file scope
-* static function in file scope
-* static variable in block scope
+- Storage specifier behaviour
+- static variable in file scope
+- static function in file scope
+- static variable in block scope
 
-* At file scope, the static specifier indicates that the 
-variable/function has internal linkage.
-* At block scope, static specifier indicates the storage
-duraction.
-* If a var is declared extern at a point where the exiting
-var already has an internal/external linkage, new declaration
-will have the same linkage as the existing one.
-
+- At file scope, the static specifier indicates that the
+  variable/function has internal linkage.
+- At block scope, static specifier indicates the storage
+  duraction.
+- If a var is declared extern at a point where the exiting
+  var already has an internal/external linkage, new declaration
+  will have the same linkage as the existing one.
 
 ### Errors
-* Conflicting declarations
+
+- Conflicting declarations
+
 ```c
 int main(){
     extern int k;
@@ -234,14 +234,18 @@ int main(){
 }
 static int k = 4;
 ```
-* same variable can't have two different linkage types
-* no linkage available for extern, hence will be external
-* later it becomes internal
+
+- same variable can't have two different linkage types
+- no linkage available for extern, hence will be external
+- later it becomes internal
+
 ```c
 
 ```
-* no two entities can have the same type (redeclared as a different kind of
-symbol)
+
+- no two entities can have the same type (redeclared as a different kind of
+  symbol)
+
 ```c
 int foo = 3;
 int foo(int);
@@ -249,56 +253,61 @@ int main(){
     return foo(3);
 }
 ```
-* initializer for a static variable must be a constant expression 
-* no specifiers in for loop header or function arguments list
 
+- initializer for a static variable must be a constant expression
+- no specifiers in for loop header or function arguments list
 
 ### Symbol table
 
-* Variable resolution level (Stack of hashmaps):
-    * Need it to maintain variable names for that scope
-* At typechecker level 
-    * To maintain the types and initial values of symbols
-    * Later used to generate TAC:
-        * static variables: top level tac symbols
-        * tac instructions(function bodies)
-* At assembly level:
-    * How are types kept in assembly?
+- Variable resolution level (Stack of hashmaps):
+  - Need it to maintain variable names for that scope
+- At typechecker level
+  - To maintain the types and initial values of symbols
+  - Later used to generate TAC:
+    - static variables: top level tac symbols
+    - tac instructions(function bodies)
+- At assembly level:
 
+  - How are types kept in assembly?
 
-* A bug in variable scope resolution
-* An Id has to be created for each scope
-* function args need to be renamed as well
+- A bug in variable scope resolution
+- An Id has to be created for each scope
+- function args need to be renamed as well
 
-* In TAC, while generating instructions, we need to know the type of the tac
-symbol
-* Hence a TAC symbol table needs to be constructed
-
+- In TAC, while generating instructions, we need to know the type of the tac
+  symbol
+- Hence a TAC symbol table needs to be constructed
 
 ### Adding unsigned
 
 #### In parser
-- unsigned long as an entirely different type 
-    - just handle it within the switches for different types (compiler will aid
+
+- unsigned long as an entirely different type
+  - just handle it within the switches for different types (compiler will aid
     refactoring in this case)
 - add unsigned as a modifier (have to keep track of this everywhere, lots of
-places can be missed in the code)
+  places can be missed in the code)
 
 #### Type conversions
-* In asm, integers are integers, neither signed nor unsigned(cause they are
-represented as 2s complements)
-* Addition,subtraction and multiplication? remains the same, no casting required between integer
+
+- In asm, integers are integers, neither signed nor unsigned(cause they are
+  represented as 2s complements)
+- Addition,subtraction and multiplication? remains the same, no casting required between integer
   and unsigned
-    * `CF` and `OF` flags
 
-* division and compare operations change:
-    * Idiv vs div:
-        * Need for a different div instructions
-        * 
-    * cmp using the `CF` flag instead of the `ZF` flag 
-        * different set of conditional codes
-    
+  - `CF` and `OF` flags
 
+- division and compare operations change:
 
+  - Idiv vs div:
+    - Need for a different div instructions
+    -
+  - cmp using the `CF` flag instead of the `ZF` flag
+    - different set of conditional codes
 
-* writing a pass to replace all longs in the AST with a temp variable, 
+- writing a pass to replace all longs in the AST with a temp variable,
+
+- To fix:
+  - [x] Lexing doubles of the form `.\[0-9]*`
+  - [x] Lexing doubles of the form `[0-9]*e[0-9]*`
+  - Expressions of this form returning a type error: `(-0.0005 > <var-name>)`
