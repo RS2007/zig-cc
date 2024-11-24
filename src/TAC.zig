@@ -523,6 +523,23 @@ pub const Instruction = union(InstructionType) {
                 const dest = try unary.dest.codegen(symbolTable, allocator);
                 const src = try unary.src.codegen(symbolTable, allocator);
                 const destType = unary.dest.getAsmTypeFromSymTab(symbolTable).?;
+                if (destType == .Float) {
+                    const negZero = "negZero";
+                    try instructions.appendSlice(&[_]*assembly.Instruction{
+                        try assembly.createInst(.Mov, assembly.MovInst{
+                            .src = src,
+                            .dest = dest,
+                            .type = destType,
+                        }, allocator),
+                        try assembly.createInst(.Binary, assembly.BinaryInst{
+                            .lhs = dest,
+                            .rhs = .{ .Data = @constCast(negZero) },
+                            .type = destType,
+                            .op = .Xor,
+                        }, allocator),
+                    });
+                    return;
+                }
                 var unaryInstructions = [_]*assembly.Instruction{
                     try assembly.createInst(.Mov, assembly.MovInst{
                         .type = destType,

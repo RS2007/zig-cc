@@ -17,6 +17,10 @@ pub const Program = struct {
             \\ .align 8
             \\ longUpperBound:
             \\ .double 9223372036854775808.0
+            \\ .local negZero 
+            \\ .align 8
+            \\ negZero:
+            \\ .double -0.0
             \\ .section .text
             \\
         );
@@ -425,17 +429,22 @@ pub const BinaryOp = enum {
     Add,
     Subtract,
     Multiply,
+    Xor,
     pub fn stringify(self: BinaryOp, asmType: AsmType, allocator: std.mem.Allocator) ast.CodegenError![]u8 {
         const suffix = switch (asmType) {
             .LongWord => "l",
             .QuadWord => "q",
             .Float => "sd",
         };
-        return (try std.fmt.allocPrint(allocator, "{s}{s}", .{ switch (self) {
-            .Add => "add",
-            .Subtract => "sub",
-            .Multiply => if (asmType == .Float) "mul" else "imul",
-        }, suffix.ptr }));
+        return if (self == .Xor) try std.fmt.allocPrint(allocator, "xorpd", .{}) else (try std.fmt.allocPrint(allocator, "{s}{s}", .{
+            switch (self) {
+                .Add => "add",
+                .Subtract => "sub",
+                .Multiply => if (asmType == .Float) "mul" else "imul",
+                else => unreachable,
+            },
+            suffix.ptr,
+        }));
     }
 };
 
