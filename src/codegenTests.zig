@@ -1191,14 +1191,15 @@ test "comparision big for floats" {
     const cFileWriter = (try std.fs.cwd().createFile("./cFiles/C/compBigFloats.c", .{})).writer();
     const sFileWriter = (try std.fs.cwd().createFile("./cFiles/S/compBigFloats.s", .{})).writer();
     const programStr =
-        \\ double fiftyFiveE = 5500000.0;
-        \\ double fiftyFourE = 540000.0;
+        \\ double fiftyFive = 55e5;
+        \\ double fiftyFour = 54e4;
         \\ double tiny = .00004;
         \\ double four = 4.;
         \\ double pointOne = 0.1;
+        \\ 
         \\ int main() {
         \\ 
-        \\     if (fiftyFiveE < fiftyFourE) {
+        \\     if (fiftyFive < fiftyFour) {
         \\         return 1;
         \\     }
         \\ 
@@ -1210,7 +1211,7 @@ test "comparision big for floats" {
         \\         return 3;
         \\     }
         \\ 
-        \\     if (fiftyFourE >= fiftyFiveE) {
+        \\     if (fiftyFour >= fiftyFive) {
         \\         return 4;
         \\     }
         \\ 
@@ -1223,16 +1224,19 @@ test "comparision big for floats" {
         \\     }
         \\ 
         \\ 
-        \\     if ((tiny <= 0.000005))  {
+        \\     if ((tiny <= 00.000005))  {
         \\         return 7;
         \\     }
         \\ 
+        \\     if ((-.00004 >= four)) {
+        \\         return 8;
+        \\     }
         \\ 
         \\     if ((tiny > tiny)) {
         \\         return 9;
         \\     }
         \\ 
-        \\     if ((fiftyFiveE < fiftyFiveE)) {
+        \\     if ((fiftyFive < fiftyFive)) {
         \\         return 10;
         \\     }
         \\ 
@@ -1240,7 +1244,7 @@ test "comparision big for floats" {
         \\         return 11;
         \\     }
         \\ 
-        \\     if ((tiny == 0.00003)) {
+        \\     if ((tiny == .00003)) {
         \\         return 12;
         \\     }
         \\ 
@@ -1273,22 +1277,78 @@ test "comparision big for floats" {
     try cFileWriter.writeAll(programStr);
 }
 
-test "failing test" {
+test "big test for float arith" {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     const allocator = arena.allocator();
     defer arena.deinit();
-    const cFileWriter = (try std.fs.cwd().createFile("./cFiles/C/fail.c", .{})).writer();
-    const sFileWriter = (try std.fs.cwd().createFile("./cFiles/S/fail.s", .{})).writer();
+    const cFileWriter = (try std.fs.cwd().createFile("./cFiles/C/floatArithBig.c", .{})).writer();
+    const sFileWriter = (try std.fs.cwd().createFile("./cFiles/S/floatArithBig.s", .{})).writer();
     const programStr =
-        \\     double four = 4.0;
-        \\     int main(){
-        \\         double num = -0.00004;
-        \\         if (num >= four) {
-        \\             return 8;
-        \\         }
-        \\         return 0;
+        \\ double pointOne = 0.1;
+        \\ double pointTwo = 0.2;
+        \\ double pointThree = 0.3;
+        \\ 
+        \\ double two = 2.0;
+        \\ double three = 3.0;
+        \\ double four = 4.0;
+        \\ double twelveThirty = 12e30;
+        \\ 
+        \\ int addition() {
+        \\     return (pointOne + pointTwo == 0.30000000000000004);
+        \\ }
+        \\ 
+        \\ int subtraction() {
+        \\     return (four - 1.0 == 3.0);
+        \\ }
+        \\ 
+        \\ int multiplication() {
+        \\     return (0.01 * pointThree == 0.003);
+        \\ }
+        \\ 
+        // \\ int division() {
+        // \\     return (7.0 / two == 3.5);
+        // \\ }
+        \\ 
+        \\ int negation() {
+        \\     double neg = -twelveThirty;
+        \\     return (12e30 + neg) == 0;
+        \\ }
+        \\ 
+        \\ int compExpr() {
+        \\     double compExpr = (two + three) - 127.5 * four;
+        \\     return compExpr == -505.0;
+        \\ }
+        \\ 
+        \\ int main() {
+        \\ 
+        \\     if (addition() == 0) {
+        \\         return 1;
         \\     }
+        \\ 
+        \\     if (subtraction() == 0){
+        \\         return 2;
+        \\     }
+        \\ 
+        \\     if (multiplication() == 0) {
+        \\         return 3;
+        \\     }
+        \\ 
+        // \\     if (division() == 0) {
+        // \\         return 4;
+        // \\     }
+        \\ 
+        \\     if (negation() == 0) {
+        \\         return 5;
+        \\     }
+        \\ 
+        \\     if (compExpr() == 0) {
+        \\         return 5;
+        \\     }
+        \\ 
+        \\     return 0;
+        \\ }
     ;
+
     const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
     var p = try parser.Parser.init(allocator, l);
     const program = try p.parseProgram();

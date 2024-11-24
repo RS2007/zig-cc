@@ -338,7 +338,7 @@ pub const Type = enum {
         return switch (self) {
             .Long, .Integer => true,
             .UInteger, .ULong => false,
-            .Float => true,
+            .Float => false,
             else => unreachable,
         };
     }
@@ -996,7 +996,7 @@ pub const Expression = union(ExpressionType) {
                                 .signed = switch (unary.type.?) {
                                     .Integer, .Long => true,
                                     .UInteger, .ULong => false,
-                                    .Float => true,
+                                    .Float => false,
                                     else => unreachable,
                                 },
                                 .static = false,
@@ -1030,6 +1030,7 @@ pub const Expression = union(ExpressionType) {
                                 .signed = switch (unary.type.?) {
                                     .Integer, .Long => true,
                                     .UInteger, .ULong => false,
+                                    .Float => false,
                                     else => unreachable,
                                 },
                                 .static = false,
@@ -1070,6 +1071,7 @@ pub const Expression = union(ExpressionType) {
                             .signed = switch (binary.type.?) {
                                 .Integer, .Long => true,
                                 .UInteger, .ULong => false,
+                                .Float => false,
                                 else => unreachable,
                             },
                             .static = false,
@@ -1175,8 +1177,9 @@ pub const Expression = union(ExpressionType) {
                             else => unreachable,
                         },
                         .signed = switch (binary.type.?) {
-                            .Integer, .Long, .Float => true,
+                            .Integer, .Long => true,
                             .UInteger, .ULong => false,
+                            .Float => false,
                             else => unreachable,
                         },
                         .static = false,
@@ -1227,6 +1230,7 @@ pub const Expression = union(ExpressionType) {
                         .signed = switch (ternary.type.?) {
                             .Integer, .Long => true,
                             .UInteger, .ULong => false,
+                            .Float => false,
                             else => unreachable,
                         },
                         .static = false,
@@ -1294,8 +1298,9 @@ pub const Expression = union(ExpressionType) {
                             else => unreachable,
                         },
                         .signed = switch (fnCall.type.?) {
-                            .Integer, .Long, .Float => true,
+                            .Integer, .Long => true,
                             .UInteger, .ULong => false,
+                            .Float => false,
                             else => unreachable,
                         },
                         .static = false,

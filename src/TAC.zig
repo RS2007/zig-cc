@@ -64,7 +64,7 @@ pub fn astSymTabToTacSymTab(allocator: std.mem.Allocator, astSymTab: std.StringH
             .Float => .{ .Obj = .{
                 .type = .Float,
                 .static = std.meta.activeTag(sym.attributes) == .StaticAttr,
-                .signed = true,
+                .signed = false,
             } },
             .Void => unreachable,
         };
@@ -651,7 +651,9 @@ pub const Instruction = union(InstructionType) {
                         const lhsSigned = binary.left.isSignedFromSymTab(symbolTable);
                         const rhsSigned = binary.right.isSignedFromSymTab(symbolTable);
                         if (lhsSigned != rhsSigned) {
-                            std.log.warn("binary: {any}\n", .{binary});
+                            std.log.warn("lhsSigned: {any}\n", .{lhsSigned});
+                            std.log.warn("rhsSigned: {any}\n", .{rhsSigned});
+                            std.log.err("binary: {any}\n", .{binary});
                             unreachable;
                         }
                         var comparisionInst = [_]*assembly.Instruction{
@@ -835,7 +837,7 @@ pub const Val = union(ValType) {
             .Constant => |constant| switch (constant) {
                 .Long, .Integer => true,
                 .ULong, .UInt => false,
-                .Float => true,
+                .Float => false,
             },
             .Variable => |varName| if (symbolTable.get(varName)) |sym| sym.Obj.signed else {
                 std.log.warn("Not found: {s}\n", .{varName});
