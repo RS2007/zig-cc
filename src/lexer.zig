@@ -154,7 +154,7 @@ pub const Lexer = struct {
     }
 
     inline fn lexFloatLike(lexer: *Lexer, allocator: std.mem.Allocator) LexerError!?*Token {
-        if (!(lexer.current < lexer.buffer.len and std.ascii.isDigit(lexer.buffer[lexer.current]))) {
+        if (!(lexer.current < lexer.buffer.len and (std.ascii.isDigit(lexer.buffer[lexer.current]) or lexer.buffer[lexer.current] == '.'))) {
             // Early return, no digit found
             return null;
         }
@@ -166,6 +166,13 @@ pub const Lexer = struct {
         }
         if (lexer.current < lexer.buffer.len and lexer.buffer[lexer.current] == '.') {
             lexer.current += 1;
+        }
+        while (lexer.current < lexer.buffer.len and std.ascii.isDigit(lexer.buffer[lexer.current])) {
+            lexer.current += 1;
+        }
+        if (lexer.current < lexer.buffer.len and (lexer.buffer[lexer.current] == 'e' or lexer.buffer[lexer.current] == 'E')) {
+            lexer.current += 1;
+            if (lexer.buffer[lexer.current] == '-') lexer.current += 1;
         }
         while (lexer.current < lexer.buffer.len and std.ascii.isDigit(lexer.buffer[lexer.current])) {
             lexer.current += 1;
@@ -187,9 +194,9 @@ pub const Lexer = struct {
         while (lexer.current < lexer.buffer.len and std.ascii.isDigit(lexer.buffer[lexer.current])) {
             lexer.current += 1;
         }
-        // After integer parsing is done, check for a '.'. If a dot is
+        // After integer parsing is done, check for a '.' or e. If a dot is
         // encountered, integer parsing fails and returns null
-        if (lexer.current < lexer.buffer.len and lexer.buffer[lexer.current] == '.') {
+        if (lexer.current < lexer.buffer.len and (lexer.buffer[lexer.current] == '.' or lexer.buffer[lexer.current] == 'e' or lexer.buffer[lexer.current] == 'E')) {
             lexer.current = initialPtr;
             return null;
         }
@@ -200,7 +207,7 @@ pub const Lexer = struct {
     }
 
     inline fn peekLexFloatLike(lexer: *Lexer, allocator: std.mem.Allocator) LexerError!?*Token {
-        if (!(lexer.current < lexer.buffer.len and std.ascii.isDigit(lexer.buffer[lexer.current]))) {
+        if (!(lexer.current < lexer.buffer.len and (std.ascii.isDigit(lexer.buffer[lexer.current]) or lexer.buffer[lexer.current] == '.'))) {
             // Early return, no digit found
             return null;
         }
@@ -217,6 +224,15 @@ pub const Lexer = struct {
         while (finalPtr < lexer.buffer.len and std.ascii.isDigit(lexer.buffer[finalPtr])) {
             finalPtr += 1;
         }
+
+        if (finalPtr < lexer.buffer.len and (lexer.buffer[finalPtr] == 'e' or lexer.buffer[finalPtr] == 'E')) {
+            finalPtr += 1;
+            if (lexer.buffer[finalPtr] == '-') finalPtr += 1;
+        }
+        while (finalPtr < lexer.buffer.len and std.ascii.isDigit(lexer.buffer[finalPtr])) {
+            finalPtr += 1;
+        }
+
         token.type = TokenType.FLOAT;
         token.start = initialPtr;
         token.end = finalPtr - 1;
@@ -225,7 +241,7 @@ pub const Lexer = struct {
 
     inline fn peekLexIntegerLike(lexer: *Lexer, allocator: std.mem.Allocator) LexerError!?*Token {
         if (!(lexer.current < lexer.buffer.len and std.ascii.isDigit(lexer.buffer[lexer.current]))) {
-            // Early return, no digit found
+            // Early return, no digit or . found
             return null;
         }
         var token = try allocator.create(Token);
@@ -237,7 +253,7 @@ pub const Lexer = struct {
         }
         // After integer parsing is done, check for a '.'. If a dot is
         // encountered, integer parsing fails and returns null
-        if (finalPtr < lexer.buffer.len and lexer.buffer[finalPtr] == '.') return null;
+        if (finalPtr < lexer.buffer.len and (lexer.buffer[finalPtr] == '.' or lexer.buffer[finalPtr] == 'e' or lexer.buffer[finalPtr] == 'E')) return null;
         token.type = TokenType.INTEGER;
         token.start = initialPtr;
         token.end = finalPtr - 1;
@@ -366,7 +382,7 @@ pub const Lexer = struct {
                     "long",
                     "unsigned",
                     "signed",
-                    "float",
+                    "double",
                 }, &[_]TokenType{
                     TokenType.INT_TYPE,
                     TokenType.RETURN,
@@ -564,7 +580,7 @@ pub const Lexer = struct {
                     "long",
                     "unsigned",
                     "signed",
-                    "float",
+                    "double",
                 }, &[_]TokenType{
                     TokenType.INT_TYPE,
                     TokenType.RETURN,

@@ -32,6 +32,7 @@ pub const Constant = struct {
         Long: i64,
         UInteger: u32,
         ULong: u64,
+        Float: f64,
     },
 };
 
@@ -68,7 +69,8 @@ pub const TypeError = error{
     FnRedeclaredAsVar,
     ConflictingDeclarations,
     FnPrevDeclArgMismatch,
-};
+    InvalidOperand,
+} || AST.CodegenError;
 
 const TypeCheckerError = error{OutOfMemory} || TypeError;
 
@@ -94,6 +96,7 @@ pub const TypeKind = enum {
     Long,
     ULong,
     UInteger,
+    Float,
 
     const Self = @This();
     pub fn from(self: AST.Type) Self {
@@ -103,6 +106,7 @@ pub const TypeKind = enum {
             .Long => .Long,
             .UInteger => .UInteger,
             .ULong => .ULong,
+            .Float => .Float,
         };
     }
 };
@@ -120,6 +124,7 @@ pub const TypeInfo = union(TypeKind) {
     Long,
     ULong,
     UInteger,
+    Float,
 
     const Self = @This();
     pub inline fn isOfKind(self: *Self, other: TypeKind) bool {
@@ -176,7 +181,7 @@ pub const Typechecker = struct {
 
 pub fn resolveBlockReturns(self: *Typechecker, blockItem: *AST.BlockItem, fnReturnType: AST.Type) !void {
     if (std.meta.activeTag(blockItem.*) == .Statement and std.meta.activeTag(blockItem.Statement.*) == .Return) {
-        _ = try convert(self.allocator, blockItem.Statement.Return.expression, fnReturnType);
+        blockItem.Statement.Return.expression = try convert(self.allocator, blockItem.Statement.Return.expression, fnReturnType);
     }
 }
 
@@ -249,6 +254,18 @@ pub fn typecheckExternalDecl(self: *Typechecker, externalDecl: *AST.ExternalDecl
                     }
                 }
 
+                if (functionDecl.returnType != sym.typeInfo.Function.returnType) {
+                    return TypeErrorStruct.typeError(
+                        self.allocator,
+                        TypeError.FnPrevDeclArgMismatch,
+                        try std.fmt.allocPrint(
+                            self.allocator,
+                            "Function {s} has mismatching declarations\n",
+                            .{functionDecl.name},
+                        ),
+                    );
+                }
+
                 if (functionDecl.args.items.len != sym.typeInfo.Function.args.items.len) {
                     return TypeErrorStruct.typeError(
                         self.allocator,
@@ -288,10 +305,11 @@ pub fn typecheckExternalDecl(self: *Typechecker, externalDecl: *AST.ExternalDecl
                     .typeInfo = switch (TypeKind.from(arg.NonVoidArg.type)) {
                         .Void => unreachable,
                         .Integer => .Integer,
-                        .Long => .Long,
                         .Function => unreachable,
                         .ULong => .ULong,
                         .UInteger => .UInteger,
+                        .Long => .Long,
+                        .Float => .Float,
                     },
                     .attributes = .LocalAttr,
                 };
@@ -368,12 +386,17 @@ pub fn typecheckExternalDecl(self: *Typechecker, externalDecl: *AST.ExternalDecl
                         .ULong => .{ .type = .ULong, .value = .{
                             .ULong = expression.Constant.to(u64),
                         } },
+
+                        .Float => .{ .type = .Float, .value = .{
+                            .Float = expression.Constant.value.Float,
+                        } },
                         else => unreachable,
                     } };
                 } else {
                     initializer = .{ .Initial = switch (varDecl.type) {
                         .Integer => .{ .type = .Integer, .value = .{ .Integer = expression.Constant.value.Integer } },
                         .Long => .{ .type = .Long, .value = .{ .Long = expression.Constant.value.Long } },
+                        .Float => .{ .type = .Float, .value = .{ .Float = expression.Constant.value.Float } },
                         else => unreachable,
                     } };
                 }
@@ -499,6 +522,7 @@ pub fn typecheckExternalDecl(self: *Typechecker, externalDecl: *AST.ExternalDecl
                     .Long => .Long,
                     .UInteger => .UInteger,
                     .ULong => .ULong,
+                    .Float => .Float,
                     else => unreachable,
                 },
                 .attributes = .{
@@ -666,6 +690,7 @@ fn typecheckBlkItem(self: *Typechecker, blkItem: *AST.BlockItem) TypeCheckerErro
                         .Long => .Long,
                         .ULong => .ULong,
                         .UInteger => .UInteger,
+                        .Float => .Float,
                         else => unreachable,
                     },
                     .attributes = .LocalAttr,
@@ -928,6 +953,9 @@ inline fn convert(allocator: std.mem.Allocator, expr: *AST.Expression, toType: A
 fn getCommonType(type1: AST.Type, type2: AST.Type) AST.Type {
     // INFO: same types => return the type
     if (type1 == type2) return type1;
+    if (type1 == .Float or type2 == .Float) {
+        return .Float;
+    }
     if (type1.size() == type2.size()) {
         // INFO: for same sized type
         // Otherwise, if both operands have signed integer types or both
@@ -962,6 +990,10 @@ fn typecheckExpr(self: *Typechecker, expr: *AST.Expression) TypeError!AST.Type {
 
             //INFO: Conversion logic
             const commonType = getCommonType(lhsType, rhsType);
+            if (commonType == .Float and expr.Binary.op == .REMAINDER) {
+                std.log.warn("Cannot apply {any} to {any}", .{ expr.Binary.op, commonType });
+                return TypeError.InvalidOperand;
+            }
             expr.Binary.lhs = try convert(self.allocator, expr.Binary.lhs, commonType);
             expr.Binary.rhs = try convert(self.allocator, expr.Binary.rhs, commonType);
 
@@ -1016,13 +1048,48 @@ fn typecheckExpr(self: *Typechecker, expr: *AST.Expression) TypeError!AST.Type {
                 .Long => .Long,
                 .ULong => .ULong,
                 .UInteger => .UInteger,
+                .Float => .Float,
             };
+            if (t == .Float) {
+                const tempId = try AST.tempGen.genTemp(self.allocator);
+                std.log.warn("tempId: {any}\n", .{tempId});
+                const sym = try self.allocator.create(Symbol);
+                sym.* = .{
+                    .typeInfo = .Float,
+                    .attributes = .{
+                        .StaticAttr = .{
+                            .init = .{
+                                .Initial = .{
+                                    .type = .Float,
+                                    .value = .{ .Float = constant.value.Float },
+                                },
+                            },
+                            .global = false,
+                        },
+                    },
+                };
+
+                try self.symbolTable.put(
+                    tempId,
+                    sym,
+                );
+                expr.* = .{
+                    .Identifier = .{
+                        .type = .Float,
+                        .name = tempId,
+                    },
+                };
+            }
             // TODO: Should we store this type?
             // expr.Constant.type = t;
             return t;
         },
         .Unary => |unary| {
             const exprType = try typecheckExpr(self, unary.exp);
+            if (exprType == .Float and unary.unaryOp == .COMPLEMENT) {
+                std.log.warn("operation {any} cannot be applied to {any}", .{ unary.unaryOp, exprType });
+                return TypeError.InvalidOperand;
+            }
             expr.Unary.type = exprType;
             return exprType;
         },

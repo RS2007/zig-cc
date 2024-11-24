@@ -56,10 +56,12 @@ pub const Parser = struct {
         return switch (next.type) {
             .INT_TYPE => .Integer,
             .LONG_TYPE => .Long,
+            .FLOAT_TYPE => .Float,
             .UNSIGNED => blk: {
                 break :blk switch ((try self.l.nextToken(self.allocator)).type) {
                     .INT_TYPE => .UInteger,
                     .LONG_TYPE => .ULong,
+                    .FLOAT_TYPE => .Float,
                     else => unreachable,
                 };
             },
@@ -68,6 +70,7 @@ pub const Parser = struct {
                 break :blk switch ((try self.l.nextToken(self.allocator)).type) {
                     .INT_TYPE => .Integer,
                     .LONG_TYPE => .Long,
+                    .FLOAT_TYPE => .Float,
                     else => unreachable,
                 };
             },
@@ -131,7 +134,6 @@ pub const Parser = struct {
 
     inline fn parseVarDecl(self: *Parser, qualifier: ?AST.Qualifier, returnType: AST.Type) ParserError!*AST.Declaration {
         const varName = try self.l.nextToken(self.allocator);
-        std.log.warn("Return type: {any} and varName: {any}\n", .{ returnType, varName });
         const declaration = try self.allocator.create(AST.Declaration);
         declaration.* = .{
             .name = self.l.buffer[varName.start .. varName.end + 1],
@@ -198,7 +200,7 @@ pub const Parser = struct {
         const blockItem = try self.allocator.create(AST.BlockItem);
         if (nextToken) |nextTok| {
             switch (nextTok.type) {
-                .EXTERN, .STATIC, .INT_TYPE, .LONG_TYPE, .UNSIGNED => {
+                .EXTERN, .STATIC, .INT_TYPE, .LONG_TYPE, .UNSIGNED, .FLOAT_TYPE => {
                     blockItem.* = AST.BlockItem{
                         .Declaration = (try self.parseDeclaration()),
                     };
@@ -526,6 +528,21 @@ pub const Parser = struct {
         return integerNode;
     }
 
+    pub inline fn parseFloat(self: *Parser) ParserError!*AST.Expression {
+        const currToken = try self.l.nextToken(self.allocator);
+        const floatNode = try self.allocator.create(AST.Expression);
+        floatNode.* = AST.Expression{
+            .Constant = AST.Constant{
+                .type = .Float,
+                .value = .{ .Float = try std.fmt.parseFloat(
+                    f64,
+                    self.l.buffer[currToken.start .. currToken.end + 1],
+                ) },
+            },
+        };
+        return floatNode;
+    }
+
     pub inline fn parseLong(self: *Parser) ParserError!*AST.Expression {
         const currToken = try self.l.nextToken(self.allocator);
 
@@ -572,6 +589,7 @@ pub const Parser = struct {
             .IDENTIFIER => try self.parseVarOrFn(),
             .UNSIGNED_INT => try self.parseUnsignedInt(),
             .UNSIGNED_LONG => try self.parseUnsignedLong(),
+            .FLOAT => try self.parseFloat(),
             else => |tokType| {
                 std.log.warn("Parse factor unknown type: {any}\n", .{tokType});
                 unreachable;

@@ -944,3 +944,427 @@ test "big test for unsigned" {
     try asmProgram.stringify(sFileWriter, allocator, tacRenderer.asmSymbolTable);
     try cFileWriter.writeAll(programStr);
 }
+
+test "float to int" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const cFileWriter = (try std.fs.cwd().createFile("./cFiles/C/floatToInt.c", .{})).writer();
+    const sFileWriter = (try std.fs.cwd().createFile("./cFiles/S/floatToInt.s", .{})).writer();
+    const programStr =
+        \\ int main(){
+        \\      return 3.2465;
+        \\ }
+    ;
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    const program = try p.parseProgram();
+    const varResolver = try ast.VarResolver.init(allocator);
+    try varResolver.resolve(program);
+    const typechecker = try semantic.Typechecker.init(allocator);
+    const hasTypeErr = try typechecker.check(program);
+    if (hasTypeErr) |typeError| {
+        std.log.warn("\x1b[33mError\x1b[0m: {s}\n", .{typeError});
+        std.debug.assert(false);
+    }
+    try ast.loopLabelPass(program, allocator);
+    const tacRenderer = try ast.TACRenderer.init(allocator, typechecker.symbolTable);
+    const tacProgram = try tacRenderer.render(program);
+    const asmRenderer = try tac.AsmRenderer.init(allocator, tacRenderer.asmSymbolTable);
+    const asmProgram = try asmRenderer.render(tacProgram);
+    try asmProgram.stringify(sFileWriter, allocator, tacRenderer.asmSymbolTable);
+    try cFileWriter.writeAll(programStr);
+}
+
+test "float arithmetic" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const cFileWriter = (try std.fs.cwd().createFile("./cFiles/C/floatArith.c", .{})).writer();
+    const sFileWriter = (try std.fs.cwd().createFile("./cFiles/S/floatArith.s", .{})).writer();
+    const programStr =
+        \\ int main(){
+        \\      int k = 3.25+(4.23*7.4);
+        \\      return k;
+        \\ }
+    ;
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    const program = try p.parseProgram();
+    const varResolver = try ast.VarResolver.init(allocator);
+    try varResolver.resolve(program);
+    const typechecker = try semantic.Typechecker.init(allocator);
+    const hasTypeErr = try typechecker.check(program);
+    if (hasTypeErr) |typeError| {
+        std.log.warn("\x1b[33mError\x1b[0m: {s}\n", .{typeError});
+        std.debug.assert(false);
+    }
+    try ast.loopLabelPass(program, allocator);
+    const tacRenderer = try ast.TACRenderer.init(allocator, typechecker.symbolTable);
+    const tacProgram = try tacRenderer.render(program);
+    const asmRenderer = try tac.AsmRenderer.init(allocator, tacRenderer.asmSymbolTable);
+    const asmProgram = try asmRenderer.render(tacProgram);
+    try asmProgram.stringify(sFileWriter, allocator, tacRenderer.asmSymbolTable);
+    try cFileWriter.writeAll(programStr);
+}
+
+test "int to float" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const cFileWriter = (try std.fs.cwd().createFile("./cFiles/C/intToFloat.c", .{})).writer();
+    const sFileWriter = (try std.fs.cwd().createFile("./cFiles/S/intToFloat.s", .{})).writer();
+    const programStr =
+        \\ int a(){
+        \\  return 3;
+        \\ }
+        \\ int main(){
+        \\   double b = a();
+        \\   return (b == 3.00);
+        \\ }
+    ;
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    const program = try p.parseProgram();
+    const varResolver = try ast.VarResolver.init(allocator);
+    try varResolver.resolve(program);
+    const typechecker = try semantic.Typechecker.init(allocator);
+    const hasTypeErr = try typechecker.check(program);
+    if (hasTypeErr) |typeError| {
+        std.log.warn("\x1b[33mError\x1b[0m: {s}\n", .{typeError});
+        std.debug.assert(false);
+    }
+    try ast.loopLabelPass(program, allocator);
+    const tacRenderer = try ast.TACRenderer.init(allocator, typechecker.symbolTable);
+    const tacProgram = try tacRenderer.render(program);
+    const asmRenderer = try tac.AsmRenderer.init(allocator, tacRenderer.asmSymbolTable);
+    const asmProgram = try asmRenderer.render(tacProgram);
+    try asmProgram.stringify(sFileWriter, allocator, tacRenderer.asmSymbolTable);
+    try cFileWriter.writeAll(programStr);
+}
+
+test "basic float" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const cFileWriter = (try std.fs.cwd().createFile("./cFiles/C/basicFloat.c", .{})).writer();
+    const sFileWriter = (try std.fs.cwd().createFile("./cFiles/S/basicFloat.s", .{})).writer();
+    const programStr =
+        \\ double add(double a, double b){ return a + b;}
+        \\ int addInt(int a, int b){ return a+b;}
+        \\ int main(){
+        \\    int k = add(2.0,3.2);
+        \\    int c = add(2,3);
+        \\    if(k == c){ return 0; }
+        \\    return 0;
+        \\ }
+    ;
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    const program = try p.parseProgram();
+    const varResolver = try ast.VarResolver.init(allocator);
+    try varResolver.resolve(program);
+    const typechecker = try semantic.Typechecker.init(allocator);
+    const hasTypeErr = try typechecker.check(program);
+    if (hasTypeErr) |typeError| {
+        std.log.warn("\x1b[33mError\x1b[0m: {s}\n", .{typeError});
+        std.debug.assert(false);
+    }
+    try ast.loopLabelPass(program, allocator);
+    const tacRenderer = try ast.TACRenderer.init(allocator, typechecker.symbolTable);
+    const tacProgram = try tacRenderer.render(program);
+    const asmRenderer = try tac.AsmRenderer.init(allocator, tacRenderer.asmSymbolTable);
+    const asmProgram = try asmRenderer.render(tacProgram);
+    try asmProgram.stringify(sFileWriter, allocator, tacRenderer.asmSymbolTable);
+    try cFileWriter.writeAll(programStr);
+}
+
+test "float comparision" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const cFileWriter = (try std.fs.cwd().createFile("./cFiles/C/floatCompare.c", .{})).writer();
+    const sFileWriter = (try std.fs.cwd().createFile("./cFiles/S/floatCompare.s", .{})).writer();
+    const programStr =
+        \\ double add(double a, double b){ return a + b;}
+        \\ int main(){
+        \\    double k = add(2.0,3.2);
+        \\    if(k > 5.21){ return 1; }
+        \\    return 0;
+        \\ }
+    ;
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    const program = try p.parseProgram();
+    const varResolver = try ast.VarResolver.init(allocator);
+    try varResolver.resolve(program);
+    const typechecker = try semantic.Typechecker.init(allocator);
+    const hasTypeErr = try typechecker.check(program);
+    if (hasTypeErr) |typeError| {
+        std.log.warn("\x1b[33mError\x1b[0m: {s}\n", .{typeError});
+        std.debug.assert(false);
+    }
+    try ast.loopLabelPass(program, allocator);
+    const tacRenderer = try ast.TACRenderer.init(allocator, typechecker.symbolTable);
+    const tacProgram = try tacRenderer.render(program);
+    const asmRenderer = try tac.AsmRenderer.init(allocator, tacRenderer.asmSymbolTable);
+    const asmProgram = try asmRenderer.render(tacProgram);
+    try asmProgram.stringify(sFileWriter, allocator, tacRenderer.asmSymbolTable);
+    try cFileWriter.writeAll(programStr);
+}
+
+test "float to uint conversion" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const cFileWriter = (try std.fs.cwd().createFile("./cFiles/C/floatToUInt.c", .{})).writer();
+    const sFileWriter = (try std.fs.cwd().createFile("./cFiles/S/floatToUInt.s", .{})).writer();
+    const programStr =
+        \\ double add(double a, double b){ return a + b;}
+        \\ int main(){
+        \\    double k = add(2.0,3.2);
+        \\    unsigned int l = k;
+        \\    if(l == 5){return 0;}
+        \\    return 1;
+        \\ }
+    ;
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    const program = try p.parseProgram();
+    const varResolver = try ast.VarResolver.init(allocator);
+    try varResolver.resolve(program);
+    const typechecker = try semantic.Typechecker.init(allocator);
+    const hasTypeErr = try typechecker.check(program);
+    if (hasTypeErr) |typeError| {
+        std.log.warn("\x1b[33mError\x1b[0m: {s}\n", .{typeError});
+        std.debug.assert(false);
+    }
+    try ast.loopLabelPass(program, allocator);
+    const tacRenderer = try ast.TACRenderer.init(allocator, typechecker.symbolTable);
+    const tacProgram = try tacRenderer.render(program);
+    const asmRenderer = try tac.AsmRenderer.init(allocator, tacRenderer.asmSymbolTable);
+    const asmProgram = try asmRenderer.render(tacProgram);
+    try asmProgram.stringify(sFileWriter, allocator, tacRenderer.asmSymbolTable);
+    try cFileWriter.writeAll(programStr);
+}
+
+test "calling external library" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const cFileWriter = (try std.fs.cwd().createFile("./cFiles/C/fabs.c", .{})).writer();
+    const sFileWriter = (try std.fs.cwd().createFile("./cFiles/S/fabs.s", .{})).writer();
+    const programStr =
+        \\ double sub(double a, double b){ return a - b;}
+        \\ double fabs(double x);
+        \\ int main(){
+        \\    double k = sub(2.0,3.0);
+        \\    unsigned int l = fabs(k);
+        \\    if(l == 1){return 0;}
+        \\    return 1;
+        \\ }
+    ;
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    const program = try p.parseProgram();
+    const varResolver = try ast.VarResolver.init(allocator);
+    try varResolver.resolve(program);
+    const typechecker = try semantic.Typechecker.init(allocator);
+    const hasTypeErr = try typechecker.check(program);
+    if (hasTypeErr) |typeError| {
+        std.log.warn("\x1b[33mError\x1b[0m: {s}\n", .{typeError});
+        std.debug.assert(false);
+    }
+    try ast.loopLabelPass(program, allocator);
+    const tacRenderer = try ast.TACRenderer.init(allocator, typechecker.symbolTable);
+    const tacProgram = try tacRenderer.render(program);
+    const asmRenderer = try tac.AsmRenderer.init(allocator, tacRenderer.asmSymbolTable);
+    const asmProgram = try asmRenderer.render(tacProgram);
+    try asmProgram.stringify(sFileWriter, allocator, tacRenderer.asmSymbolTable);
+    try cFileWriter.writeAll(programStr);
+}
+
+test "comparision big for floats" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const cFileWriter = (try std.fs.cwd().createFile("./cFiles/C/compBigFloats.c", .{})).writer();
+    const sFileWriter = (try std.fs.cwd().createFile("./cFiles/S/compBigFloats.s", .{})).writer();
+    const programStr =
+        \\ double fiftyFive = 55e5;
+        \\ double fiftyFour = 54e4;
+        \\ double tiny = .00004;
+        \\ double four = 4.;
+        \\ double pointOne = 0.1;
+        \\ 
+        \\ int main() {
+        \\ 
+        \\     if (fiftyFive < fiftyFour) {
+        \\         return 1;
+        \\     }
+        \\ 
+        \\     if (four > 4.0) {
+        \\         return 2;
+        \\     }
+        \\ 
+        \\     if (tiny <= 0.0) {
+        \\         return 3;
+        \\     }
+        \\ 
+        \\     if (fiftyFour >= fiftyFive) {
+        \\         return 4;
+        \\     }
+        \\ 
+        \\     if (tiny == 0.0) {
+        \\         return 5;
+        \\     }
+        \\ 
+        \\     if (pointOne != pointOne) {
+        \\         return 6;
+        \\     }
+        \\ 
+        \\ 
+        \\     if ((tiny <= 00.000005))  {
+        \\         return 7;
+        \\     }
+        \\ 
+        \\     if ((-.00004 >= four)) {
+        \\         return 8;
+        \\     }
+        \\ 
+        \\     if ((tiny > tiny)) {
+        \\         return 9;
+        \\     }
+        \\ 
+        \\     if ((fiftyFive < fiftyFive)) {
+        \\         return 10;
+        \\     }
+        \\ 
+        \\     if ((0.1 != pointOne)) {
+        \\         return 11;
+        \\     }
+        \\ 
+        \\     if ((tiny == .00003)) {
+        \\         return 12;
+        \\     }
+        \\ 
+        \\     if (0.00003 < 0.000000000003) {
+        \\         return 13;
+        \\     }
+        \\ 
+        \\     return 0;
+        \\ 
+        \\ }
+    ;
+
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    const program = try p.parseProgram();
+    const varResolver = try ast.VarResolver.init(allocator);
+    try varResolver.resolve(program);
+    const typechecker = try semantic.Typechecker.init(allocator);
+    const hasTypeErr = try typechecker.check(program);
+    if (hasTypeErr) |typeError| {
+        std.log.warn("\x1b[33mError\x1b[0m: {s}\n", .{typeError});
+        std.debug.assert(false);
+    }
+    try ast.loopLabelPass(program, allocator);
+    const tacRenderer = try ast.TACRenderer.init(allocator, typechecker.symbolTable);
+    const tacProgram = try tacRenderer.render(program);
+    const asmRenderer = try tac.AsmRenderer.init(allocator, tacRenderer.asmSymbolTable);
+    const asmProgram = try asmRenderer.render(tacProgram);
+    try asmProgram.stringify(sFileWriter, allocator, tacRenderer.asmSymbolTable);
+    try cFileWriter.writeAll(programStr);
+}
+
+test "big test for float arith" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const cFileWriter = (try std.fs.cwd().createFile("./cFiles/C/floatArithBig.c", .{})).writer();
+    const sFileWriter = (try std.fs.cwd().createFile("./cFiles/S/floatArithBig.s", .{})).writer();
+    const programStr =
+        \\ double pointOne = 0.1;
+        \\ double pointTwo = 0.2;
+        \\ double pointThree = 0.3;
+        \\ 
+        \\ double two = 2.0;
+        \\ double three = 3.0;
+        \\ double four = 4.0;
+        \\ double twelveThirty = 12e30;
+        \\ 
+        \\ int addition() {
+        \\     return (pointOne + pointTwo == 0.30000000000000004);
+        \\ }
+        \\ 
+        \\ int subtraction() {
+        \\     return (four - 1.0 == 3.0);
+        \\ }
+        \\ 
+        \\ int multiplication() {
+        \\     return (0.01 * pointThree == 0.003);
+        \\ }
+        \\ 
+        \\ int division() {
+        \\     return (7.0 / two == 3.5);
+        \\ }
+        \\ 
+        \\ int negation() {
+        \\     double neg = -twelveThirty;
+        \\     return (12e30 + neg) == 0;
+        \\ }
+        \\ 
+        \\ int compExpr() {
+        \\     double compExpr = (two + three) - 127.5 * four;
+        \\     return compExpr == -505.0;
+        \\ }
+        \\ 
+        \\ int main() {
+        \\ 
+        \\     if (addition() == 0) {
+        \\         return 1;
+        \\     }
+        \\ 
+        \\     if (subtraction() == 0){
+        \\         return 2;
+        \\     }
+        \\ 
+        \\     if (multiplication() == 0) {
+        \\         return 3;
+        \\     }
+        \\ 
+        \\     if (division() == 0) {
+        \\         return 4;
+        \\     }
+        \\ 
+        \\     if (negation() == 0) {
+        \\         return 5;
+        \\     }
+        \\ 
+        \\     if (compExpr() == 0) {
+        \\         return 5;
+        \\     }
+        \\ 
+        \\     return 0;
+        \\ }
+    ;
+
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    const program = try p.parseProgram();
+    const varResolver = try ast.VarResolver.init(allocator);
+    try varResolver.resolve(program);
+    const typechecker = try semantic.Typechecker.init(allocator);
+    const hasTypeErr = try typechecker.check(program);
+    if (hasTypeErr) |typeError| {
+        std.log.warn("\x1b[33mError\x1b[0m: {s}\n", .{typeError});
+        std.debug.assert(false);
+    }
+    try ast.loopLabelPass(program, allocator);
+    const tacRenderer = try ast.TACRenderer.init(allocator, typechecker.symbolTable);
+    const tacProgram = try tacRenderer.render(program);
+    const asmRenderer = try tac.AsmRenderer.init(allocator, tacRenderer.asmSymbolTable);
+    const asmProgram = try asmRenderer.render(tacProgram);
+    try asmProgram.stringify(sFileWriter, allocator, tacRenderer.asmSymbolTable);
+    try cFileWriter.writeAll(programStr);
+}

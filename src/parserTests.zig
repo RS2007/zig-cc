@@ -245,16 +245,16 @@ test "unsigned long and unsigned integer" {
     _ = try std.testing.expectEqual(lexer.TokenType.UNSIGNED_INT, (try l.nextToken(allocator)).type);
 }
 
-test "lexing floats" {
+test "lexing doubles" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
-    const programStr = "float 32.75";
+    const programStr = "double 32.75";
     var l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
     _ = try std.testing.expectEqual(lexer.TokenType.FLOAT_TYPE, (try l.nextToken(allocator)).type);
-    const floatLiteral = try l.nextToken(allocator);
-    _ = try std.testing.expectEqual(lexer.TokenType.FLOAT, floatLiteral.type);
-    _ = try std.testing.expect(std.mem.eql(u8, l.buffer[floatLiteral.start .. floatLiteral.end + 1], "32.75"));
+    const doubleLiteral = try l.nextToken(allocator);
+    _ = try std.testing.expectEqual(lexer.TokenType.FLOAT, doubleLiteral.type);
+    _ = try std.testing.expect(std.mem.eql(u8, l.buffer[doubleLiteral.start .. doubleLiteral.end + 1], "32.75"));
 }
 
 test "testing basic parser" {
@@ -597,4 +597,59 @@ test "long declarations and divide" {
     const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
     var p = try parser.Parser.init(allocator, l);
     _ = try p.parseProgram();
+}
+
+test "double declaration" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const programStr =
+        \\double add(double a, double b) {
+        \\      double k = 0.245;
+        \\      return a + b;
+        \\}
+    ;
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    const externalDecl = try p.parseExternalDecl();
+    std.log.warn("externalDecl: {any}\n", .{externalDecl});
+}
+
+test "floating point representations" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const buffer = ".0004 42.3e4 3e-1";
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(buffer)));
+    const tokens = [_]*lexer.Token{
+        try l.nextToken(allocator),
+        try l.nextToken(allocator),
+        try l.nextToken(allocator),
+    };
+    const values = [_]f64{ 0.0004, 42.3e4, 3e-1 };
+    for (tokens, values) |tok, val| {
+        const floatFromTok = try std.fmt.parseFloat(
+            f64,
+            l.buffer[tok.start .. tok.end + 1],
+        );
+        _ = try std.testing.expectEqual(floatFromTok, val);
+    }
+}
+
+test "floating point representations (peek)" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const buffer = ".0004 42.3e4 3e-1";
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(buffer)));
+    const values = [_]f64{ 0.0004, 42.3e4, 3e-1 };
+    for (values) |val| {
+        const tok = (try l.peekToken(allocator)).?;
+        const floatFromTok = try std.fmt.parseFloat(
+            f64,
+            l.buffer[tok.start .. tok.end + 1],
+        );
+        _ = try std.testing.expectEqual(floatFromTok, val);
+        _ = try l.nextToken(allocator);
+    }
 }
