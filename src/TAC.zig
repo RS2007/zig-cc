@@ -584,6 +584,20 @@ pub const Instruction = union(InstructionType) {
                         try instructions.appendSlice(&binInstructions);
                     },
                     .DIVIDE => {
+                        if (storeDestType == .Float) {
+                            try instructions.appendSlice(&[_]*assembly.Instruction{ try assembly.createInst(.Mov, assembly.MovInst{
+                                .dest = storeDest,
+                                .src = left,
+                                .type = storeDestType,
+                            }, allocator), try assembly.createInst(.Binary, assembly.BinaryInst{
+                                .lhs = storeDest,
+                                .rhs = right,
+                                .type = storeDestType,
+                                .op = .Divide,
+                            }, allocator) });
+                            return;
+                        }
+                        //INFO: non double divs
                         try instructions.append(try assembly.createInst(.Mov, assembly.MovInst{
                             .src = left,
                             .dest = assembly.Operand{
@@ -591,7 +605,10 @@ pub const Instruction = union(InstructionType) {
                             },
                             .type = binary.left.getAsmTypeFromSymTab(symbolTable).?,
                         }, allocator));
-                        if (binary.left.isSignedFromSymTab(symbolTable) and binary.right.isSignedFromSymTab(symbolTable)) {
+
+                        const signed = binary.left.isSignedFromSymTab(symbolTable) and binary.right.isSignedFromSymTab(symbolTable);
+
+                        if (signed) {
                             var signedDivide = [_]*assembly.Instruction{
                                 try assembly.createInst(
                                     .Cdq,

@@ -1305,9 +1305,9 @@ test "big test for float arith" {
         \\     return (0.01 * pointThree == 0.003);
         \\ }
         \\ 
-        // \\ int division() {
-        // \\     return (7.0 / two == 3.5);
-        // \\ }
+        \\ int division() {
+        \\     return (7.0 / two == 3.5);
+        \\ }
         \\ 
         \\ int negation() {
         \\     double neg = -twelveThirty;
@@ -1333,9 +1333,9 @@ test "big test for float arith" {
         \\         return 3;
         \\     }
         \\ 
-        // \\     if (division() == 0) {
-        // \\         return 4;
-        // \\     }
+        \\     if (division() == 0) {
+        \\         return 4;
+        \\     }
         \\ 
         \\     if (negation() == 0) {
         \\         return 5;

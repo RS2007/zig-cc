@@ -429,6 +429,7 @@ pub const BinaryOp = enum {
     Add,
     Subtract,
     Multiply,
+    Divide,
     Xor,
     pub fn stringify(self: BinaryOp, asmType: AsmType, allocator: std.mem.Allocator) ast.CodegenError![]u8 {
         const suffix = switch (asmType) {
@@ -441,6 +442,7 @@ pub const BinaryOp = enum {
                 .Add => "add",
                 .Subtract => "sub",
                 .Multiply => if (asmType == .Float) "mul" else "imul",
+                .Divide => "div",
                 else => unreachable,
             },
             suffix.ptr,
