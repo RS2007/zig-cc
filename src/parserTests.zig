@@ -249,12 +249,14 @@ test "lexing doubles" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
-    const programStr = "double 32.75";
+    const programStr = "double 32.75 &";
     var l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
     _ = try std.testing.expectEqual(lexer.TokenType.FLOAT_TYPE, (try l.nextToken(allocator)).type);
     const doubleLiteral = try l.nextToken(allocator);
+    const ampersand = try l.nextToken(allocator);
     _ = try std.testing.expectEqual(lexer.TokenType.FLOAT, doubleLiteral.type);
     _ = try std.testing.expect(std.mem.eql(u8, l.buffer[doubleLiteral.start .. doubleLiteral.end + 1], "32.75"));
+    _ = try std.testing.expectEqual(lexer.TokenType.BITWISE_AND, ampersand.type);
 }
 
 test "testing basic parser" {
@@ -265,7 +267,7 @@ test "testing basic parser" {
     const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
     var p = try parser.Parser.init(allocator, l);
     const program = try p.parseProgram();
-    _ = try std.testing.expect(std.mem.eql(u8, program.externalDecls.items[0].FunctionDecl.name, "main"));
+    _ = try std.testing.expect(std.mem.eql(u8, program.externalDecls.items[0].FunctionDecl.declarator.FunDeclarator.declarator.Ident, "main"));
 }
 
 test "parse factor" {
@@ -278,6 +280,17 @@ test "parse factor" {
     const factor2 = try p2.parseFactor();
     _ = try std.testing.expectEqual(factor2.Unary.unaryOp, ast.UnaryOp.NEGATE);
     _ = try std.testing.expectEqual(factor2.Unary.exp.Constant.value.Integer, 42);
+}
+
+test "parse declarator" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const programStr = "(*hello)(int a,int *b) = add";
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    const declarator = try p.parseDeclarator();
+    std.log.warn("\n{}", .{declarator});
 }
 
 test "parse type" {
@@ -338,7 +351,7 @@ test "parsing declarations and statements" {
     var p = try parser.Parser.init(allocator, l);
     const program = try p.parseProgram();
     std.log.warn("\x1b[34m{any}\x1b[0m", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[0]});
-    std.log.warn("\x1b[34m{s}\x1b[0m", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[0].Declaration.name});
+    std.log.warn("\x1b[34m{s}\x1b[0m", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[0].Declaration.declarator.Ident});
 }
 
 test "parsing declarations right associativity" {
@@ -350,9 +363,9 @@ test "parsing declarations right associativity" {
     var p = try parser.Parser.init(allocator, l);
     const program = try p.parseProgram();
     std.log.warn("\x1b[34m{any}\x1b[0m", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[0]});
-    std.log.warn("\x1b[34m{s}\x1b[0m", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[0].Declaration.name});
+    std.log.warn("\x1b[34m{s}\x1b[0m", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[0].Declaration.declarator.Ident});
     std.log.warn("\x1b[34m{any}\x1b[0m", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[1]});
-    std.log.warn("\x1b[34m{s}\x1b[0m", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[1].Declaration.name});
+    std.log.warn("\x1b[34m{s}\x1b[0m", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[1].Declaration.declarator.Ident});
     std.log.warn("\x1b[34m{any}\x1b[0m", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[1].Declaration.expression});
     std.log.warn("\x1b[34m{any}\x1b[0m", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[1].Declaration.expression.?.Assignment.lhs.Identifier});
     std.log.warn("\x1b[34m{any}\x1b[0m", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[1].Declaration.expression.?.Assignment.rhs});
@@ -407,8 +420,8 @@ test "test compound statement parsing" {
     const varResolver = try ast.VarResolver.init(allocator);
     try varResolver.resolve(program);
     std.log.warn("Compound statement: first statement: {any}\n", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[2].Statement.Compound.items[0]});
-    std.log.warn("Declaration: of x: {s}\n", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[1].Declaration.name});
-    std.log.warn("Compound statement: first statement decl varName: {s}\n", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[2].Statement.Compound.items[0].Declaration.name});
+    std.log.warn("Declaration: of x: {s}\n", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[1].Declaration.declarator.Ident});
+    std.log.warn("Compound statement: first statement decl varName: {s}\n", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[2].Statement.Compound.items[0].Declaration.declarator.Ident});
 }
 
 test "test while and dowhile" {
@@ -471,11 +484,11 @@ test "parse multiple functions" {
     const varResolver = try ast.VarResolver.init(allocator);
     try varResolver.resolve(program);
     std.log.warn("Add function : {s}, body: {any}\n", .{
-        program.externalDecls.items[0].FunctionDecl.name,
+        program.externalDecls.items[0].FunctionDecl.declarator.FunDeclarator.declarator.Ident,
         program.externalDecls.items[0].FunctionDecl.blockItems.items[0].Statement.Return,
     });
     std.log.warn("Main function : {s}, body: {any}\n", .{
-        program.externalDecls.items[1].FunctionDecl.name,
+        program.externalDecls.items[1].FunctionDecl.declarator.FunDeclarator.declarator.Ident,
         program.externalDecls.items[1].FunctionDecl.blockItems.items[0].Statement.Return.expression.FunctionCall,
     });
     for (program.externalDecls.items[1].FunctionDecl.blockItems.items[0].Statement.Return.expression.FunctionCall.args.items) |arg| {
@@ -504,10 +517,10 @@ test "parse globals" {
     if ((try typeChecker.check(program))) |typeError| {
         std.log.warn("Type error: {any}\n", .{typeError});
     }
-    std.log.warn("Globals not renamed: {s}\n", .{program.externalDecls.items[0].VarDeclaration.name});
-    std.log.warn("Globals1: {s}\n", .{program.externalDecls.items[1].FunctionDecl.name});
+    std.log.warn("Globals not renamed: {s}\n", .{program.externalDecls.items[0].VarDeclaration.declarator.Ident});
+    std.log.warn("Globals1: {s}\n", .{program.externalDecls.items[1].FunctionDecl.declarator.FunDeclarator.declarator.Ident});
     std.log.warn("Locals renamed: {s}\n", .{
-        program.externalDecls.items[1].FunctionDecl.blockItems.items[0].Declaration.name,
+        program.externalDecls.items[1].FunctionDecl.blockItems.items[0].Declaration.declarator.Ident,
     });
 }
 
@@ -532,12 +545,12 @@ test "parse with storage classes" {
     if ((try typeChecker.check(program))) |typeError| {
         std.log.warn("Type error: {any}\n", .{typeError});
     }
-    std.log.warn("Globals not renamed: {s}\n", .{program.externalDecls.items[0].VarDeclaration.name});
+    std.log.warn("Globals not renamed: {s}\n", .{program.externalDecls.items[0].VarDeclaration.declarator.Ident});
     std.log.warn("Globals storageClass: {any}\n", .{program.externalDecls.items[0].VarDeclaration.storageClass});
-    std.log.warn("Globals1: {s}\n", .{program.externalDecls.items[1].FunctionDecl.name});
+    std.log.warn("Globals1: {s}\n", .{program.externalDecls.items[1].FunctionDecl.declarator.FunDeclarator.declarator.Ident});
     std.log.warn("Globals1 storageClass: {any}\n", .{program.externalDecls.items[1].FunctionDecl.storageClass});
     std.log.warn("Locals renamed: {s}\n", .{
-        program.externalDecls.items[1].FunctionDecl.blockItems.items[0].Declaration.name,
+        program.externalDecls.items[1].FunctionDecl.blockItems.items[0].Declaration.declarator.Ident,
     });
 }
 
@@ -561,7 +574,7 @@ test "parsing long declarations" {
     const p = try parser.Parser.init(allocator, l);
     const declaration = try p.parseDeclaration();
     _ = try std.testing.expectEqual(declaration.type, ast.Type.Long);
-    _ = try std.testing.expectEqualStrings(declaration.name, "k");
+    _ = try std.testing.expectEqualStrings(declaration.declarator.Ident, "k");
     _ = try std.testing.expectEqual(declaration.expression.?.Constant.value.Long, 32);
 }
 
@@ -573,10 +586,10 @@ test "parse function args as long" {
     const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(functionStr)));
     const p = try parser.Parser.init(allocator, l);
     const decl = try p.parseExternalDecl();
-    _ = try std.testing.expectEqual(decl.FunctionDecl.args.items[0].NonVoidArg.type, ast.Type.Long);
-    _ = try std.testing.expectEqualStrings(decl.FunctionDecl.args.items[0].NonVoidArg.identifier, "a");
-    _ = try std.testing.expectEqual(decl.FunctionDecl.args.items[1].NonVoidArg.type, ast.Type.Long);
-    _ = try std.testing.expectEqualStrings(decl.FunctionDecl.args.items[1].NonVoidArg.identifier, "b");
+    _ = try std.testing.expectEqual(decl.FunctionDecl.declarator.FunDeclarator.params.items[0].NonVoidArg.type, ast.Type.Long);
+    _ = try std.testing.expectEqualStrings(decl.FunctionDecl.declarator.FunDeclarator.params.items[0].NonVoidArg.declarator.Ident, "a");
+    _ = try std.testing.expectEqual(decl.FunctionDecl.declarator.FunDeclarator.params.items[1].NonVoidArg.type, ast.Type.Long);
+    _ = try std.testing.expectEqualStrings(decl.FunctionDecl.declarator.FunDeclarator.params.items[1].NonVoidArg.declarator.Ident, "b");
 }
 
 test "divide" {

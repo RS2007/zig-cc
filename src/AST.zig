@@ -86,14 +86,15 @@ pub const ExternalDecl = union(ExternalDeclType) {
                 var instructions = std.ArrayList(*tac.Instruction).init(allocator);
                 try functionDecl.genTAC(renderer, &instructions, symbolTable, allocator);
                 tacFunctionDef.* = .{
-                    .name = functionDecl.name,
+                    .name = functionDecl.declarator.FunDeclarator.declarator.Ident,
                     .args = std.ArrayList([]u8).init(allocator),
                     .instructions = instructions,
                     //TODO: Change this later
                     .global = true,
                 };
-                for (functionDecl.args.items) |arg| {
-                    try tacFunctionDef.args.append(arg.NonVoidArg.identifier);
+                for (functionDecl.declarator.FunDeclarator.params.items) |arg| {
+                    std.debug.assert(arg.NonVoidArg.declarator.* == .Ident);
+                    try tacFunctionDef.args.append(arg.NonVoidArg.declarator.Ident);
                 }
                 return tacFunctionDef;
             },
@@ -151,9 +152,9 @@ pub const BlockItem = union(BlockItemType) {
 };
 
 pub const Declaration = struct {
-    name: []u8,
-    expression: ?*Expression,
+    declarator: *Declarator,
     type: Type,
+    expression: ?*Expression,
     storageClass: ?Qualifier = null,
 
     //pub fn format(
@@ -175,7 +176,7 @@ pub const Declaration = struct {
     pub fn genTACInstructions(self: Self, renderer: *TACRenderer, instructions: *std.ArrayList(*tac.Instruction), symbolTable: *std.StringHashMap(*semantic.Symbol), allocator: std.mem.Allocator) CodegenError!void {
         const hasExpr = self.expression;
         if (hasExpr) |expression| {
-            if (symbolTable.get(self.name)) |sym| {
+            if (symbolTable.get(self.declarator.Ident)) |sym| {
                 if (sym.attributes == .StaticAttr) {
                     return;
                 }
@@ -183,7 +184,7 @@ pub const Declaration = struct {
             const rhs = try expression.genTACInstructions(renderer, instructions, allocator);
             const instr = try allocator.create(tac.Instruction);
             const lhs = try allocator.create(tac.Val);
-            lhs.* = tac.Val{ .Variable = self.name };
+            lhs.* = tac.Val{ .Variable = self.declarator.Ident };
             instr.* = tac.Instruction{ .Copy = tac.Copy{ .src = rhs, .dest = lhs } };
             try instructions.append(instr);
         }
@@ -218,6 +219,10 @@ pub const ExpressionType = enum {
     Assignment,
     FunctionCall,
     Cast,
+    // INFO: Not making them unary ops, cause unary ops usually share semantics (particularly in instruction fixup)
+    // If later it's found that these ops do share them, then they can be moved to unary
+    AddrOf,
+    Deref,
 };
 
 fn convertSymToTAC(tacProgram: *tac.Program, symbolTable: std.StringHashMap(*semantic.Symbol)) MemoryError!void {
@@ -292,13 +297,14 @@ pub const Return = struct {
     expression: *Expression,
 };
 
-pub const Type = enum {
+pub const Type = union(enum) {
     Integer,
     Void,
     Long,
     UInteger,
     ULong,
     Float,
+    Pointer: *Type,
 
     const Self = @This();
 
@@ -346,7 +352,7 @@ pub const Type = enum {
 
 pub const NonVoidArg = struct {
     type: Type,
-    identifier: []u8,
+    declarator: *Declarator,
 };
 
 // INFO: Might be a bad idea, maybe look into this later?
@@ -378,8 +384,7 @@ pub const Arg = union(ArgType) {
 };
 
 pub const FunctionDef = struct {
-    name: []u8,
-    args: std.ArrayList(*Arg),
+    declarator: *Declarator,
     blockItems: std.ArrayList(*BlockItem),
     returnType: Type,
     storageClass: ?Qualifier,
@@ -757,6 +762,16 @@ pub const Unary = struct {
     exp: *Expression,
 };
 
+pub const Deref = struct {
+    type: ?Type = null,
+    exp: *Expression,
+};
+
+pub const AddrOf = struct {
+    type: ?Type = null,
+    exp: *Expression,
+};
+
 pub const Binary = struct {
     type: ?Type = null,
     op: BinOp,
@@ -837,6 +852,49 @@ pub const Cast = struct {
 
 const assembly = @import("./Assembly.zig");
 
+pub const ParamInfo = struct {
+    type: Type,
+    declarator: *Declarator,
+};
+
+pub const FunDeclarator = struct {
+    params: std.ArrayList(*Arg),
+    declarator: *Declarator,
+};
+
+pub const Declarator = union(enum) {
+    Ident: []u8,
+    PointerDeclarator: *Declarator,
+    FunDeclarator: *FunDeclarator,
+
+    const Self = @This();
+    pub fn format(
+        self: *Self,
+        comptime fmt: []const u8,
+        options: std.fmt.FormatOptions,
+        writer: anytype,
+    ) !void {
+        _ = fmt;
+        _ = options;
+
+        switch (self.*) {
+            .Ident => |iden| {
+                try writer.print("[ Identifier: {s} ]", .{iden});
+            },
+            .PointerDeclarator => |pointerDecl| {
+                try writer.print("[ PointerDeclaration: {} ]", .{pointerDecl});
+            },
+            .FunDeclarator => |funDecl| {
+                try writer.print("[ FunctionDeclaration: {}\n", .{funDecl.declarator});
+                for (funDecl.params.items) |param| {
+                    try writer.print("\t{}\n", .{param});
+                }
+                try writer.print("]\n", .{});
+            },
+        }
+    }
+};
+
 pub const TACRenderer = struct {
     astSymbolTable: std.StringHashMap(*semantic.Symbol),
     asmSymbolTable: std.StringHashMap(*assembly.Symbol),
@@ -880,42 +938,30 @@ pub const Expression = union(ExpressionType) {
     Assignment: Assignment,
     FunctionCall: FunctionCall,
     Cast: Cast,
+    AddrOf: AddrOf,
+    Deref: Deref,
     const Self = @This();
 
     pub fn getType(self: *Self) Type {
-        switch (self.*) {
-            .Cast => |cast| {
-                return cast.type;
-            },
-            .Assignment => |assignment| {
-                return assignment.type.?;
-            },
-            .Binary => |binary| {
-                return binary.type.?;
-            },
-            .FunctionCall => |fnCall| {
-                return fnCall.type.?;
-            },
-            .Identifier => |identifier| {
-                return identifier.type.?;
-            },
-            .Constant => |constant| {
-                return constant.type;
-            },
-            .Unary => |unary| {
-                return unary.type.?;
-            },
-            .Ternary => |ternary| {
-                return ternary.type.?;
-            },
-        }
+        return switch (self.*) {
+            .Cast => |cast| cast.type,
+            .Assignment => |assignment| assignment.type.?,
+            .Binary => |binary| binary.type.?,
+            .FunctionCall => |fnCall| fnCall.type.?,
+            .Identifier => |identifier| identifier.type.?,
+            .Constant => |constant| constant.type,
+            .Unary => |unary| unary.type.?,
+            .Ternary => |ternary| ternary.type.?,
+            .Deref => |deref| deref.type.?,
+            .AddrOf => |addrOf| addrOf.type.?,
+        };
     }
 
     pub fn genTACInstructions(expression: *Expression, renderer: *TACRenderer, instructions: *std.ArrayList(*tac.Instruction), allocator: std.mem.Allocator) CodegenError!*tac.Val {
         switch (expression.*) {
             .Cast => |cast| {
                 const inner = try cast.value.genTACInstructions(renderer, instructions, allocator);
-                if (cast.value.getType() == cast.type) {
+                if (std.meta.activeTag(cast.value.getType()) == std.meta.activeTag(cast.type)) {
                     return inner;
                 }
                 const dest = try allocator.create(tac.Val);
@@ -948,6 +994,14 @@ pub const Expression = union(ExpressionType) {
                     try instructions.append(castInst);
                 }
                 return dest;
+            },
+            .AddrOf => |addrOf| {
+                _ = addrOf;
+                unreachable;
+            },
+            .Deref => |deref| {
+                _ = deref;
+                unreachable;
             },
             .Constant => |constant| {
                 switch (constant.value) {
@@ -1358,6 +1412,14 @@ pub fn expressionScopeVariableResolve(self: *VarResolver, expression: *Expressio
         .Cast => |cast| {
             try expressionScopeVariableResolve(self, cast.value, currentScope);
         },
+        .AddrOf => |addrOf| {
+            _ = addrOf;
+            unreachable;
+        },
+        .Deref => |deref| {
+            _ = deref;
+            unreachable;
+        },
     }
 }
 
@@ -1372,7 +1434,8 @@ pub fn blockStatementScopeVariableResolve(self: *VarResolver, blockItem: *BlockI
             try statementScopeVariableResolve(self, statement, currentScope);
         },
         .Declaration => |decl| {
-            if (self.lookup(decl.name)) |varResolved| {
+            std.debug.assert(std.meta.activeTag(decl.declarator.*) == .Ident);
+            if (self.lookup(decl.declarator.Ident)) |varResolved| {
                 // INFO: if there is no linkage for the resolved variable
                 // If it is global and the storage class is extern, that would
                 // give an error
@@ -1413,27 +1476,28 @@ pub fn blockStatementScopeVariableResolve(self: *VarResolver, blockItem: *BlockI
                     return VarResolveError.ConflicingVarDeclaration;
                 // zig fmt: on
             }
+            std.debug.assert(std.meta.activeTag(decl.declarator.*) == .Ident);
 
             if (decl.storageClass == Qualifier.EXTERN) {
                 const sym = try self.allocator.create(VarResolveSymInfo);
                 sym.* = .{
                     .level = @intCast(self.varMap.items.len - 1),
                     .hasLinkage = true,
-                    .newName = decl.name,
+                    .newName = decl.declarator.Ident,
                 };
-                try self.varMap.getLast().put(decl.name, sym);
+                try self.varMap.getLast().put(decl.declarator.Ident, sym);
                 return;
             }
             const sym = try self.allocator.create(VarResolveSymInfo);
             sym.* = .{
                 .level = @intCast(self.varMap.items.len - 1),
                 .hasLinkage = false,
-                .newName = (try std.fmt.allocPrint(self.allocator, "{s}{d}", .{ decl.name, currentScope })),
+                .newName = (try std.fmt.allocPrint(self.allocator, "{s}{d}", .{ decl.declarator.Ident, currentScope })),
             };
 
-            std.log.warn("Pushing in {s} = {any}\n", .{ decl.name, sym });
-            try self.varMap.getLast().put(decl.name, sym);
-            blockItem.Declaration.name = sym.newName;
+            std.log.warn("Pushing in {s} = {any}\n", .{ decl.declarator.Ident, sym });
+            try self.varMap.getLast().put(decl.declarator.Ident, sym);
+            blockItem.Declaration.declarator.Ident = sym.newName;
             if (decl.expression) |expression| {
                 try expressionScopeVariableResolve(self, expression, currentScope);
             }
@@ -1517,32 +1581,43 @@ pub const VarResolver = struct {
         }
         return null;
     }
+
+    fn resolveDeclarator(self: *VarResolver, declarator: *Declarator, currentScope: u32) VarResolveError!void {
+        // Modifies the declarator in place, renamed as per the current scope
+        // passed in
+        switch (declarator.*) {
+            .Ident => |ident| {
+                const argVarResolveSym = try self.allocator.create(VarResolveSymInfo);
+                argVarResolveSym.* = .{
+                    .level = @intCast(self.varMap.items.len - 1),
+                    .newName = (try std.fmt.allocPrint(self.allocator, "{s}{d}", .{ ident, currentScope })),
+                    .hasLinkage = false,
+                };
+                try self.varMap.getLast().put(ident, argVarResolveSym);
+                declarator.Ident = argVarResolveSym.newName;
+            },
+            .PointerDeclarator => |pointerDeclarator| {
+                try self.resolveDeclarator(pointerDeclarator, currentScope);
+            },
+            .FunDeclarator => |funcDeclarator| {
+                try self.resolveDeclarator(funcDeclarator.declarator, currentScope);
+            },
+        }
+    }
+
     pub fn resolve(self: *VarResolver, program: *Program) VarResolveError!void {
         var globalScope = std.StringHashMap(*VarResolveSymInfo).init(self.allocator);
         try self.varMap.append(&globalScope);
+        const id = tempGen.genId();
         for (program.externalDecls.items) |externalDecl| {
             switch (externalDecl.*) {
                 .FunctionDecl => |functionDecl| {
-                    const id = tempGen.genId();
                     var scope = std.StringHashMap(*VarResolveSymInfo).init(self.allocator);
                     try self.varMap.append(&scope);
-                    for (functionDecl.args.items, 0..) |arg, j| {
-                        const argVarResolveSym = try self.allocator.create(VarResolveSymInfo);
-                        argVarResolveSym.* = .{
-                            .level = @intCast(self.varMap.items.len - 1),
-                            .newName = (try std.fmt.allocPrint(self.allocator, "{s}{d}", .{ arg.NonVoidArg.identifier, id })),
-                            .hasLinkage = false,
-                        };
-                        const renamedArg = try self.allocator.create(Arg);
-                        renamedArg.* = .{ .NonVoidArg = .{
-                            .type = arg.NonVoidArg.type,
-                            .identifier = argVarResolveSym.newName,
-                        } };
-                        externalDecl.FunctionDecl.args.items[j] = renamedArg;
-                        try self.varMap.getLast().put(
-                            arg.NonVoidArg.identifier,
-                            argVarResolveSym,
-                        );
+                    std.debug.assert(std.meta.activeTag(functionDecl.declarator.*) == .FunDeclarator);
+                    for (functionDecl.declarator.FunDeclarator.params.items) |arg| {
+                        std.debug.assert(std.meta.activeTag(arg.*) == .NonVoidArg);
+                        try self.resolveDeclarator(arg.NonVoidArg.declarator, id);
                     }
                     for (functionDecl.blockItems.items) |blockItem| {
                         try blockStatementScopeVariableResolve(
@@ -1555,12 +1630,13 @@ pub const VarResolver = struct {
                 },
                 .VarDeclaration => |decl| {
                     const varSymInfo = try self.allocator.create(VarResolveSymInfo);
+                    std.debug.assert(std.meta.activeTag(decl.declarator.*) == .Ident);
                     varSymInfo.* = VarResolveSymInfo{
                         .level = @intCast(self.varMap.items.len - 1),
-                        .newName = decl.name,
+                        .newName = decl.declarator.Ident,
                         .hasLinkage = true,
                     };
-                    try self.varMap.getLast().put(decl.name, varSymInfo);
+                    try self.varMap.getLast().put(decl.declarator.Ident, varSymInfo);
                 },
             }
         }
