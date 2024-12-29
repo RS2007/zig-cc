@@ -388,6 +388,16 @@ pub const Type = union(enum) {
             else => unreachable,
         };
     }
+
+    pub fn deepEql(self: Self, other: Self) bool {
+        if (std.meta.activeTag(self) != std.meta.activeTag(other)) return false;
+        switch (self) {
+            .Pointer => |ptr| {
+                return ptr.deepEql(other.Pointer.*);
+            },
+            else => return true,
+        }
+    }
     pub fn format(self: Self, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
         _ = fmt;
         _ = options;
@@ -1530,12 +1540,10 @@ pub fn expressionScopeVariableResolve(self: *VarResolver, expression: *Expressio
             try expressionScopeVariableResolve(self, cast.value, currentScope);
         },
         .AddrOf => |addrOf| {
-            _ = addrOf;
-            unreachable;
+            try expressionScopeVariableResolve(self, addrOf.exp, currentScope);
         },
         .Deref => |deref| {
-            _ = deref;
-            unreachable;
+            try expressionScopeVariableResolve(self, deref.exp, currentScope);
         },
     }
 }
@@ -1854,3 +1862,20 @@ test "deref and addrof parsing" {
     };
     std.debug.assert(hasTypeError == null);
 }
+
+//test "extern local pointer" {
+//    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+//    const allocator = arena.allocator();
+//    defer arena.deinit();
+//    const programStr =
+//        \\ int main(){
+//        \\     extern int** k;
+//        \\     return **k;
+//        \\ }
+//    ;
+//    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+//    var p = try parser.Parser.init(allocator, l);
+//    const program = try p.parseProgram();
+//    const varResolver = try VarResolver.init(allocator);
+//    try varResolver.resolve(program);
+//}

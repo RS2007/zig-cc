@@ -666,3 +666,21 @@ test "floating point representations (peek)" {
         _ = try l.nextToken(allocator);
     }
 }
+
+test "deref and addrof parsing" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const programStr =
+        \\ int k = 3;
+        \\ int main(){
+        \\     int* c = &k;
+        \\     return *c;
+        \\ }
+    ;
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    const program = try p.parseProgram();
+    const varResolver = try ast.VarResolver.init(allocator);
+    try varResolver.resolve(program);
+}

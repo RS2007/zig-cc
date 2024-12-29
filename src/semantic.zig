@@ -578,7 +578,7 @@ fn typecheckBlkItem(self: *Typechecker, blkItem: *AST.BlockItem) TypeCheckerErro
                     const typeErrorStruct = try self.allocator.create(TypeErrorStruct);
                     typeErrorStruct.* = .{
                         .errorType = err,
-                        .errorPayload = (try std.fmt.allocPrint(self.allocator, "Type error at for init\n", .{})),
+                        .errorPayload = (try std.fmt.allocPrint(self.allocator, "Type error at local declaration\n", .{})),
                     };
                     return typeErrorStruct;
                 };
@@ -869,10 +869,11 @@ inline fn convert(allocator: std.mem.Allocator, expr: *AST.Expression, toType: A
             return expr;
         },
         .AddrOf => {
-            unreachable;
+            if (!expr.getType().deepEql(toType)) {}
+            return expr;
         },
         .Deref => {
-            unreachable;
+            return expr;
         },
         .Assignment => {
             if (std.meta.activeTag(expr.Assignment.type.?) != std.meta.activeTag(toType)) {
@@ -985,8 +986,21 @@ fn typecheckExpr(self: *Typechecker, expr: *AST.Expression) TypeError!AST.Type {
     // for now we can just return a generic type error
     // and handle it from the outer functions (no diagnostic)
     switch (expr.*) {
-        .AddrOf => unreachable,
-        .Deref => unreachable,
+        .AddrOf => |addrOf| {
+            const innerType = try self.allocator.create(AST.Type);
+            innerType.* = try typecheckExpr(self, addrOf.exp);
+            expr.AddrOf.type = .{ .Pointer = innerType };
+            return .{ .Pointer = innerType };
+        },
+        .Deref => |deref| {
+            const innerType = try typecheckExpr(self, deref.exp);
+            if (std.meta.activeTag(innerType) != .Pointer) {
+                std.log.warn("Dereferenced type is not a pointer\n", .{});
+                return TypeError.InvalidOperand;
+            }
+            expr.Deref.type = innerType.Pointer.*;
+            return innerType.Pointer.*;
+        },
         .Cast => |cast| {
             return cast.type;
         },
