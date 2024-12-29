@@ -855,6 +855,14 @@ pub const BinOp = enum {
     NOT_EQUALS,
     LOGIC_AND,
     LOGIC_OR,
+
+    const Self = @This();
+    pub fn isCompareOp(op: Self) bool {
+        return switch (op) {
+            .LESS_THAN, .LESS_THAN_EQ, .GREATER_THAN, .GREATER_THAN_EQ, .EQUALS, .NOT_EQUALS => true,
+            else => false,
+        };
+    }
 };
 
 pub const Unary = struct {
@@ -1081,6 +1089,13 @@ pub const Expression = union(ExpressionType) {
             .Ternary => |ternary| ternary.type.?,
             .Deref => |deref| deref.type.?,
             .AddrOf => |addrOf| addrOf.type.?,
+        };
+    }
+
+    pub fn isLvalue(self: *Self) bool {
+        return switch (self.*) {
+            .Identifier, .Deref, .AddrOf, .Assignment => true,
+            else => false,
         };
     }
 
@@ -1516,6 +1531,10 @@ pub fn expressionScopeVariableResolve(self: *VarResolver, expression: *Expressio
             }
         },
         .Assignment => |assignment| {
+            if (!assignment.lhs.isLvalue()) {
+                std.log.warn("Non lvalue in assignment\n", .{});
+                return VarResolveError.NonLvalue;
+            }
             try expressionScopeVariableResolve(self, assignment.lhs, currentScope);
             try expressionScopeVariableResolve(self, assignment.rhs, currentScope);
         },
@@ -1540,6 +1559,10 @@ pub fn expressionScopeVariableResolve(self: *VarResolver, expression: *Expressio
             try expressionScopeVariableResolve(self, cast.value, currentScope);
         },
         .AddrOf => |addrOf| {
+            if (!addrOf.exp.isLvalue()) {
+                std.log.warn("Non lvalue in address of\n", .{});
+                return VarResolveError.NonLvalue;
+            }
             try expressionScopeVariableResolve(self, addrOf.exp, currentScope);
         },
         .Deref => |deref| {
@@ -1551,6 +1574,7 @@ pub fn expressionScopeVariableResolve(self: *VarResolver, expression: *Expressio
 pub const VarResolveError = error{
     ConflicingVarDeclaration,
     OutOfMemory,
+    NonLvalue,
 } || DeclaratorError;
 
 pub fn blockStatementScopeVariableResolve(self: *VarResolver, blockItem: *BlockItem, currentScope: u32) VarResolveError!void {
@@ -1837,45 +1861,3 @@ pub const Node = union(enum) {
     Statement: *Statement,
     Expression: *Expression,
 };
-
-test "deref and addrof parsing" {
-    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    const allocator = arena.allocator();
-    defer arena.deinit();
-    const programStr =
-        \\ int k = 3;
-        \\ int main(){
-        \\     int* c = &k;
-        \\     return *c;
-        \\ }
-    ;
-    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
-    var p = try parser.Parser.init(allocator, l);
-    const program = try p.parseProgram();
-    const varResolver = try VarResolver.init(allocator);
-    try varResolver.resolve(program);
-
-    const typechecker = try semantic.Typechecker.init(allocator);
-    const hasTypeError = typechecker.check(program) catch |typeError| {
-        std.log.warn("Type error: {any}\n", .{typeError});
-        unreachable;
-    };
-    std.debug.assert(hasTypeError == null);
-}
-
-//test "extern local pointer" {
-//    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-//    const allocator = arena.allocator();
-//    defer arena.deinit();
-//    const programStr =
-//        \\ int main(){
-//        \\     extern int** k;
-//        \\     return **k;
-//        \\ }
-//    ;
-//    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
-//    var p = try parser.Parser.init(allocator, l);
-//    const program = try p.parseProgram();
-//    const varResolver = try VarResolver.init(allocator);
-//    try varResolver.resolve(program);
-//}

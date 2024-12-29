@@ -775,3 +775,145 @@ test "basic semanalyze" {
         intPtr,
     );
 }
+
+test "deref and addrof parsing" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const programStr =
+        \\ int k = 3;
+        \\ int main(){
+        \\     int* c = &k;
+        \\     int* ab = &c;
+        \\     int** d = &c;
+        \\     int*** e = &d;
+        \\     return *c + **d + ***e;
+        \\ }
+    ;
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    const program = try p.parseProgram();
+    const varResolver = try ast.VarResolver.init(allocator);
+    try varResolver.resolve(program);
+
+    const typechecker = try semantic.Typechecker.init(allocator);
+    const hasTypeError = typechecker.check(program) catch |typeError| {
+        std.log.warn("Type error: {any}\n", .{typeError});
+        unreachable;
+    };
+    _ = try std.testing.expectEqualStrings("*int", try std.fmt.allocPrint(
+        allocator,
+        "{any}",
+        .{program.externalDecls.items[1].FunctionDecl.blockItems.items[1].Declaration.expression.?.getType()},
+    ));
+    std.debug.assert(hasTypeError == null);
+}
+
+test "semantic error: multiplying and dividing pointers" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const programStr =
+        \\ int main(){
+        \\     int a = 4;
+        \\     int b = 3;
+        \\     return *(&a / &b);
+        \\ }
+    ;
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    const program = try p.parseProgram();
+    const varResolver = try ast.VarResolver.init(allocator);
+    try varResolver.resolve(program);
+
+    const typechecker = try semantic.Typechecker.init(allocator);
+    const hasTypeErr = try typechecker.check(program);
+    _ = try std.testing.expect(hasTypeErr != null);
+}
+
+test "semantic error: dereferencing a number(non pointer)" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const programStr =
+        \\ int main(){
+        \\     int a = 4;
+        \\     return *a;
+        \\ }
+    ;
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    const program = try p.parseProgram();
+    const varResolver = try ast.VarResolver.init(allocator);
+    try varResolver.resolve(program);
+
+    const typechecker = try semantic.Typechecker.init(allocator);
+    const hasTypeErr = try typechecker.check(program);
+    _ = try std.testing.expect(hasTypeErr != null);
+}
+
+test "semantic error: pointer to integer comparisions" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const programStr =
+        \\ int main(){
+        \\     int a = 4;
+        \\     int *b = &a;
+        \\     return *b < b;
+        \\ }
+    ;
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    const program = try p.parseProgram();
+    const varResolver = try ast.VarResolver.init(allocator);
+    try varResolver.resolve(program);
+
+    const typechecker = try semantic.Typechecker.init(allocator);
+    const hasTypeErr = try typechecker.check(program);
+    _ = try std.testing.expect(hasTypeErr != null);
+}
+
+test "non lvalue rejection: assignment" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const programStr =
+        \\ int main(){
+        \\     5 = 4;
+        \\     return 0;
+        \\ }
+    ;
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    const program = try p.parseProgram();
+    const varResolver = try ast.VarResolver.init(allocator);
+    var hasErr = false;
+    varResolver.resolve(program) catch |err| {
+        _ = try std.testing.expectEqual(err, error.NonLvalue);
+        hasErr = true;
+    };
+    _ = try std.testing.expect(hasErr);
+}
+
+test "non lvalue rejection: addrOf" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const programStr =
+        \\ int main(){
+        \\     int* a = &(4);
+        \\     return 0;
+        \\ }
+    ;
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    const program = try p.parseProgram();
+    const varResolver = try ast.VarResolver.init(allocator);
+    var hasErr = false;
+    varResolver.resolve(program) catch |err| {
+        _ = try std.testing.expectEqual(err, error.NonLvalue);
+        hasErr = true;
+    };
+    _ = try std.testing.expect(hasErr);
+}

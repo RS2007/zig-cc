@@ -869,7 +869,14 @@ inline fn convert(allocator: std.mem.Allocator, expr: *AST.Expression, toType: A
             return expr;
         },
         .AddrOf => {
-            if (!expr.getType().deepEql(toType)) {}
+            if (!expr.getType().deepEql(toType)) {
+                const castExpr = try allocator.create(AST.Expression);
+                castExpr.* = AST.Expression{ .Cast = .{
+                    .type = toType,
+                    .value = expr,
+                } };
+                return castExpr;
+            }
             return expr;
         },
         .Deref => {
@@ -980,6 +987,9 @@ fn getCommonType(type1: AST.Type, type2: AST.Type) AST.Type {
     // Size is greater, more priority in case the sizes are unequal
     return if (type1.size() > type2.size()) type1 else type2;
 }
+pub fn xor(a: bool, b: bool) bool {
+    return (a or b) and !(a and b);
+}
 
 fn typecheckExpr(self: *Typechecker, expr: *AST.Expression) TypeError!AST.Type {
     // Expr can error because of a type issue,
@@ -1014,6 +1024,21 @@ fn typecheckExpr(self: *Typechecker, expr: *AST.Expression) TypeError!AST.Type {
         .Binary => {
             const lhsType = try typecheckExpr(self, expr.Binary.lhs);
             const rhsType = try typecheckExpr(self, expr.Binary.rhs);
+            const isLhsPointer = std.meta.activeTag(lhsType) == .Pointer;
+            const isRhsPointer = std.meta.activeTag(rhsType) == .Pointer;
+
+            if (isLhsPointer and
+                isRhsPointer and (expr.Binary.op == .MULTIPLY or
+                expr.Binary.op == .DIVIDE))
+            {
+                std.log.warn("Cant {any} pointers\n", .{expr.Binary.op});
+                return TypeError.InvalidOperand;
+            }
+
+            if (xor(isLhsPointer, isRhsPointer) and expr.Binary.op.isCompareOp()) {
+                std.log.warn("Cant compare pointers and non-pointers\n", .{});
+                return TypeError.InvalidOperand;
+            }
 
             //INFO: Conversion logic
             const commonType = getCommonType(lhsType, rhsType);
