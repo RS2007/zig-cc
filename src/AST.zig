@@ -189,6 +189,26 @@ pub const Declaration = struct {
             try instructions.append(instr);
         }
     }
+    pub fn fixReturnType(self: *Self, allocator: std.mem.Allocator) !void {
+        const tentativeType = self.type;
+        switch (self.declarator.*) {
+            .PointerDeclarator => |ptr| {
+                var depth: usize = 1;
+                var runningPtr = ptr;
+                while (true) {
+                    if (std.meta.activeTag(runningPtr.*) == .Ident) break;
+                    if (std.meta.activeTag(runningPtr.*) == .FunDeclarator) unreachable;
+                    depth += 1;
+                    runningPtr = runningPtr.PointerDeclarator;
+                }
+                self.type = try astPointerTypeFromDepth(tentativeType, depth, allocator);
+            },
+            .Ident => {},
+            .FunDeclarator => {
+                std.log.warn("Implement function pointers\n", .{});
+            },
+        }
+    }
 };
 
 pub const CodegenError = error{
@@ -320,8 +340,8 @@ pub const Type = union(enum) {
         };
     }
 
-    pub fn fromSemType(semanticType: semantic.TypeKind) Self {
-        return switch (semanticType) {
+    pub fn fromSemType(semanticType: *semantic.TypeInfo, allocator: std.mem.Allocator) error{OutOfMemory}!Self {
+        return switch (semanticType.*) {
             .Integer => .Integer,
             .Void => .Void,
             .Long => .Long,
@@ -329,13 +349,18 @@ pub const Type = union(enum) {
             .UInteger => .UInteger,
             .Function => unreachable,
             .Float => .Float,
+            .Pointer => |ptr| {
+                const inner = try allocator.create(Type);
+                inner.* = try fromSemType(ptr, allocator);
+                return .{ .Pointer = inner };
+            },
         };
     }
 
     pub inline fn size(self: Self) usize {
         return switch (self) {
             .Integer, .UInteger => 4,
-            .Long, .ULong => 8,
+            .Pointer, .Long, .ULong => 8,
             else => unreachable,
         };
     }
@@ -347,6 +372,36 @@ pub const Type = union(enum) {
             .Float => false,
             else => unreachable,
         };
+    }
+    pub fn toSemPointerTy(self: Type, allocator: std.mem.Allocator) error{OutOfMemory}!semantic.TypeInfo {
+        return switch (self) {
+            .Integer => .Integer,
+            .Long => .Long,
+            .ULong => .ULong,
+            .UInteger => .UInteger,
+            .Float => .Float,
+            .Pointer => |ptr| {
+                const inner = try allocator.create(semantic.TypeInfo);
+                inner.* = try ptr.toSemPointerTy(allocator);
+                return .{ .Pointer = inner };
+            },
+            else => unreachable,
+        };
+    }
+    pub fn format(self: Self, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
+        _ = fmt;
+        _ = options;
+        switch (self) {
+            .Integer => try writer.print("int", .{}),
+            .Void => try writer.print("void", .{}),
+            .Long => try writer.print("long", .{}),
+            .UInteger => try writer.print("unsigned int", .{}),
+            .ULong => try writer.print("unsigned long", .{}),
+            .Float => try writer.print("float", .{}),
+            .Pointer => |ptr| {
+                try writer.print("*{any}", .{ptr});
+            },
+        }
     }
 };
 
@@ -383,7 +438,19 @@ pub const Arg = union(ArgType) {
     //}
 };
 
+pub fn astPointerTypeFromDepth(@"type": Type, depth: usize, allocator: std.mem.Allocator) !Type {
+    if (depth == 0) return @"type";
+    var fixedType = @"type";
+    for (0..depth) |_| {
+        const inner = try allocator.create(Type);
+        inner.* = fixedType;
+        fixedType = .{ .Pointer = inner };
+    }
+    return fixedType;
+}
+
 pub const FunctionDef = struct {
+    // INFO: The functiondef types get rewritten during the typecheck stage
     declarator: *Declarator,
     blockItems: std.ArrayList(*BlockItem),
     returnType: Type,
@@ -396,6 +463,26 @@ pub const FunctionDef = struct {
     pub fn genTAC(functionDef: FunctionDef, renderer: *TACRenderer, instructions: *std.ArrayList(*tac.Instruction), symbolTable: std.StringHashMap(*semantic.Symbol), allocator: std.mem.Allocator) CodegenError!void {
         for (functionDef.blockItems.items) |blockItem| {
             try blockItem.genTAC(renderer, instructions, @constCast(&symbolTable), allocator);
+        }
+    }
+    pub fn fixReturnType(self: *FunctionDef, allocator: std.mem.Allocator) !void {
+        const tentativeReturnType = self.returnType;
+        switch (self.declarator.*) {
+            .PointerDeclarator => |ptr| {
+                // find pointer indirections till it hits the function
+                // declarator
+                var depth: usize = 1;
+                var runningPtr = ptr;
+                while (true) {
+                    if (std.meta.activeTag(runningPtr.*) == .Ident) unreachable;
+                    if (std.meta.activeTag(runningPtr.*) == .FunDeclarator) break;
+                    depth += 1;
+                    runningPtr = runningPtr.PointerDeclarator;
+                }
+                self.returnType = try astPointerTypeFromDepth(tentativeReturnType, depth, allocator);
+            },
+            .Ident => unreachable,
+            .FunDeclarator => {},
         }
     }
 };
@@ -597,26 +684,30 @@ pub const Statement = union(StatementType) {
                 const conditionOfIf = try whileStmt.condition.genTACInstructions(renderer, instructions, allocator);
                 const whileEndLabelName = try std.fmt.allocPrint(allocator, "loop_end_{d}", .{whileStmt.loopId});
                 const whileStartLabelName = try std.fmt.allocPrint(allocator, "loop_start_{d}", .{whileStmt.loopId});
-                try instructions.appendSlice(&[_]*tac.Instruction{
-                    try tac.createInst(.JumpIfZero, tac.Jmp{
-                        .condition = conditionOfIf,
-                        .target = whileEndLabelName,
-                    }, allocator),
-                    try tac.createInst(
-                        .Label,
-                        whileStartLabelName,
-                        allocator,
-                    ),
-                });
+                try instructions.appendSlice(
+                    &[_]*tac.Instruction{
+                        try tac.createInst(.JumpIfZero, tac.Jmp{
+                            .condition = conditionOfIf,
+                            .target = whileEndLabelName,
+                        }, allocator),
+                        try tac.createInst(
+                            .Label,
+                            whileStartLabelName,
+                            allocator,
+                        ),
+                    },
+                );
                 try whileStmt.body.genTACInstructions(renderer, instructions, symbolTable, allocator);
                 const conditionForInnerDoWhile = try whileStmt.condition.genTACInstructions(renderer, instructions, allocator);
-                try instructions.appendSlice(&[_]*tac.Instruction{
-                    try tac.createInst(.JumpIfNotZero, tac.Jmp{
-                        .target = whileStartLabelName,
-                        .condition = conditionForInnerDoWhile,
-                    }, allocator),
-                    try tac.createInst(.Label, whileEndLabelName, allocator),
-                });
+                try instructions.appendSlice(
+                    &[_]*tac.Instruction{
+                        try tac.createInst(.JumpIfNotZero, tac.Jmp{
+                            .target = whileStartLabelName,
+                            .condition = conditionForInnerDoWhile,
+                        }, allocator),
+                        try tac.createInst(.Label, whileEndLabelName, allocator),
+                    },
+                );
             },
             .For => |forStmt| {
                 const forStartLabelName = try std.fmt.allocPrint(allocator, "loop_start_{d}", .{forStmt.loopId});
@@ -862,12 +953,38 @@ pub const FunDeclarator = struct {
     declarator: *Declarator,
 };
 
+pub const DeclaratorError = error{
+    NoInnerFuncDeclarator,
+    FunctionDeclCantUnwrapIdent,
+};
+
 pub const Declarator = union(enum) {
     Ident: []u8,
     PointerDeclarator: *Declarator,
     FunDeclarator: *FunDeclarator,
 
     const Self = @This();
+    pub fn unwrapFuncDeclarator(self: *Self) DeclaratorError!*FunDeclarator {
+        switch (self.*) {
+            .FunDeclarator => |funDeclarator| return funDeclarator,
+            .PointerDeclarator => |pointerDeclarator| return pointerDeclarator.unwrapFuncDeclarator(),
+            .Ident => return error.NoInnerFuncDeclarator,
+        }
+    }
+    pub fn unwrapIdentDecl(self: *Self) DeclaratorError!*Declarator {
+        return switch (self.*) {
+            .Ident => @constCast(self),
+            .PointerDeclarator => |pointerDeclarator| pointerDeclarator.unwrapIdentDecl(),
+            .FunDeclarator => DeclaratorError.FunctionDeclCantUnwrapIdent,
+        };
+    }
+    pub fn containsFuncDeclarator(self: *Self) bool {
+        return switch (self.*) {
+            .FunDeclarator => true,
+            .Ident => false,
+            .PointerDeclarator => |pointerDeclarator| pointerDeclarator.containsFuncDeclarator(),
+        };
+    }
     pub fn format(
         self: *Self,
         comptime fmt: []const u8,
@@ -1426,7 +1543,7 @@ pub fn expressionScopeVariableResolve(self: *VarResolver, expression: *Expressio
 pub const VarResolveError = error{
     ConflicingVarDeclaration,
     OutOfMemory,
-};
+} || DeclaratorError;
 
 pub fn blockStatementScopeVariableResolve(self: *VarResolver, blockItem: *BlockItem, currentScope: u32) VarResolveError!void {
     switch (blockItem.*) {
@@ -1434,8 +1551,11 @@ pub fn blockStatementScopeVariableResolve(self: *VarResolver, blockItem: *BlockI
             try statementScopeVariableResolve(self, statement, currentScope);
         },
         .Declaration => |decl| {
-            std.debug.assert(std.meta.activeTag(decl.declarator.*) == .Ident);
-            if (self.lookup(decl.declarator.Ident)) |varResolved| {
+            // INFO: the pointer only affects the type and not the name of the
+            // symbol
+
+            const identDecl = try decl.declarator.unwrapIdentDecl();
+            if (self.lookup(identDecl.Ident)) |varResolved| {
                 // INFO: if there is no linkage for the resolved variable
                 // If it is global and the storage class is extern, that would
                 // give an error
@@ -1476,28 +1596,27 @@ pub fn blockStatementScopeVariableResolve(self: *VarResolver, blockItem: *BlockI
                     return VarResolveError.ConflicingVarDeclaration;
                 // zig fmt: on
             }
-            std.debug.assert(std.meta.activeTag(decl.declarator.*) == .Ident);
 
             if (decl.storageClass == Qualifier.EXTERN) {
                 const sym = try self.allocator.create(VarResolveSymInfo);
                 sym.* = .{
                     .level = @intCast(self.varMap.items.len - 1),
                     .hasLinkage = true,
-                    .newName = decl.declarator.Ident,
+                    .newName = identDecl.Ident,
                 };
-                try self.varMap.getLast().put(decl.declarator.Ident, sym);
+                try self.varMap.getLast().put(identDecl.Ident, sym);
                 return;
             }
             const sym = try self.allocator.create(VarResolveSymInfo);
             sym.* = .{
                 .level = @intCast(self.varMap.items.len - 1),
                 .hasLinkage = false,
-                .newName = (try std.fmt.allocPrint(self.allocator, "{s}{d}", .{ decl.declarator.Ident, currentScope })),
+                .newName = (try std.fmt.allocPrint(self.allocator, "{s}{d}", .{ identDecl.Ident, currentScope })),
             };
 
-            std.log.warn("Pushing in {s} = {any}\n", .{ decl.declarator.Ident, sym });
-            try self.varMap.getLast().put(decl.declarator.Ident, sym);
-            blockItem.Declaration.declarator.Ident = sym.newName;
+            std.log.warn("Pushing in {s} = {any}\n", .{ identDecl.Ident, sym });
+            try self.varMap.getLast().put(identDecl.Ident, sym);
+            identDecl.Ident = sym.newName;
             if (decl.expression) |expression| {
                 try expressionScopeVariableResolve(self, expression, currentScope);
             }
@@ -1614,8 +1733,8 @@ pub const VarResolver = struct {
                 .FunctionDecl => |functionDecl| {
                     var scope = std.StringHashMap(*VarResolveSymInfo).init(self.allocator);
                     try self.varMap.append(&scope);
-                    std.debug.assert(std.meta.activeTag(functionDecl.declarator.*) == .FunDeclarator);
-                    for (functionDecl.declarator.FunDeclarator.params.items) |arg| {
+                    const funDeclarator = try functionDecl.declarator.unwrapFuncDeclarator();
+                    for (funDeclarator.params.items) |arg| {
                         std.debug.assert(std.meta.activeTag(arg.*) == .NonVoidArg);
                         try self.resolveDeclarator(arg.NonVoidArg.declarator, id);
                     }
@@ -1630,13 +1749,13 @@ pub const VarResolver = struct {
                 },
                 .VarDeclaration => |decl| {
                     const varSymInfo = try self.allocator.create(VarResolveSymInfo);
-                    std.debug.assert(std.meta.activeTag(decl.declarator.*) == .Ident);
+                    const identDecl = try decl.declarator.unwrapIdentDecl();
                     varSymInfo.* = VarResolveSymInfo{
                         .level = @intCast(self.varMap.items.len - 1),
-                        .newName = decl.declarator.Ident,
+                        .newName = identDecl.Ident,
                         .hasLinkage = true,
                     };
-                    try self.varMap.getLast().put(decl.declarator.Ident, varSymInfo);
+                    try self.varMap.getLast().put(identDecl.Ident, varSymInfo);
                 },
             }
         }
@@ -1710,3 +1829,28 @@ pub const Node = union(enum) {
     Statement: *Statement,
     Expression: *Expression,
 };
+
+test "deref and addrof parsing" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const programStr =
+        \\ int k = 3;
+        \\ int main(){
+        \\     int* c = &k;
+        \\     return *c;
+        \\ }
+    ;
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    const program = try p.parseProgram();
+    const varResolver = try VarResolver.init(allocator);
+    try varResolver.resolve(program);
+
+    const typechecker = try semantic.Typechecker.init(allocator);
+    const hasTypeError = typechecker.check(program) catch |typeError| {
+        std.log.warn("Type error: {any}\n", .{typeError});
+        unreachable;
+    };
+    std.debug.assert(hasTypeError == null);
+}

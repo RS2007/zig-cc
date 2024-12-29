@@ -47,7 +47,7 @@ pub const Parser = struct {
         program.externalDecls = externalDeclList;
         while ((try self.l.peekToken(self.allocator)) != null) {
             const externalDecl = try self.parseExternalDecl();
-            std.log.warn("First external decl:{any} and current token:{any} \n", .{ externalDecl, self.l.currentToken });
+            std.log.warn("external decl:{any} and current token:{any} \n", .{ externalDecl, self.l.currentToken });
             try program.externalDecls.append(externalDecl);
         }
         return program;
@@ -237,8 +237,10 @@ pub const Parser = struct {
         const returnType = try self.parseType();
         const declarator = try self.parseDeclarator();
         const externalDecl = try self.allocator.create(AST.ExternalDecl);
-        std.log.warn("Declarator: {any}\n", .{declarator});
-        if (std.meta.activeTag(declarator.*) == .FunDeclarator) {
+        std.log.warn("Declarator: {any} and peek token:{any}\n", .{ declarator, (try self.l.peekToken(self.allocator)) });
+        // INFO: We are not implementing function pointers for now, so if there
+        // is a function declarator, that implies a function declaration.
+        if (declarator.containsFuncDeclarator()) {
             const functionDecl = try self.allocator.create(AST.FunctionDef);
             functionDecl.* = .{
                 .declarator = declarator,
@@ -739,6 +741,28 @@ pub const Parser = struct {
         return longNode;
     }
 
+    pub fn parseDeref(self: *Parser) ParserError!*AST.Expression {
+        _ = try self.l.nextToken(self.allocator);
+        const exp = try self.parseFactor();
+        const derefNode = try self.allocator.create(AST.Expression);
+        derefNode.* = AST.Expression{ .Deref = .{
+            .type = null,
+            .exp = exp,
+        } };
+        return derefNode;
+    }
+
+    pub fn parseAddrOf(self: *Parser) ParserError!*AST.Expression {
+        _ = try self.l.nextToken(self.allocator);
+        const exp = try self.parseFactor();
+        const addrOfNode = try self.allocator.create(AST.Expression);
+        addrOfNode.* = AST.Expression{ .AddrOf = .{
+            .type = null,
+            .exp = exp,
+        } };
+        return addrOfNode;
+    }
+
     pub fn parseFactor(self: *Parser) ParserError!*AST.Expression {
         const peekToken = (try self.l.peekToken(self.allocator)).?;
         return switch (peekToken.type) {
@@ -750,6 +774,8 @@ pub const Parser = struct {
             .UNSIGNED_INT => try self.parseUnsignedInt(),
             .UNSIGNED_LONG => try self.parseUnsignedLong(),
             .FLOAT => try self.parseFloat(),
+            .MULTIPLY => try self.parseDeref(),
+            .BITWISE_AND => try self.parseAddrOf(),
             else => |tokType| {
                 std.log.warn("Parse factor unknown type: {any}\n", .{tokType});
                 unreachable;

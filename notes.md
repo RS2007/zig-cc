@@ -315,3 +315,40 @@ int main(){
   - [x] UIntToFloat
   - [x] Test case with floats and integer arguments
 
+### Handling pointers 
+
+#### Parser
+
+* Handling precedence
+* `int var;`
+* `int *var;` => can be written as `int *(var);`
+* `int **var;` => can be written as `int *(*(var))`
+* Pointer to Function declarators:
+  * `int (*foo)(int,int)`
+* Arrays:
+  * `int arr[3]`
+  * `int *arr[3]` => `int * (arr[3]);`
+  * The last is different from `int (*arr)[3];`
+  * `[]` has higher precedence compared to `*`
+*
+
+
+#### Semantic passes
+
+#### TAC generation
+
+
+#### Assembly generation
+
+
+## Declarators messing up the parsing
+- Patched the AST Nodes to fix this
+- Added helper methods to unbox the function and identifier declarator
+- Currently functions and variable declarations are assigned types while
+parsing, declarators mess this up and hence all types should be resolved at the
+typechecking stage.
+- Or the types can be kept as tentative and during the typechecking stage can be
+  rewritten to the actual type
+* Eventually would have to implement function pointers: and that will make me
+want to shoot myself, cause that would involve a good chunk of rewriting parser,
+AST and the semanalyzer.

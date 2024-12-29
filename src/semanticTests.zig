@@ -733,3 +733,45 @@ test "invalid operation on float(remainder)" {
     }
     _ = try std.testing.expect(hasErr);
 }
+
+test "basic semanalyze" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const programStr =
+        \\ int k = 3;
+        \\ int* three() { return k;}
+        \\ int main(){
+        \\     int* c = three();
+        \\     int d = c;
+        \\     int ***e;
+        \\     return 4;
+        \\ }
+    ;
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    const program = try p.parseProgram();
+    const varResolver = try ast.VarResolver.init(allocator);
+    try varResolver.resolve(program);
+
+    const typechecker = try semantic.Typechecker.init(allocator);
+    const hasTypeError = typechecker.check(program) catch |typeError| {
+        std.log.warn("Type error: {any}\n", .{typeError});
+        unreachable;
+    };
+    _ = try std.testing.expectEqual(hasTypeError, null);
+
+    const returnType = program.externalDecls.items[1].FunctionDecl.returnType;
+    const intType: *const ast.Type = &(.Integer);
+    const intPtr: ast.Type = .{ .Pointer = @constCast(intType) };
+    _ = try std.testing.expectEqualStrings("***int", try std.fmt.allocPrint(
+        allocator,
+        "{any}",
+        .{program.externalDecls.items[2].FunctionDecl.blockItems.items[2].Declaration.type},
+    ));
+    _ = try std.testing.expectEqualDeep(returnType, intPtr);
+    _ = try std.testing.expectEqualDeep(
+        program.externalDecls.items[2].FunctionDecl.blockItems.items[0].Declaration.type,
+        intPtr,
+    );
+}
