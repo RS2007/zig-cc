@@ -917,3 +917,29 @@ test "non lvalue rejection: addrOf" {
     };
     _ = try std.testing.expect(hasErr);
 }
+
+test "type conversion of 0 to pointer" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const programStr =
+        \\ int main(){
+        \\     int* a = 0;
+        \\     return *a;
+        \\ }
+    ;
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    const program = try p.parseProgram();
+    const varResolver = try ast.VarResolver.init(allocator);
+    try varResolver.resolve(program);
+
+    const typechecker = try semantic.Typechecker.init(allocator);
+    const hasTypeErr = try typechecker.check(program);
+    _ = try std.testing.expect(hasTypeErr == null);
+    _ = try std.testing.expectEqualStrings("*int", try std.fmt.allocPrint(
+        allocator,
+        "{any}",
+        .{program.externalDecls.items[0].FunctionDecl.blockItems.items[0].Declaration.expression.?.getType()},
+    ));
+}

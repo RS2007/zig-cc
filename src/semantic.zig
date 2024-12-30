@@ -969,7 +969,16 @@ inline fn convert(allocator: std.mem.Allocator, expr: *AST.Expression, toType: A
     }
 }
 
-fn getCommonType(type1: AST.Type, type2: AST.Type) AST.Type {
+fn getCommonPtrType(lhs: *AST.Expression, rhs: *AST.Expression) ?AST.Type {
+    const type1 = lhs.getType();
+    const type2 = rhs.getType();
+    if (type1.deepEql(type2)) return type1;
+    if (lhs.isNullPtr()) return type2;
+    if (rhs.isNullPtr()) return type1;
+    return null;
+}
+
+fn getCommonType(type1: AST.Type, type2: AST.Type) ?AST.Type {
     // INFO: same types => return the type
     if (std.meta.activeTag(type1) == std.meta.activeTag(type2)) return type1;
     if (std.meta.activeTag(type1) == .Float or std.meta.activeTag(type2) == .Float) {
@@ -1041,16 +1050,20 @@ fn typecheckExpr(self: *Typechecker, expr: *AST.Expression) TypeError!AST.Type {
             }
 
             //INFO: Conversion logic
-            const commonType = getCommonType(lhsType, rhsType);
-            if (commonType == .Float and expr.Binary.op == .REMAINDER) {
+            const commonType = if (isLhsPointer or isRhsPointer) getCommonPtrType(expr.Binary.lhs, expr.Binary.rhs) else getCommonType(lhsType, rhsType);
+            if (commonType == null) {
+                std.log.warn("Invalid pointer comparisions", .{});
+                return TypeError.InvalidOperand;
+            }
+            if (commonType.? == .Float and expr.Binary.op == .REMAINDER) {
                 std.log.warn("Cannot apply {any} to {any}", .{ expr.Binary.op, commonType });
                 return TypeError.InvalidOperand;
             }
-            expr.Binary.lhs = try convert(self.allocator, expr.Binary.lhs, commonType);
-            expr.Binary.rhs = try convert(self.allocator, expr.Binary.rhs, commonType);
+            expr.Binary.lhs = try convert(self.allocator, expr.Binary.lhs, commonType.?);
+            expr.Binary.rhs = try convert(self.allocator, expr.Binary.rhs, commonType.?);
 
             expr.Binary.type = switch (expr.Binary.op) {
-                .ADD, .SUBTRACT, .MULTIPLY, .DIVIDE, .REMAINDER => commonType,
+                .ADD, .SUBTRACT, .MULTIPLY, .DIVIDE, .REMAINDER => commonType.?,
                 else => AST.Type.Integer,
             };
             return expr.Binary.type.?;

@@ -398,6 +398,7 @@ pub const Type = union(enum) {
             else => return true,
         }
     }
+
     pub fn format(self: Self, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
         _ = fmt;
         _ = options;
@@ -953,6 +954,15 @@ pub const Constant = struct {
             else => unreachable,
         };
     }
+    pub inline fn isNullPtr(self: *Self) bool {
+        return switch (self.value) {
+            .Integer => |integer| integer == 0,
+            .Long => |long| long == 0,
+            .ULong => |ulong| ulong == 0,
+            .UInteger => |uint| uint == 0,
+            .Float => |float| float == 0.0,
+        };
+    }
 };
 pub const Cast = struct {
     type: Type,
@@ -1089,6 +1099,13 @@ pub const Expression = union(ExpressionType) {
             .Ternary => |ternary| ternary.type.?,
             .Deref => |deref| deref.type.?,
             .AddrOf => |addrOf| addrOf.type.?,
+        };
+    }
+
+    pub inline fn isNullPtr(self: *Self) bool {
+        return switch (self.*) {
+            .Constant => |constant| @constCast(&constant).isNullPtr(),
+            else => false,
         };
     }
 
