@@ -740,7 +740,7 @@ test "basic semanalyze" {
     defer arena.deinit();
     const programStr =
         \\ int k = 3;
-        \\ int* three() { return k;}
+        \\ int* three() { return &k;}
         \\ int main(){
         \\     int* c = three();
         \\     int d = c;
@@ -942,4 +942,50 @@ test "type conversion of 0 to pointer" {
         "{any}",
         .{program.externalDecls.items[0].FunctionDecl.blockItems.items[0].Declaration.expression.?.getType()},
     ));
+}
+
+test "type error comparing integer(non-zero) to pointer" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const programStr =
+        \\ int main(){
+        \\     int* a = 4;
+        \\     return *a;
+        \\ }
+    ;
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    const program = try p.parseProgram();
+    const varResolver = try ast.VarResolver.init(allocator);
+    try varResolver.resolve(program);
+
+    const typechecker = try semantic.Typechecker.init(allocator);
+    const hasTypeErr = try typechecker.check(program);
+    _ = try std.testing.expect(hasTypeErr != null);
+}
+
+test "bad pointer in function return" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const programStr =
+        \\ int *badPointer(){
+        \\     return 2.0;
+        \\ }
+        \\ int main(){
+        \\     int* a = badPointer();
+        \\     return *a;
+        \\ }
+    ;
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    const program = try p.parseProgram();
+    const varResolver = try ast.VarResolver.init(allocator);
+    try varResolver.resolve(program);
+
+    const typechecker = try semantic.Typechecker.init(allocator);
+    const hasTypeErr = try typechecker.check(program);
+    _ = try std.testing.expect(hasTypeErr != null);
+    std.log.warn("\x1b[31mError\x1b[0m: {s}", .{hasTypeErr.?});
 }

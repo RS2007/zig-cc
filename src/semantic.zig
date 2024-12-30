@@ -167,11 +167,16 @@ pub const Typechecker = struct {
         if (typeErrorStruct != null and typeErrorStruct.?.errorType != null) {
             return typeErrorStruct.?.errorPayload;
         }
-        try self.resolveReturns(program);
+        self.typecheckReturns(program) catch |err| {
+            if (err == error.InvalidOperand) {
+                const errorPayload = try std.fmt.allocPrint(self.allocator, "Type error at return statement\n", .{});
+                return errorPayload;
+            }
+        };
         return null;
     }
 
-    pub fn resolveReturns(self: *Self, program: *AST.Program) !void {
+    pub fn typecheckReturns(self: *Self, program: *AST.Program) TypeError!void {
         for (program.externalDecls.items) |externalDecl| {
             if (std.meta.activeTag(externalDecl.*) == .FunctionDecl) {
                 for (externalDecl.FunctionDecl.blockItems.items) |blkItem| {
@@ -182,8 +187,13 @@ pub const Typechecker = struct {
     }
 };
 
-pub fn resolveBlockReturns(self: *Typechecker, blockItem: *AST.BlockItem, fnReturnType: AST.Type) !void {
+pub fn resolveBlockReturns(self: *Typechecker, blockItem: *AST.BlockItem, fnReturnType: AST.Type) TypeError!void {
     if (std.meta.activeTag(blockItem.*) == .Statement and std.meta.activeTag(blockItem.Statement.*) == .Return) {
+        const isFnTypePtr = std.meta.activeTag(fnReturnType) == .Pointer;
+        const isExprTypePtr = std.meta.activeTag(blockItem.Statement.Return.expression.getType()) == .Pointer;
+        if (isFnTypePtr and (!isExprTypePtr and !blockItem.Statement.Return.expression.isNullPtr())) {
+            return TypeError.InvalidOperand;
+        }
         blockItem.Statement.Return.expression = try convert(self.allocator, blockItem.Statement.Return.expression, fnReturnType);
     }
 }
@@ -578,14 +588,23 @@ fn typecheckBlkItem(self: *Typechecker, blkItem: *AST.BlockItem) TypeCheckerErro
                     const typeErrorStruct = try self.allocator.create(TypeErrorStruct);
                     typeErrorStruct.* = .{
                         .errorType = err,
-                        .errorPayload = (try std.fmt.allocPrint(self.allocator, "Type error at local declaration\n", .{})),
+                        .errorPayload = (try std.fmt.allocPrint(self.allocator, "Type error at local declaration expression\n", .{})),
                     };
                     return typeErrorStruct;
                 };
-                std.log.warn("Conversion from {any} to {any}\n", .{ exprType, decl.type });
-                std.log.warn("Expression: {any}\n", .{declExpression});
+
+                const isDeclTypePointer = std.meta.activeTag(decl.type) == .Pointer;
+                const isExprTypePointer = std.meta.activeTag(exprType) == .Pointer;
+                if ((isDeclTypePointer and !isExprTypePointer) and !decl.expression.?.isNullPtr()) {
+                    const typeErrorStruct = try self.allocator.create(TypeErrorStruct);
+                    typeErrorStruct.* = .{
+                        .errorType = TypeError.InvalidOperand,
+                        .errorPayload = (try std.fmt.allocPrint(self.allocator, "Type error at local declaration\n", .{})),
+                    };
+                    return typeErrorStruct;
+                }
+
                 decl.expression = try convert(self.allocator, decl.expression.?, decl.type);
-                std.log.warn("Expression post conversion: {any}\n", .{declExpression});
                 std.debug.assert(if (decl.expression == null) true else std.meta.activeTag(decl.expression.?.getType()) == decl.type);
 
                 //INFO: Checking type equality
@@ -1009,6 +1028,7 @@ fn typecheckExpr(self: *Typechecker, expr: *AST.Expression) TypeError!AST.Type {
             const innerType = try self.allocator.create(AST.Type);
             innerType.* = try typecheckExpr(self, addrOf.exp);
             expr.AddrOf.type = .{ .Pointer = innerType };
+            std.log.warn("Assigning type to AddrOf: pointer to {any} \n", .{innerType});
             return .{ .Pointer = innerType };
         },
         .Deref => |deref| {
