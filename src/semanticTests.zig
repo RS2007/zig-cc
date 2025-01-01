@@ -989,3 +989,58 @@ test "bad pointer in function return" {
     _ = try std.testing.expect(hasTypeErr != null);
     std.log.warn("\x1b[31mError\x1b[0m: {s}", .{hasTypeErr.?});
 }
+
+test "Type error: pointer to double conversion" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const programStr =
+        \\ int main(){
+        \\     int* a = badPointer();
+        \\     double k = a;
+        \\     return *a;
+        \\ }
+    ;
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    const program = try p.parseProgram();
+    const varResolver = try ast.VarResolver.init(allocator);
+    try varResolver.resolve(program);
+
+    const typechecker = try semantic.Typechecker.init(allocator);
+    const hasTypeErr = try typechecker.check(program);
+    _ = try std.testing.expect(hasTypeErr != null);
+    std.log.warn("\x1b[31mError\x1b[0m: {s}", .{hasTypeErr.?});
+}
+
+test "static pointer global" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const programStr =
+        \\ extern int *NULLTHREE;
+        \\ int* NULLTWO = 0;
+        \\ static int* NULL = 0;
+        \\ int *retNullPointer(){
+        \\     return NULL;
+        \\ }
+        \\ int main(){
+        \\     int k = 4;
+        \\     return k;
+        \\ }
+    ;
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    const program = try p.parseProgram();
+    const varResolver = try ast.VarResolver.init(allocator);
+    try varResolver.resolve(program);
+
+    const typechecker = try semantic.Typechecker.init(allocator);
+    const hasTypeErr = try typechecker.check(program);
+    _ = try std.testing.expect(hasTypeErr == null);
+    _ = try std.testing.expectEqualStrings("*int", try std.fmt.allocPrint(
+        allocator,
+        "{any}",
+        .{program.externalDecls.items[2].VarDeclaration.expression.?.getType()},
+    ));
+}

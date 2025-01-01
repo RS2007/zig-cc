@@ -70,7 +70,7 @@ pub const TypeError = error{
     ConflictingDeclarations,
     FnPrevDeclArgMismatch,
     InvalidOperand,
-} || AST.CodegenError;
+} || AST.CodegenError || AST.DeclaratorError;
 
 const TypeCheckerError = error{OutOfMemory} || TypeError || AST.DeclaratorError;
 
@@ -180,7 +180,10 @@ pub const Typechecker = struct {
         for (program.externalDecls.items) |externalDecl| {
             if (std.meta.activeTag(externalDecl.*) == .FunctionDecl) {
                 for (externalDecl.FunctionDecl.blockItems.items) |blkItem| {
-                    try resolveBlockReturns(self, blkItem, externalDecl.FunctionDecl.returnType);
+                    resolveBlockReturns(self, blkItem, externalDecl.FunctionDecl.returnType) catch |err| {
+                        std.log.warn("Error at fn: {s}\n", .{(try externalDecl.FunctionDecl.declarator.unwrapFuncDeclarator()).declarator.Ident});
+                        return err;
+                    };
                 }
             }
         }
@@ -192,6 +195,8 @@ pub fn resolveBlockReturns(self: *Typechecker, blockItem: *AST.BlockItem, fnRetu
         const isFnTypePtr = std.meta.activeTag(fnReturnType) == .Pointer;
         const isExprTypePtr = std.meta.activeTag(blockItem.Statement.Return.expression.getType()) == .Pointer;
         if (isFnTypePtr and (!isExprTypePtr and !blockItem.Statement.Return.expression.isNullPtr())) {
+            std.log.warn("Invalid types: fn returns {any}, got {any} in return", .{ fnReturnType, blockItem.Statement.Return.expression.getType() });
+
             return TypeError.InvalidOperand;
         }
         blockItem.Statement.Return.expression = try convert(self.allocator, blockItem.Statement.Return.expression, fnReturnType);
@@ -379,47 +384,75 @@ pub fn typecheckExternalDecl(self: *Typechecker, externalDecl: *AST.ExternalDecl
                         TypeError.GlobalDeclarationNotInteger,
                         try std.fmt.allocPrint(
                             self.allocator,
-                            "Global declarations only support integers for declaration of {s}\n",
+                            "Global declarations only support constants for declaration of {s}\n",
                             .{varDecl.declarator.Ident},
                         ),
                     );
                 }
+                // INFO: handle pointers here, no casting is really required, except
+                // changing the type of the rhs explicitly(only 0 is allowed in
+                // the RHS)
+                const exprType = expression.getType();
 
-                // INFO: Assign the expression value to the decl
-                if (std.meta.activeTag(varDecl.type) != std.meta.activeTag(expression.getType())) {
-                    const castExpr = try self.allocator.create(AST.Expression);
-                    castExpr.* = AST.Expression{ .Cast = .{
-                        .type = varDecl.type,
-                        .value = expression,
-                    } };
-                    varDecl.expression = castExpr;
-                    // INFO: This is shady
-                    initializer = .{ .Initial = switch (varDecl.type) {
-                        .Integer => .{ .type = .Integer, .value = .{
-                            .Integer = expression.Constant.to(i32),
-                        } },
-                        .Long => .{ .type = .Long, .value = .{
-                            .Long = expression.Constant.to(i64),
-                        } },
-                        .UInteger => .{ .type = .UInteger, .value = .{
-                            .UInteger = expression.Constant.to(u32),
-                        } },
-                        .ULong => .{ .type = .ULong, .value = .{
-                            .ULong = expression.Constant.to(u64),
-                        } },
-
-                        .Float => .{ .type = .Float, .value = .{
-                            .Float = expression.Constant.value.Float,
-                        } },
-                        else => unreachable,
-                    } };
+                if (std.meta.activeTag(varDecl.type) == .Pointer) {
+                    if (!expression.isNullPtr())
+                        return TypeErrorStruct.typeError(
+                            self.allocator,
+                            TypeError.GlobalDeclarationNotInteger,
+                            try std.fmt.allocPrint(
+                                self.allocator,
+                                "Global pointer declarations only support 0 as rhs: assignment of {s}\n",
+                                .{varDecl.declarator.Ident},
+                            ),
+                        );
+                    varDecl.expression.?.Constant.type = varDecl.type;
+                    varDecl.expression.?.Constant.value = .{ .ULong = 0 };
                 } else {
-                    initializer = .{ .Initial = switch (varDecl.type) {
-                        .Integer => .{ .type = .Integer, .value = .{ .Integer = expression.Constant.value.Integer } },
-                        .Long => .{ .type = .Long, .value = .{ .Long = expression.Constant.value.Long } },
-                        .Float => .{ .type = .Float, .value = .{ .Float = expression.Constant.value.Float } },
-                        else => unreachable,
-                    } };
+
+                    // TODO: This is a really ugly else block, should refactor
+                    // this
+                    // INFO: Assign the expression value to the decl
+                    if (std.meta.activeTag(varDecl.type) != std.meta.activeTag(exprType)) {
+                        //TODO: handle pointers differently
+
+                        const castExpr = try self.allocator.create(AST.Expression);
+                        castExpr.* = AST.Expression{ .Cast = .{
+                            .type = varDecl.type,
+                            .value = expression,
+                        } };
+                        varDecl.expression = castExpr;
+                        // INFO: This is shady
+                        initializer = .{ .Initial = switch (varDecl.type) {
+                            .Integer => .{ .type = .Integer, .value = .{
+                                .Integer = expression.Constant.to(i32),
+                            } },
+                            .Long => .{ .type = .Long, .value = .{
+                                .Long = expression.Constant.to(i64),
+                            } },
+                            .UInteger => .{ .type = .UInteger, .value = .{
+                                .UInteger = expression.Constant.to(u32),
+                            } },
+                            .ULong => .{ .type = .ULong, .value = .{
+                                .ULong = expression.Constant.to(u64),
+                            } },
+
+                            .Float => .{ .type = .Float, .value = .{
+                                .Float = expression.Constant.value.Float,
+                            } },
+                            .Pointer => .{
+                                .type = varDecl.type,
+                                .value = .{ .ULong = 0 },
+                            },
+                            else => unreachable,
+                        } };
+                    } else {
+                        initializer = .{ .Initial = switch (varDecl.type) {
+                            .Integer => .{ .type = .Integer, .value = .{ .Integer = expression.Constant.value.Integer } },
+                            .Long => .{ .type = .Long, .value = .{ .Long = expression.Constant.value.Long } },
+                            .Float => .{ .type = .Float, .value = .{ .Float = expression.Constant.value.Float } },
+                            else => unreachable,
+                        } };
+                    }
                 }
 
                 // INFO: Extern decls no assignment check
@@ -444,7 +477,7 @@ pub fn typecheckExternalDecl(self: *Typechecker, externalDecl: *AST.ExternalDecl
             }
 
             global = varDecl.storageClass != AST.Qualifier.STATIC;
-            if (self.symbolTable.get(varDecl.declarator.Ident)) |varSym| {
+            if (self.symbolTable.get((try varDecl.declarator.unwrapIdentDecl()).Ident)) |varSym| {
                 //INFO: Function redeclaration as variable handling
                 if (varSym.typeInfo.isOfKind(.Function)) {
                     return TypeErrorStruct.typeError(
@@ -453,7 +486,7 @@ pub fn typecheckExternalDecl(self: *Typechecker, externalDecl: *AST.ExternalDecl
                         try std.fmt.allocPrint(
                             self.allocator,
                             "Function redeclared as var: {s}\n",
-                            .{varDecl.declarator.Ident},
+                            .{(try varDecl.declarator.unwrapIdentDecl()).Ident},
                         ),
                     );
                 }
@@ -544,6 +577,7 @@ pub fn typecheckExternalDecl(self: *Typechecker, externalDecl: *AST.ExternalDecl
                     .UInteger => .UInteger,
                     .ULong => .ULong,
                     .Float => .Float,
+                    .Pointer => try varDecl.type.toSemPointerTy(self.allocator),
                     else => unreachable,
                 },
                 .attributes = .{
@@ -553,7 +587,7 @@ pub fn typecheckExternalDecl(self: *Typechecker, externalDecl: *AST.ExternalDecl
                     },
                 },
             };
-            try self.symbolTable.put(varDecl.declarator.Ident, sym);
+            try self.symbolTable.put((try varDecl.declarator.unwrapIdentDecl()).Ident, sym);
         },
     }
     return null;
@@ -1034,7 +1068,7 @@ fn typecheckExpr(self: *Typechecker, expr: *AST.Expression) TypeError!AST.Type {
         .Deref => |deref| {
             const innerType = try typecheckExpr(self, deref.exp);
             if (std.meta.activeTag(innerType) != .Pointer) {
-                std.log.warn("Dereferenced type is not a pointer\n", .{});
+                std.log.warn("Dereferenced type is not a pointer, got {any} instead\n", .{std.meta.activeTag(innerType)});
                 return TypeError.InvalidOperand;
             }
             expr.Deref.type = innerType.Pointer.*;
