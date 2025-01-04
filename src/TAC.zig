@@ -66,6 +66,11 @@ pub fn astSymTabToTacSymTab(allocator: std.mem.Allocator, astSymTab: std.StringH
                 .static = std.meta.activeTag(sym.attributes) == .StaticAttr,
                 .signed = false,
             } },
+            .Pointer => .{ .Obj = .{
+                .type = .QuadWord,
+                .static = std.meta.activeTag(sym.attributes) == .StaticAttr,
+                .signed = false,
+            } },
             .Void => unreachable,
         };
         try asmSymTab.put(
@@ -186,6 +191,9 @@ pub const InstructionType = enum {
     FloatToInt,
     IntToFloat,
     UIntToFloat,
+    GetAddress,
+    Store,
+    Load,
 };
 
 pub const Return = struct {
@@ -306,6 +314,20 @@ pub inline fn createInst(comptime kind: InstructionType, contents: anytype, allo
     unreachable;
 }
 
+pub const GetAddress = struct {
+    src: *Val,
+    dest: *Val,
+};
+
+pub const Store = struct {
+    src: *Val,
+    destPointer: *Val,
+};
+pub const Load = struct {
+    srcPointer: *Val,
+    dest: *Val,
+};
+
 pub const Instruction = union(InstructionType) {
     Return: Return,
     Unary: Unary,
@@ -323,6 +345,9 @@ pub const Instruction = union(InstructionType) {
     FloatToInt: FloatToInt,
     IntToFloat: IntToFloat,
     UIntToFloat: UIntToFloat,
+    GetAddress: GetAddress,
+    Store: Store,
+    Load: Load,
 
     pub fn codegen(
         instruction: *Instruction,
@@ -853,6 +878,13 @@ pub const Constant = union(ConstantType) {
     Float: f64,
 };
 
+pub const BoxedVal = union(enum) {
+    // INFO: With pointers, there are some edge cases during assignment, see
+    // notes.md
+    PlainVal: *Val,
+    DerefedVal: *Val,
+};
+
 pub const Val = union(ValType) {
     Constant: Constant,
     Variable: []u8,
@@ -924,3 +956,33 @@ pub const Val = union(ValType) {
         }
     }
 };
+
+test "tac generation for pointers and deref" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    const programStr =
+        \\ int main(){
+        \\     int a = 5; 
+        \\     int *b = &a;
+        \\     *b = *b + 1;
+        \\     return a;
+        \\ }
+    ;
+
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    const program = try p.parseProgram();
+    const varResolver = try ast.VarResolver.init(allocator);
+    try varResolver.resolve(program);
+    const typechecker = try semantic.Typechecker.init(allocator);
+    const hasTypeErr = try typechecker.check(program);
+    if (hasTypeErr) |typeError| {
+        std.log.warn("\x1b[33mError\x1b[0m: {s}\n", .{typeError});
+        std.debug.assert(false);
+    }
+    try ast.loopLabelPass(program, allocator);
+    const tacRenderer = try ast.TACRenderer.init(allocator, typechecker.symbolTable);
+    const tacProgram = try tacRenderer.render(program);
+    _ = tacProgram;
+}

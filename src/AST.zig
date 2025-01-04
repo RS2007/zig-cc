@@ -176,7 +176,8 @@ pub const Declaration = struct {
     pub fn genTACInstructions(self: Self, renderer: *TACRenderer, instructions: *std.ArrayList(*tac.Instruction), symbolTable: *std.StringHashMap(*semantic.Symbol), allocator: std.mem.Allocator) CodegenError!void {
         const hasExpr = self.expression;
         if (hasExpr) |expression| {
-            if (symbolTable.get(self.declarator.Ident)) |sym| {
+            const symbolIdentifier = (try self.declarator.unwrapIdentDecl()).Ident;
+            if (symbolTable.get(symbolIdentifier)) |sym| {
                 if (sym.attributes == .StaticAttr) {
                     return;
                 }
@@ -214,6 +215,8 @@ pub const Declaration = struct {
 pub const CodegenError = error{
     OutOfMemory,
     NoSpaceLeft,
+    NoInnerFuncDeclarator,
+    FunctionDeclCantUnwrapIdent,
 };
 
 pub const StatementType = enum {
@@ -397,6 +400,13 @@ pub const Type = union(enum) {
             },
             else => return true,
         }
+    }
+
+    pub inline fn isNumeric(self: Self) bool {
+        return switch (self) {
+            .Integer, .UInteger, .Long, .ULong => true,
+            else => false,
+        };
     }
 
     pub fn format(self: Self, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
@@ -1116,15 +1126,50 @@ pub const Expression = union(ExpressionType) {
         };
     }
 
-    pub fn genTACInstructions(expression: *Expression, renderer: *TACRenderer, instructions: *std.ArrayList(*tac.Instruction), allocator: std.mem.Allocator) CodegenError!*tac.Val {
+    pub fn genTACInstructionsAndCvt(expression: *Expression, renderer: *TACRenderer, instructions: *std.ArrayList(*tac.Instruction), allocator: std.mem.Allocator) *tac.Val {
+        const boxedVal = try expression.genTACInstructions(renderer, instructions, allocator);
+
+        return switch (boxedVal.*) {
+            .PlainVal => |val| val,
+            .DerefedVal => |innerPtr| blk: {
+                const newTacVal = try allocator.create(tac.Val);
+                newTacVal.* = tac.Val{
+                    .Variable = (try tempGen.genTemp()),
+                };
+                const loadInstr = try tac.createInst(.Load, .{ .srcPointer = innerPtr, .dest = newTacVal });
+                try instructions.append(loadInstr);
+                break :blk newTacVal;
+            },
+        };
+    }
+    inline fn chooseCast(renderer: *TACRenderer, inner: *tac.Val, dest: *tac.Val, castType: Type) !tac.Instruction {
+        return if (inner.getAsmTypeFromSymTab(&renderer.asmSymbolTable).? == .Float) try chooseFloatCastInst(
+            inner,
+            dest,
+            castType,
+        ) else try chooseIntCastInst(
+            inner,
+            dest,
+            castType,
+            @constCast(&renderer.asmSymbolTable),
+        );
+    }
+
+    pub fn genTACInstructions(
+        expression: *Expression,
+        renderer: *TACRenderer,
+        instructions: *std.ArrayList(*tac.Instruction),
+    ) CodegenError!*tac.BoxedVal {
         switch (expression.*) {
             .Cast => |cast| {
-                const inner = try cast.value.genTACInstructions(renderer, instructions, allocator);
+                const inner = try cast.value.genTACInstructionsAndCvt(renderer, instructions);
                 if (std.meta.activeTag(cast.value.getType()) == std.meta.activeTag(cast.type)) {
                     return inner;
                 }
-                const dest = try allocator.create(tac.Val);
-                const destName = try tempGen.genTemp(allocator);
+
+                const boxed = try renderer.allocator.create(tac.BoxedVal);
+                const dest = try renderer.allocator.create(tac.Val);
+                const destName = try tempGen.genTemp(renderer.allocator);
                 const asmSymbol = try renderer.allocator.create(assembly.Symbol);
                 asmSymbol.* = .{
                     .Obj = .{
@@ -1135,83 +1180,90 @@ pub const Expression = union(ExpressionType) {
                 };
                 try renderer.asmSymbolTable.put(destName, asmSymbol);
                 dest.* = tac.Val{ .Variable = destName };
+                boxed.* = tac.BoxedVal{ .PlainVal = dest };
 
-                if (inner.getAsmTypeFromSymTab(&renderer.asmSymbolTable).? == .Float) {
-                    //INFO: floats rouned to integers and longs
-                    const castInst = try allocator.create(tac.Instruction);
-                    castInst.* = try chooseFloatCastInst(inner, dest, cast.type);
-                    try instructions.append(castInst);
-                } else {
-                    //INFO: cast and truncate
-                    const castInst = try allocator.create(tac.Instruction);
-                    castInst.* = try chooseIntCastInst(
-                        inner,
-                        dest,
-                        cast.type,
-                        @constCast(&renderer.asmSymbolTable),
-                    );
-                    try instructions.append(castInst);
-                }
-                return dest;
+                const castInst = try renderer.allocator.create(tac.Instruction);
+                castInst.* = try chooseCast(renderer, inner, dest, cast.type);
+                try instructions.append(castInst);
+                return boxed;
             },
             .AddrOf => |addrOf| {
-                _ = addrOf;
-                unreachable;
+                const inner = try addrOf.exp.genTACInstructions(renderer, instructions);
+                const boxed = try renderer.allocator.create(tac.BoxedVal);
+                if (std.meta.activeTag(inner) == .DerefedVal) {
+                    // If you are taking the address of a derefed value:
+                    // &(*k) == k
+                    boxed.* = .{ .PlainVal = inner.DerefedVal };
+                    return boxed;
+                }
+                const storeInstr = try renderer.allocator.create(tac.Instruction);
+                const tacDest = try renderer.allocator.create(tac.Val);
+                const tacDestName = try tempGen.genTemp(renderer.allocator);
+                const tacDestSym = try renderer.allocator.create(assembly.Symbol);
+                tacDestSym.* = .{ .Obj = .{
+                    .type = .QuadWord,
+                    .static = false,
+                    .signed = false,
+                } };
+                try renderer.asmSymbolTable.put(tacDestName, tacDestSym);
+                tacDest.* = .{
+                    .Variable = tacDestName,
+                };
+                storeInstr.* = .{ .Store = .{
+                    .src = inner.PlainVal,
+                    .destPointer = tacDest,
+                } };
+                try instructions.append(storeInstr);
+                boxed.* = .{ .PlainVal = tacDest };
+                return boxed;
             },
             .Deref => |deref| {
-                _ = deref;
-                unreachable;
+                const expr = deref.exp.genTACInstructionsAndCvt(renderer, instructions);
+                const loadInstruction = try renderer.allocator.create(tac.Instruction);
+                const tacDestName = try tempGen.genTemp(renderer.allocator);
+                const tacDest = tac.Val{ .Variable = tacDestName };
+                const tacDestSym = try renderer.allocator.create(assembly.Symbol);
+                const boxed = try renderer.allocator.create(tac.BoxedVal);
+                tacDestSym.* = .{ .Obj = .{
+                    .type = assembly.AsmType.from(deref.type.?),
+                    .signed = deref.type.?.signed(),
+                    .static = false,
+                } };
+                try renderer.asmSymbolTable.put(tacDestName, tacDestSym);
+                loadInstruction.* = .{
+                    .Load = .{
+                        .srcPointer = expr,
+                        .dest = tacDest,
+                    },
+                };
+                instructions.append(loadInstruction);
+                boxed.* = .{ .DerefedVal = tacDest };
+                return boxed;
             },
             .Constant => |constant| {
-                switch (constant.value) {
-                    .Integer => |integer| {
-                        const val = try allocator.create(tac.Val);
-                        val.* = tac.Val{ .Constant = .{ .Integer = integer } };
-                        return val;
-                    },
-                    .Long => |long| {
-                        const val = try allocator.create(tac.Val);
-                        val.* = tac.Val{ .Constant = .{ .Long = long } };
-                        return val;
-                    },
-                    .UInteger => |uint| {
-                        const val = try allocator.create(tac.Val);
-                        val.* = .{ .Constant = .{ .UInt = uint } };
-                        return val;
-                    },
-                    .ULong => |ulong| {
-                        const val = try allocator.create(tac.Val);
-                        val.* = .{ .Constant = .{ .ULong = ulong } };
-                        return val;
-                    },
-                    .Float => |float| {
-                        const val = try allocator.create(tac.Val);
-                        val.* = .{ .Constant = .{ .Float = float } };
-                        return val;
-                    },
-                }
+                const val = try renderer.allocator.create(tac.Val);
+                const boxed = try renderer.allocator.create(tac.BoxedVal);
+                val.* = switch (constant.value) {
+                    .Integer => |integer| tac.Val{ .Constant = .{ .Integer = integer } },
+                    .Long => |long| tac.Val{ .Constant = .{ .Long = long } },
+                    .UInteger => |uint| .{ .Constant = .{ .UInt = uint } },
+                    .ULong => |ulong| .{ .Constant = .{ .ULong = ulong } },
+                    .Float => |float| .{ .Constant = .{ .Float = float } },
+                };
+                boxed.* = .{ .PlainVal = val };
+                return boxed;
             },
             .Unary => |unary| {
                 switch (unary.unaryOp) {
                     .NEGATE => {
-                        const rhsVal = try unary.exp.genTACInstructions(renderer, instructions, allocator);
-                        const lhsVal = try allocator.create(tac.Val);
-                        const temp = try tempGen.genTemp(allocator);
+                        const rhsVal = try unary.exp.genTACInstructions(renderer, instructions);
+                        const lhsVal = try renderer.allocator.create(tac.Val);
+                        const temp = try tempGen.genTemp(renderer.allocator);
                         const asmSymbol = try renderer.allocator.create(assembly.Symbol);
                         asmSymbol.* = .{
                             .Obj = .{
-                                .type = switch (unary.type.?) {
-                                    .Integer, .UInteger => assembly.AsmType.LongWord,
-                                    .Long, .ULong => assembly.AsmType.QuadWord,
-                                    .Float => .Float,
-                                    else => unreachable,
-                                },
-                                .signed = switch (unary.type.?) {
-                                    .Integer, .Long => true,
-                                    .UInteger, .ULong => false,
-                                    .Float => false,
-                                    else => unreachable,
-                                },
+                                .type = assembly.AsmType.from(unary.type.?),
+                                .signed = unary.type.?.signed(),
                                 .static = false,
                             },
                         };
@@ -1219,7 +1271,7 @@ pub const Expression = union(ExpressionType) {
                         lhsVal.* = tac.Val{
                             .Variable = temp,
                         };
-                        const instr = try allocator.create(tac.Instruction);
+                        const instr = try renderer.allocator.create(tac.Instruction);
                         instr.* = tac.Instruction{ .Unary = tac.Unary{
                             .op = tac.UnaryOp.NEGATE,
                             .src = rhsVal,
@@ -1229,9 +1281,9 @@ pub const Expression = union(ExpressionType) {
                         return lhsVal;
                     },
                     .COMPLEMENT => {
-                        const rhsVal = try unary.exp.genTACInstructions(renderer, instructions, allocator);
-                        const lhsVal = try allocator.create(tac.Val);
-                        const temp = try tempGen.genTemp(allocator);
+                        const rhsVal = try unary.exp.genTACInstructions(renderer, instructions);
+                        const lhsVal = try renderer.allocator.create(tac.Val);
+                        const temp = try tempGen.genTemp(renderer.allocator);
                         const asmSymbol = try renderer.allocator.create(assembly.Symbol);
                         asmSymbol.* = .{
                             .Obj = .{
@@ -1253,7 +1305,7 @@ pub const Expression = union(ExpressionType) {
                         lhsVal.* = tac.Val{
                             .Variable = temp,
                         };
-                        const instr = try allocator.create(tac.Instruction);
+                        const instr = try renderer.allocator.create(tac.Instruction);
                         instr.* = tac.Instruction{ .Unary = tac.Unary{
                             .op = tac.UnaryOp.COMPLEMENT,
                             .src = rhsVal,
@@ -1265,14 +1317,14 @@ pub const Expression = union(ExpressionType) {
                 }
             },
             .Binary => |binary| {
-                const one = try allocator.create(tac.Val);
+                const one = try renderer.allocator.create(tac.Val);
                 one.* = tac.Val{ .Constant = .{ .Integer = 1 } };
-                const zero = try allocator.create(tac.Val);
+                const zero = try renderer.allocator.create(tac.Val);
                 zero.* = tac.Val{ .Constant = .{ .Integer = 0 } };
                 if (binary.op == BinOp.LOGIC_AND or binary.op == BinOp.LOGIC_OR) {
-                    const valLeft = try binary.lhs.genTACInstructions(renderer, instructions, allocator);
-                    const storeTemp = try allocator.create(tac.Val);
-                    const storeTempName = try tempGen.genTemp(allocator);
+                    const valLeft = try binary.lhs.genTACInstructions(renderer, instructions);
+                    const storeTemp = try renderer.allocator.create(tac.Val);
+                    const storeTempName = try tempGen.genTemp(renderer.allocator);
                     const asmSymbol = try renderer.allocator.create(assembly.Symbol);
                     asmSymbol.* = .{
                         .Obj = .{
@@ -1293,93 +1345,93 @@ pub const Expression = union(ExpressionType) {
                     try renderer.asmSymbolTable.put(storeTempName, asmSymbol);
                     storeTemp.* = tac.Val{ .Variable = storeTempName };
                     if (binary.op == BinOp.LOGIC_AND) {
-                        const falseLabel = try std.fmt.allocPrint(allocator, "falseLabel_{d}", .{tempGen.genId()});
-                        const endLabel = try std.fmt.allocPrint(allocator, "endLabel_{d}", .{tempGen.genId()});
-                        const falseLabelInstr = try allocator.create(tac.Instruction);
+                        const falseLabel = try std.fmt.allocPrint(renderer.allocator, "falseLabel_{d}", .{tempGen.genId()});
+                        const endLabel = try std.fmt.allocPrint(renderer.allocator, "endLabel_{d}", .{tempGen.genId()});
+                        const falseLabelInstr = try renderer.allocator.create(tac.Instruction);
                         falseLabelInstr.* = tac.Instruction{
                             .Label = falseLabel,
                         };
-                        const jmpIfZeroLeft = try allocator.create(tac.Instruction);
+                        const jmpIfZeroLeft = try renderer.allocator.create(tac.Instruction);
                         jmpIfZeroLeft.* = tac.Instruction{ .JumpIfZero = tac.Jmp{
                             .condition = valLeft,
                             .target = falseLabel,
                         } };
                         try instructions.append(jmpIfZeroLeft);
-                        const valRight = try binary.rhs.genTACInstructions(renderer, instructions, allocator);
-                        const jmpIfZeroRight = try allocator.create(tac.Instruction);
+                        const valRight = try binary.rhs.genTACInstructions(renderer, instructions);
+                        const jmpIfZeroRight = try renderer.allocator.create(tac.Instruction);
                         jmpIfZeroRight.* = tac.Instruction{ .JumpIfZero = tac.Jmp{
                             .condition = valRight,
                             .target = falseLabel,
                         } };
                         try instructions.append(jmpIfZeroRight);
-                        const cpOneToDest = try allocator.create(tac.Instruction);
+                        const cpOneToDest = try renderer.allocator.create(tac.Instruction);
                         cpOneToDest.* = tac.Instruction{ .Copy = tac.Copy{
                             .src = one,
                             .dest = storeTemp,
                         } };
                         try instructions.append(cpOneToDest);
-                        const jmpToEnd = try allocator.create(tac.Instruction);
+                        const jmpToEnd = try renderer.allocator.create(tac.Instruction);
                         jmpToEnd.* = tac.Instruction{ .Jump = endLabel };
                         try instructions.append(jmpToEnd);
                         try instructions.append(falseLabelInstr);
-                        const cpZeroToDest = try allocator.create(tac.Instruction);
+                        const cpZeroToDest = try renderer.allocator.create(tac.Instruction);
                         cpZeroToDest.* = tac.Instruction{ .Copy = tac.Copy{
                             .src = zero,
                             .dest = storeTemp,
                         } };
                         try instructions.append(cpZeroToDest);
-                        const endLabelInst = try allocator.create(tac.Instruction);
+                        const endLabelInst = try renderer.allocator.create(tac.Instruction);
                         endLabelInst.* = tac.Instruction{ .Label = endLabel };
                         try instructions.append(endLabelInst);
                         return storeTemp;
                     }
                     if (binary.op == BinOp.LOGIC_OR) {
-                        const endLabel = try std.fmt.allocPrint(allocator, "endLabel_{d}", .{tempGen.genId()});
-                        const trueLabel = try std.fmt.allocPrint(allocator, "trueLabel_{d}", .{tempGen.genId()});
-                        const trueLabelInst = try allocator.create(tac.Instruction);
+                        const endLabel = try std.fmt.allocPrint(renderer.allocator, "endLabel_{d}", .{tempGen.genId()});
+                        const trueLabel = try std.fmt.allocPrint(renderer.allocator, "trueLabel_{d}", .{tempGen.genId()});
+                        const trueLabelInst = try renderer.allocator.create(tac.Instruction);
                         trueLabelInst.* = tac.Instruction{
                             .Label = trueLabel,
                         };
-                        const jmpIfNotZero = try allocator.create(tac.Instruction);
+                        const jmpIfNotZero = try renderer.allocator.create(tac.Instruction);
                         jmpIfNotZero.* = tac.Instruction{ .JumpIfNotZero = tac.Jmp{
                             .condition = valLeft,
                             .target = trueLabel,
                         } };
                         try instructions.append(jmpIfNotZero);
-                        const valRight = try binary.rhs.genTACInstructions(renderer, instructions, allocator);
-                        const jmpIfNotZeroRight = try allocator.create(tac.Instruction);
+                        const valRight = try binary.rhs.genTACInstructions(renderer, instructions);
+                        const jmpIfNotZeroRight = try renderer.allocator.create(tac.Instruction);
                         jmpIfNotZeroRight.* = tac.Instruction{ .JumpIfNotZero = tac.Jmp{
                             .condition = valRight,
                             .target = trueLabel,
                         } };
                         try instructions.append(jmpIfNotZeroRight);
-                        const cpZeroToDest = try allocator.create(tac.Instruction);
+                        const cpZeroToDest = try renderer.allocator.create(tac.Instruction);
                         cpZeroToDest.* = tac.Instruction{ .Copy = tac.Copy{
                             .src = zero,
                             .dest = storeTemp,
                         } };
                         try instructions.append(cpZeroToDest);
-                        const jmpToEnd = try allocator.create(tac.Instruction);
+                        const jmpToEnd = try renderer.allocator.create(tac.Instruction);
                         jmpToEnd.* = tac.Instruction{ .Jump = endLabel };
                         try instructions.append(jmpToEnd);
                         try instructions.append(trueLabelInst);
-                        const cpOneToDest = try allocator.create(tac.Instruction);
+                        const cpOneToDest = try renderer.allocator.create(tac.Instruction);
                         cpOneToDest.* = tac.Instruction{ .Copy = tac.Copy{
                             .src = one,
                             .dest = storeTemp,
                         } };
                         try instructions.append(cpOneToDest);
-                        const endLabelInst = try allocator.create(tac.Instruction);
+                        const endLabelInst = try renderer.allocator.create(tac.Instruction);
                         endLabelInst.* = tac.Instruction{ .Label = endLabel };
                         try instructions.append(endLabelInst);
                         return storeTemp;
                     }
                     unreachable;
                 }
-                const valLeft = try binary.lhs.genTACInstructions(renderer, instructions, allocator);
-                const valRight = try binary.rhs.genTACInstructions(renderer, instructions, allocator);
-                const storeTemp = try allocator.create(tac.Val);
-                const storeTempName = try tempGen.genTemp(allocator);
+                const valLeft = try binary.lhs.genTACInstructions(renderer, instructions);
+                const valRight = try binary.rhs.genTACInstructions(renderer, instructions);
+                const storeTemp = try renderer.allocator.create(tac.Val);
+                const storeTempName = try tempGen.genTemp(renderer.allocator);
                 const asmSymbol = try renderer.allocator.create(assembly.Symbol);
                 asmSymbol.* = .{
                     .Obj = .{
@@ -1400,7 +1452,7 @@ pub const Expression = union(ExpressionType) {
                 };
                 try renderer.asmSymbolTable.put(storeTempName, asmSymbol);
                 storeTemp.* = tac.Val{ .Variable = storeTempName };
-                const instr = try allocator.create(tac.Instruction);
+                const instr = try renderer.allocator.create(tac.Instruction);
                 instr.* = tac.Instruction{ .Binary = tac.Binary{
                     .op = tacBinOpFromASTBinOp(binary.op),
                     .left = valLeft,
@@ -1411,16 +1463,16 @@ pub const Expression = union(ExpressionType) {
                 return storeTemp;
             },
             .Identifier => |iden| {
-                const tacVal = try allocator.create(tac.Val);
-                tacVal.* = tac.Val{
-                    .Variable = iden.name,
-                };
-                return tacVal;
+                const tacVal = try renderer.allocator.create(tac.Val);
+                const boxed = try renderer.allocator.create(tac.BoxedVal);
+                tacVal.* = tac.Val{ .Variable = iden.name };
+                boxed.* = .{ .PlainVal = tacVal };
+                return boxed;
             },
             .Assignment => |assignment| {
-                const lhs = try assignment.lhs.genTACInstructions(renderer, instructions, allocator);
-                const rhs = try assignment.rhs.genTACInstructions(renderer, instructions, allocator);
-                const cpInstr = try allocator.create(tac.Instruction);
+                const lhs = try assignment.lhs.genTACInstructions(renderer, instructions);
+                const rhs = try assignment.rhs.genTACInstructions(renderer, instructions);
+                const cpInstr = try renderer.allocator.create(tac.Instruction);
                 cpInstr.* = tac.Instruction{ .Copy = tac.Copy{
                     .src = rhs,
                     .dest = lhs,
@@ -1429,9 +1481,9 @@ pub const Expression = union(ExpressionType) {
                 return lhs;
             },
             .Ternary => |ternary| {
-                const comparision = try ternary.condition.genTACInstructions(renderer, instructions, allocator);
-                const storeTemp = try allocator.create(tac.Val);
-                const storeTempName = try tempGen.genTemp(allocator);
+                const comparision = try ternary.condition.genTACInstructions(renderer, instructions);
+                const storeTemp = try renderer.allocator.create(tac.Val);
+                const storeTempName = try tempGen.genTemp(renderer.allocator);
                 const asmSymbol = try renderer.allocator.create(assembly.Symbol);
                 asmSymbol.* = .{
                     .Obj = .{
@@ -1453,11 +1505,11 @@ pub const Expression = union(ExpressionType) {
                 storeTemp.* = tac.Val{
                     .Variable = storeTempName,
                 };
-                const jmpIfZeroInst = try allocator.create(tac.Instruction);
-                const endLabel = try allocator.create(tac.Instruction);
-                const falseLabel = try allocator.create(tac.Instruction);
-                const falseLabelName = try std.fmt.allocPrint(allocator, "falseLabel_{d}", .{tempGen.genId()});
-                const endLabelName = try std.fmt.allocPrint(allocator, "endLabel_{d}", .{tempGen.genId()});
+                const jmpIfZeroInst = try renderer.allocator.create(tac.Instruction);
+                const endLabel = try renderer.allocator.create(tac.Instruction);
+                const falseLabel = try renderer.allocator.create(tac.Instruction);
+                const falseLabelName = try std.fmt.allocPrint(renderer.allocator, "falseLabel_{d}", .{tempGen.genId()});
+                const endLabelName = try std.fmt.allocPrint(renderer.allocator, "endLabel_{d}", .{tempGen.genId()});
                 falseLabel.* = tac.Instruction{
                     .Label = falseLabelName,
                 };
@@ -1471,8 +1523,8 @@ pub const Expression = union(ExpressionType) {
                     },
                 };
                 try instructions.append(jmpIfZeroInst);
-                const middle = try ternary.lhs.genTACInstructions(renderer, instructions, allocator);
-                const cpMiddleToDest = try allocator.create(tac.Instruction);
+                const middle = try ternary.lhs.genTACInstructions(renderer, instructions);
+                const cpMiddleToDest = try renderer.allocator.create(tac.Instruction);
                 cpMiddleToDest.* = tac.Instruction{
                     .Copy = .{
                         .dest = storeTemp,
@@ -1480,14 +1532,14 @@ pub const Expression = union(ExpressionType) {
                     },
                 };
                 try instructions.append(cpMiddleToDest);
-                const uncondJumpFromTrue = try allocator.create(tac.Instruction);
+                const uncondJumpFromTrue = try renderer.allocator.create(tac.Instruction);
                 uncondJumpFromTrue.* = tac.Instruction{
                     .Jump = endLabelName,
                 };
                 try instructions.append(uncondJumpFromTrue);
                 try instructions.append(falseLabel);
-                const end = try ternary.rhs.genTACInstructions(renderer, instructions, allocator);
-                const cpEndToDest = try allocator.create(tac.Instruction);
+                const end = try ternary.rhs.genTACInstructions(renderer, instructions);
+                const cpEndToDest = try renderer.allocator.create(tac.Instruction);
                 cpEndToDest.* = tac.Instruction{
                     .Copy = .{
                         .src = end,
@@ -1499,8 +1551,8 @@ pub const Expression = union(ExpressionType) {
                 return storeTemp;
             },
             .FunctionCall => |fnCall| {
-                const storeTemp = try allocator.create(tac.Val);
-                const storeTempName = try tempGen.genTemp(allocator);
+                const storeTemp = try renderer.allocator.create(tac.Val);
+                const storeTempName = try tempGen.genTemp(renderer.allocator);
                 const asmSymbol = try renderer.allocator.create(assembly.Symbol);
                 asmSymbol.* = .{
                     .Obj = .{
@@ -1521,10 +1573,10 @@ pub const Expression = union(ExpressionType) {
                 };
                 try renderer.asmSymbolTable.put(storeTempName, asmSymbol);
                 storeTemp.* = tac.Val{ .Variable = storeTempName };
-                const tacFnCall = try allocator.create(tac.Instruction);
-                var tacFnCallArgs = std.ArrayList(*tac.Val).init(allocator);
+                const tacFnCall = try renderer.allocator.create(tac.Instruction);
+                var tacFnCallArgs = std.ArrayList(*tac.Val).init(renderer.allocator);
                 for (fnCall.args.items) |arg| {
-                    try tacFnCallArgs.append(try arg.genTACInstructions(renderer, instructions, allocator));
+                    try tacFnCallArgs.append(try arg.genTACInstructions(renderer, instructions));
                 }
                 tacFnCall.* = .{ .FunctionCall = .{
                     .name = fnCall.name,

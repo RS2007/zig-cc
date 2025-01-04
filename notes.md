@@ -352,3 +352,30 @@ typechecking stage.
 * Eventually would have to implement function pointers: and that will make me
 want to shoot myself, cause that would involve a good chunk of rewriting parser,
 AST and the semanalyzer.
+
+- During typechecking: 
+* All functions and variable declaration types are resolved from their
+declarators.
+* For var declaration:
+    * if an expression is found 
+    * if the declaration type is different from the expression type, a type
+    interchange is discovered:
+        * Cast Instruction
+        * For global pointer declarations: check if what's inside is null, else
+          throw
+
+
+## TAC for address of:
+* These pointers need to be lvalue converted.
+* `*k = 4`
+* Lets try converting this to TAC:
+    * generate lhs and copy rhs to it
+        * LOAD tempForDerefK FROM k
+        * COPY 4 to tempForDerefK 
+    * This is obviously wrong, we are just overriding a stack variable, not the
+      actual location pointed by k. 
+    * Adding an indirection to generating tacky: 
+        * Dereferenced pointer:
+            * This is dereferenced, might have to operate on the pointer during
+              assignment
+        * Plain Value

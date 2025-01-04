@@ -743,7 +743,7 @@ test "basic semanalyze" {
         \\ int* three() { return &k;}
         \\ int main(){
         \\     int* c = three();
-        \\     int d = c;
+        \\     int *d = c;
         \\     int ***e;
         \\     return 4;
         \\ }
@@ -759,7 +759,7 @@ test "basic semanalyze" {
         std.log.warn("Type error: {any}\n", .{typeError});
         unreachable;
     };
-    _ = try std.testing.expectEqual(hasTypeError, null);
+    _ = try std.testing.expect(hasTypeError == null);
 
     const returnType = program.externalDecls.items[1].FunctionDecl.returnType;
     const intType: *const ast.Type = &(.Integer);
@@ -784,7 +784,6 @@ test "deref and addrof parsing" {
         \\ int k = 3;
         \\ int main(){
         \\     int* c = &k;
-        \\     int* ab = &c;
         \\     int** d = &c;
         \\     int*** e = &d;
         \\     return *c + **d + ***e;
@@ -801,7 +800,7 @@ test "deref and addrof parsing" {
         std.log.warn("Type error: {any}\n", .{typeError});
         unreachable;
     };
-    _ = try std.testing.expectEqualStrings("*int", try std.fmt.allocPrint(
+    _ = try std.testing.expectEqualStrings("**int", try std.fmt.allocPrint(
         allocator,
         "{any}",
         .{program.externalDecls.items[1].FunctionDecl.blockItems.items[1].Declaration.expression.?.getType()},
@@ -1043,4 +1042,72 @@ test "static pointer global" {
         "{any}",
         .{program.externalDecls.items[2].VarDeclaration.expression.?.getType()},
     ));
+}
+
+test "undeclared pointer" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const programStr =
+        \\ int *a;
+        \\ int main(){
+        \\     return *a;
+        \\ }
+    ;
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    const program = try p.parseProgram();
+    const varResolver = try ast.VarResolver.init(allocator);
+    try varResolver.resolve(program);
+
+    const typechecker = try semantic.Typechecker.init(allocator);
+    const hasTypeErr = try typechecker.check(program);
+    _ = try std.testing.expect(hasTypeErr == null);
+}
+
+test "weird pointer cast cases" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const programStr =
+        \\ int *a;
+        \\ int main(){
+        \\     int **b = a;
+        \\     return **b;
+        \\ }
+    ;
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    const program = try p.parseProgram();
+    const varResolver = try ast.VarResolver.init(allocator);
+    try varResolver.resolve(program);
+
+    const typechecker = try semantic.Typechecker.init(allocator);
+    const hasTypeErr = try typechecker.check(program);
+    _ = try std.testing.expect(hasTypeErr != null);
+    std.log.warn("\x1b[31mError:\x1b[0m {s}\n", .{hasTypeErr.?});
+}
+
+test "ternary pointer conversions" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const programStr =
+        \\ int main(){
+        \\     int k = 3;
+        \\     int *b = &k;
+        \\     int *c = (k == 3) ? b : 0;
+        \\     return *b;
+        \\ }
+    ;
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    const program = try p.parseProgram();
+    const varResolver = try ast.VarResolver.init(allocator);
+    try varResolver.resolve(program);
+
+    const typechecker = try semantic.Typechecker.init(allocator);
+    const hasTypeErr = try typechecker.check(program);
+    _ = try std.testing.expect(hasTypeErr == null);
+    //std.log.warn("\x1b[31mError:\x1b[0m {s}\n", .{hasTypeErr.?});
 }
