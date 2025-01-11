@@ -349,6 +349,88 @@ pub const Instruction = union(InstructionType) {
     Store: Store,
     Load: Load,
 
+    pub fn format(
+        self: Instruction,
+        comptime fmt: []const u8,
+        options: std.fmt.FormatOptions,
+        writer: anytype,
+    ) !void {
+        _ = fmt;
+        _ = options;
+        switch (self) {
+            .Return => |ret| try writer.print("return {any}", .{ret.val.*}),
+
+            .Unary => |unary| try writer.print("{any} = {any} {any}", .{
+                unary.dest.*,
+                switch (unary.op) {
+                    .NEGATE => "-",
+                    .COMPLEMENT => "~",
+                },
+                unary.src.*,
+            }),
+
+            .Binary => |binary| try writer.print("{any} = {any} {s} {any}", .{
+                binary.dest.*,
+                binary.left.*,
+                switch (binary.op) {
+                    .ADD => "+",
+                    .SUBTRACT => "-",
+                    .MULTIPLY => "*",
+                    .DIVIDE => "/",
+                    .REMAINDER => "%",
+                    .EQ => "==",
+                    .NOT_EQ => "!=",
+                    .LT => "<",
+                    .LT_EQ => "<=",
+                    .GT => ">",
+                    .GT_EQ => ">=",
+                    .OR => "||",
+                    .AND => "&&",
+                },
+                binary.right.*,
+            }),
+
+            .Copy => |cp| try writer.print("{any} = {any}", .{ cp.dest.*, cp.src.* }),
+
+            .Jump => |label| try writer.print("jmp {s}", .{label}),
+
+            .JumpIfZero => |jmp| try writer.print("jz {s} if {any}", .{ jmp.target, jmp.condition.* }),
+
+            .JumpIfNotZero => |jmp| try writer.print("jnz {s} if {any}", .{ jmp.target, jmp.condition.* }),
+
+            .Label => |label| try writer.print("{s}:", .{label}),
+
+            .FunctionCall => |call| {
+                try writer.print("{any} = {s}(", .{ call.dest.*, call.name });
+                for (call.args.items, 0..) |arg, i| {
+                    if (i > 0) try writer.writeAll(", ");
+                    try writer.print("{any}", .{arg.*});
+                }
+                try writer.writeAll(")");
+            },
+
+            .SignExtend => |ext| try writer.print("{any} = sext {any}", .{ ext.dest.*, ext.src.* }),
+
+            .Truncate => |trunc| try writer.print("{any} = trunc {any}", .{ trunc.dest.*, trunc.src.* }),
+
+            .ZeroExtend => |ext| try writer.print("{any} = zext {any}", .{ ext.dest.*, ext.src.* }),
+
+            .FloatToUInt => |conv| try writer.print("{any} = f2u {any}", .{ conv.dest.*, conv.src.* }),
+
+            .FloatToInt => |conv| try writer.print("{any} = f2i {any}", .{ conv.dest.*, conv.src.* }),
+
+            .IntToFloat => |conv| try writer.print("{any} = i2f {any}", .{ conv.dest.*, conv.src.* }),
+
+            .UIntToFloat => |conv| try writer.print("{any} = u2f {any}", .{ conv.dest.*, conv.src.* }),
+
+            .GetAddress => |addr| try writer.print("{any} = &{any}", .{ addr.dest.*, addr.src.* }),
+
+            .Store => |store| try writer.print("*{any} = {any}", .{ store.destPointer.*, store.src.* }),
+
+            .Load => |load| try writer.print("{any} = *{any}", .{ load.dest.*, load.srcPointer.* }),
+        }
+    }
+
     pub fn codegen(
         instruction: *Instruction,
         symbolTable: *std.StringHashMap(*assembly.Symbol),
@@ -891,6 +973,27 @@ pub const Val = union(ValType) {
 
     const Self = @This();
 
+    pub fn format(
+        self: Val,
+        comptime fmt: []const u8,
+        options: std.fmt.FormatOptions,
+        writer: anytype,
+    ) !void {
+        _ = fmt;
+        _ = options;
+        // Format values with clear type indicators
+        switch (self) {
+            .Constant => |constant| switch (constant) {
+                .Integer => |i| try writer.print("{d}", .{i}),
+                .Long => |l| try writer.print("{d}L", .{l}),
+                .UInt => |u| try writer.print("{d}u", .{u}),
+                .ULong => |ul| try writer.print("{d}uL", .{ul}),
+                .Float => |f| try writer.print("{d:.6}f", .{f}),
+            },
+            .Variable => |name| try writer.print("%{s}", .{name}),
+        }
+    }
+
     pub fn isSignedFromSymTab(self: *Self, symbolTable: *std.StringHashMap(*assembly.Symbol)) bool {
         return switch (self.*) {
             .Constant => |constant| switch (constant) {
@@ -966,7 +1069,7 @@ test "tac generation for pointers and deref" {
         \\     int a = 5; 
         \\     int *b = &a;
         \\     *b = *b + 1;
-        \\     return a;
+        \\     return *b;
         \\ }
     ;
 
@@ -984,5 +1087,10 @@ test "tac generation for pointers and deref" {
     try ast.loopLabelPass(program, allocator);
     const tacRenderer = try ast.TACRenderer.init(allocator, typechecker.symbolTable);
     const tacProgram = try tacRenderer.render(program);
-    _ = tacProgram;
+    std.log.warn("\n\n\n", .{});
+    for (tacProgram.topLevelDecls.items) |topLevelDecl| {
+        for (topLevelDecl.Function.instructions.items) |instruction| {
+            std.log.warn("{}\n", .{instruction});
+        }
+    }
 }

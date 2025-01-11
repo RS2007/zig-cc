@@ -1108,6 +1108,7 @@ test "ternary pointer conversions" {
 
     const typechecker = try semantic.Typechecker.init(allocator);
     const hasTypeErr = try typechecker.check(program);
+    std.log.warn("type of ternary rhs:  {any}\n", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[2].Declaration.expression.?.Ternary.rhs.getType()});
     _ = try std.testing.expect(hasTypeErr == null);
     //std.log.warn("\x1b[31mError:\x1b[0m {s}\n", .{hasTypeErr.?});
 }
