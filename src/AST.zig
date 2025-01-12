@@ -364,8 +364,11 @@ pub const Type = union(enum) {
     pub inline fn size(self: Self) usize {
         return switch (self) {
             .Integer, .UInteger => 4,
-            .Pointer, .Long, .ULong => 8,
-            else => unreachable,
+            .Pointer, .Long, .ULong, .Float => 8,
+            else => {
+                std.log.warn("size of {any} is not implemented\n", .{self});
+                unreachable;
+            },
         };
     }
 
@@ -405,7 +408,7 @@ pub const Type = union(enum) {
 
     pub inline fn isNumeric(self: Self) bool {
         return switch (self) {
-            .Integer, .UInteger, .Long, .ULong => true,
+            .Integer, .UInteger, .Long, .ULong, .Float => true,
             else => false,
         };
     }
@@ -1203,7 +1206,16 @@ pub const Expression = union(ExpressionType) {
             .Cast => |cast| {
                 const inner = try cast.value.genTACInstructionsAndCvt(renderer, instructions);
                 const boxed = try renderer.allocator.create(tac.BoxedVal);
-                if (std.meta.activeTag(cast.value.getType()) == std.meta.activeTag(cast.type)) {
+
+                const isNoOp = struct {
+                    inline fn noop(_cast: Cast) bool {
+                        return (_cast.value.getType().deepEql(_cast.type)) or
+                            (_cast.value.getType() == .Integer and _cast.type == .UInteger) or
+                            (_cast.value.getType() == .UInteger and _cast.type == .Integer);
+                    }
+                }.noop(cast);
+
+                if (isNoOp) {
                     boxed.* = .{ .PlainVal = inner };
                     return boxed;
                 }

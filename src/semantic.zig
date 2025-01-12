@@ -648,6 +648,7 @@ fn typecheckBlkItem(self: *Typechecker, blkItem: *AST.BlockItem) TypeCheckerErro
                 // expression(Final assert)
                 const exprType = typecheckExpr(self, declExpression) catch |err| {
                     const typeErrorStruct = try self.allocator.create(TypeErrorStruct);
+                    std.log.warn("error: {any}\n", .{err});
                     typeErrorStruct.* = .{
                         .errorType = err,
                         .errorPayload = (try std.fmt.allocPrint(self.allocator, "Type error at local declaration expression\n", .{})),
@@ -659,6 +660,7 @@ fn typecheckBlkItem(self: *Typechecker, blkItem: *AST.BlockItem) TypeCheckerErro
                 // calling convert, if checkConversion and null pointer
                 // assignment fails then its a type error
                 if (!checkConversion(decl.type, exprType) and !isNullPtrAssignment(declExpression, decl.type)) {
+                    std.log.warn("error: check conversion\n", .{});
                     const typeErrorStruct = try self.allocator.create(TypeErrorStruct);
                     typeErrorStruct.* = .{
                         .errorType = TypeError.TypeMismatch,
@@ -1128,11 +1130,11 @@ fn typecheckExpr(self: *Typechecker, expr: *AST.Expression) TypeError!AST.Type {
             }
             expr.Binary.lhs = try convert(self.allocator, expr.Binary.lhs, commonType.?);
             expr.Binary.rhs = try convert(self.allocator, expr.Binary.rhs, commonType.?);
-
             expr.Binary.type = switch (expr.Binary.op) {
                 .ADD, .SUBTRACT, .MULTIPLY, .DIVIDE, .REMAINDER => commonType.?,
                 else => AST.Type.Integer,
             };
+
             return expr.Binary.type.?;
         },
         .FunctionCall => |fnCall| {

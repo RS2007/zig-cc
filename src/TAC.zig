@@ -783,13 +783,16 @@ pub const Instruction = union(InstructionType) {
                     },
                     .EQ, .NOT_EQ, .LT, .LT_EQ, .GT, .GT_EQ => {
                         const lhsSigned = binary.left.isSignedFromSymTab(symbolTable);
-                        const rhsSigned = binary.right.isSignedFromSymTab(symbolTable);
-                        if (lhsSigned != rhsSigned) {
-                            std.log.warn("lhsSigned: {any}\n", .{lhsSigned});
-                            std.log.warn("rhsSigned: {any}\n", .{rhsSigned});
-                            std.log.err("binary: {any}\n", .{binary});
-                            unreachable;
-                        }
+                        //const rhsSigned = binary.right.isSignedFromSymTab(symbolTable);
+                        //if (lhsSigned != rhsSigned) {
+                        //    // This branch gets hit when comparing a signed and
+                        //    // unsigned number, in that case we can just
+                        //    // copmare them normally
+                        //    std.log.warn("lhsSigned: {any}\n", .{lhsSigned});
+                        //    std.log.warn("rhsSigned: {any}\n", .{rhsSigned});
+                        //    std.log.err("binary: {any}\n", .{binary});
+                        //    unreachable;
+                        //}
                         var comparisionInst = [_]*assembly.Instruction{
                             try assembly.createInst(.Mov, assembly.MovInst{
                                 .src = left,
@@ -889,6 +892,15 @@ pub const Instruction = union(InstructionType) {
             .Label => |labelName| {
                 try instructions.append(try assembly.createInst(.Label, labelName, allocator));
             },
+            .GetAddress => |getAddr| {
+                const src = try getAddr.src.codegen(symbolTable, allocator);
+                const dest = try getAddr.dest.codegen(symbolTable, allocator);
+                try instructions.append(try assembly.createInst(.Lea, assembly.Lea{
+                    .type = .QuadWord,
+                    .src = src,
+                    .dest = dest,
+                }, allocator));
+            },
             .FunctionCall => |fnCall| {
                 const registers32 = [_]assembly.Reg{ assembly.Reg.EDI, assembly.Reg.ESI, assembly.Reg.EDX, assembly.Reg.ECX, assembly.Reg.R8, assembly.Reg.R9 };
                 const registers64 = [_]assembly.Reg{ assembly.Reg.RDI, assembly.Reg.RSI, assembly.Reg.RDX, assembly.Reg.RCX, assembly.Reg.R8_64, assembly.Reg.R9_64 };
@@ -935,6 +947,8 @@ pub const Instruction = union(InstructionType) {
                     unreachable();
                 }
             },
+            .Store => {},
+            .Load => {},
         }
     }
 };

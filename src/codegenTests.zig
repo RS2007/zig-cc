@@ -795,6 +795,14 @@ test "basic unsigned numbers" {
     try ast.loopLabelPass(program, allocator);
     const tacRenderer = try ast.TACRenderer.init(allocator, typechecker.symbolTable);
     const tacProgram = try tacRenderer.render(program);
+    for (tacProgram.topLevelDecls.items) |decl| {
+        if (std.meta.activeTag(decl.*) == .Function) {
+            for (decl.Function.instructions.items) |inst| {
+                std.log.warn("inst: {}\n", .{inst});
+            }
+        }
+    }
+    // dump the tac
     const asmRenderer = try tac.AsmRenderer.init(allocator, tacRenderer.asmSymbolTable);
     const asmProgram = try asmRenderer.render(tacProgram);
     try asmProgram.stringify(sFileWriter, allocator, tacRenderer.asmSymbolTable);
@@ -1434,6 +1442,13 @@ test "conversion from float to long" {
     try ast.loopLabelPass(program, allocator);
     const tacRenderer = try ast.TACRenderer.init(allocator, typechecker.symbolTable);
     const tacProgram = try tacRenderer.render(program);
+    for (tacProgram.topLevelDecls.items) |decl| {
+        if (std.meta.activeTag(decl.*) == .Function) {
+            for (decl.Function.instructions.items) |inst| {
+                std.log.warn("inst: {}\n", .{inst});
+            }
+        }
+    }
     const asmRenderer = try tac.AsmRenderer.init(allocator, tacRenderer.asmSymbolTable);
     const asmProgram = try asmRenderer.render(tacProgram);
     try asmProgram.stringify(sFileWriter, allocator, tacRenderer.asmSymbolTable);
