@@ -947,8 +947,55 @@ pub const Instruction = union(InstructionType) {
                     unreachable();
                 }
             },
-            .Store => {},
-            .Load => {},
+            .Store => |store| {
+                const src = try store.src.codegen(symbolTable, allocator);
+                const destPointer = try store.destPointer.codegen(symbolTable, allocator);
+                const moveToRAX = try allocator.create(assembly.Instruction);
+                const derefMove = try allocator.create(assembly.Instruction);
+                const rax = try allocator.create(assembly.Operand);
+                rax.* = .{ .Reg = .RAX };
+                moveToRAX.* = .{ .Mov = .{
+                    .type = .QuadWord,
+                    .src = destPointer,
+                    .dest = rax.*,
+                } };
+                derefMove.* = .{ .Mov = .{
+                    .type = store.src.getAsmTypeFromSymTab(symbolTable).?,
+                    .dest = .{
+                        .Memory = .{
+                            .base = rax,
+                            .index = 0,
+                        },
+                    },
+                    .src = src,
+                } };
+                try instructions.appendSlice(&[_]*assembly.Instruction{
+                    moveToRAX,
+                    derefMove,
+                });
+            },
+            .Load => |load| {
+                const srcPointer = try load.srcPointer.codegen(symbolTable, allocator);
+                const dest = try load.dest.codegen(symbolTable, allocator);
+                const moveToRAX = try allocator.create(assembly.Instruction);
+                const derefMove = try allocator.create(assembly.Instruction);
+                const rax = try allocator.create(assembly.Operand);
+                rax.* = .{ .Reg = .RAX };
+                moveToRAX.* = .{ .Mov = .{
+                    .type = .QuadWord,
+                    .src = srcPointer,
+                    .dest = rax.*,
+                } };
+                derefMove.* = .{ .Mov = .{
+                    .type = load.dest.getAsmTypeFromSymTab(symbolTable).?,
+                    .dest = dest,
+                    .src = .{ .Memory = .{ .base = rax, .index = 0 } },
+                } };
+                try instructions.appendSlice(&[_]*assembly.Instruction{
+                    moveToRAX,
+                    derefMove,
+                });
+            },
         }
     }
 };
@@ -1078,6 +1125,8 @@ test "tac generation for pointers and deref" {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
+    const cFileWriter = (try std.fs.cwd().createFile("./cFiles/C/pointers.c", .{})).writer();
+    const sFileWriter = (try std.fs.cwd().createFile("./cFiles/S/pointers.s", .{})).writer();
     const programStr =
         \\ int main(){
         \\     int a = 5; 
@@ -1107,4 +1156,8 @@ test "tac generation for pointers and deref" {
             std.log.warn("{}\n", .{instruction});
         }
     }
+    const asmRenderer = try AsmRenderer.init(allocator, tacRenderer.asmSymbolTable);
+    const asmProgram = try asmRenderer.render(tacProgram);
+    try asmProgram.stringify(sFileWriter, allocator, tacRenderer.asmSymbolTable);
+    try cFileWriter.writeAll(programStr);
 }

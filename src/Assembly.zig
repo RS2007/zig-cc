@@ -801,9 +801,11 @@ pub fn fixupInstructions(instructions: *std.ArrayList(*Instruction), allocator: 
                         .type = cvttsd2si.type,
                     },
                 };
-                try fixedInstructions.append(movSrcToEax);
-                try fixedInstructions.append(cvt);
-                try fixedInstructions.append(movXmmToDest);
+                try fixedInstructions.appendSlice(&[_]*Instruction{
+                    movSrcToEax,
+                    cvt,
+                    movXmmToDest,
+                });
             },
             .Cvtsi2sd => |cvtsi2sd| {
                 const movSrcToEax = try allocator.create(Instruction);
@@ -962,6 +964,28 @@ pub fn fixupInstructions(instructions: *std.ArrayList(*Instruction), allocator: 
             //         try fixedInstructions.append(inst);
             //     }
             // },
+            .Lea => |lea| {
+                if (lea.src.isOfKind(.Memory) and lea.dest.isOfKind(.Memory)) {
+                    const movToR10D = try allocator.create(Instruction);
+                    movToR10D.* = Instruction{ .Lea = Lea{
+                        .src = lea.src,
+                        .dest = Operand{ .Reg = lea.type.getR10Variety() },
+                        .type = lea.type,
+                    } };
+                    try fixedInstructions.append(movToR10D);
+                    inst.Lea.dest = Operand{ .Reg = lea.type.getR10Variety() };
+                    try fixedInstructions.append(inst);
+                    const movFromR10DToDest = try allocator.create(Instruction);
+                    movFromR10DToDest.* = Instruction{ .Mov = MovInst{
+                        .src = Operand{ .Reg = .R10_64 },
+                        .dest = lea.dest,
+                        .type = .QuadWord,
+                    } };
+                    try fixedInstructions.append(movFromR10DToDest);
+                } else {
+                    try fixedInstructions.append(inst);
+                }
+            },
             else => {
                 try fixedInstructions.append(inst);
             },
@@ -1315,6 +1339,26 @@ pub fn replacePseudoRegs(function: *Function, allocator: std.mem.Allocator, asmS
                 if (setCC.dest.isOfKind(.Pseudo)) {
                     try replacePseudo(
                         &inst.SetCC.dest,
+                        &lookup,
+                        @constCast(&asmSymbolTable),
+                        &topOfStack,
+                        allocator,
+                    );
+                }
+            },
+            .Lea => |lea| {
+                if (lea.src.isOfKind(.Pseudo)) {
+                    try replacePseudo(
+                        &inst.Lea.src,
+                        &lookup,
+                        @constCast(&asmSymbolTable),
+                        &topOfStack,
+                        allocator,
+                    );
+                }
+                if (lea.dest.isOfKind(.Pseudo)) {
+                    try replacePseudo(
+                        &inst.Lea.dest,
                         &lookup,
                         @constCast(&asmSymbolTable),
                         &topOfStack,
