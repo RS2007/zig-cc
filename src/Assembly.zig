@@ -77,6 +77,7 @@ pub const AsmType = enum {
                 .Integer, .UInteger => .LongWord,
                 .Long, .ULong => .QuadWord,
                 .Float => .Float,
+                .Pointer => .QuadWord,
                 else => unreachable,
             };
         }
@@ -1221,6 +1222,26 @@ pub fn replacePseudoRegs(function: *Function, allocator: std.mem.Allocator, asmS
                     );
                 }
             },
+            .Movzx => |movzx| {
+                if (movzx.src.isOfKind(.Pseudo)) {
+                    try replacePseudo(
+                        &inst.Movzx.src,
+                        &lookup,
+                        @constCast(&asmSymbolTable),
+                        &topOfStack,
+                        allocator,
+                    );
+                }
+                if (movzx.dest.isOfKind(.Pseudo)) {
+                    try replacePseudo(
+                        &inst.Movzx.dest,
+                        &lookup,
+                        @constCast(&asmSymbolTable),
+                        &topOfStack,
+                        allocator,
+                    );
+                }
+            },
             .Cvttsd2si => |cvttsd2si| {
                 if (cvttsd2si.src.isOfKind(.Pseudo)) {
                     try replacePseudo(
@@ -1369,7 +1390,6 @@ pub fn replacePseudoRegs(function: *Function, allocator: std.mem.Allocator, asmS
             .Jmp, .Label, .JmpCC, .FnCall => {
                 // Jmp does not involve any operands
             },
-            else => {},
         }
     }
     if (topOfStack != 0) {

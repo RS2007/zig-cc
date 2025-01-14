@@ -108,7 +108,7 @@ pub const TypeKind = enum {
             .UInteger => .UInteger,
             .ULong => .ULong,
             .Float => .Float,
-            .Pointer => unreachable,
+            .Pointer => .Pointer,
         };
     }
 };
@@ -362,8 +362,12 @@ pub fn typecheckExternalDecl(self: *Typechecker, externalDecl: *AST.ExternalDecl
                 }
             }
             const fnSym = try self.allocator.create(Symbol);
+            const fnName = (try functionDeclarator.declarator.unwrapIdentDecl()).Ident;
             var fnArgsList = std.ArrayList(AST.Type).init(self.allocator);
+            std.log.warn("Params for {s}:\n", .{fnName});
             for (functionDeclarator.params.items) |arg| {
+                arg.NonVoidArg.fixType(self.allocator) catch unreachable;
+                std.log.warn("\targ: {any}\n", .{arg.NonVoidArg.type});
                 try fnArgsList.append(arg.NonVoidArg.type);
             }
             fnSym.* = .{
@@ -380,26 +384,16 @@ pub fn typecheckExternalDecl(self: *Typechecker, externalDecl: *AST.ExternalDecl
                     },
                 },
             };
-            try self.symbolTable.put(functionDeclarator.declarator.Ident, fnSym);
+            try self.symbolTable.put(fnName, fnSym);
 
             for (functionDeclarator.params.items) |arg| {
                 const argSym = try self.allocator.create(Symbol);
                 argSym.* = .{
-                    .typeInfo = switch (TypeKind.from(arg.NonVoidArg.type)) {
-                        .Void => unreachable,
-                        .Integer => .Integer,
-                        .Function => unreachable,
-                        .ULong => .ULong,
-                        .UInteger => .UInteger,
-                        .Long => .Long,
-                        .Float => .Float,
-                        .Pointer => unreachable,
-                    },
+                    .typeInfo = try arg.NonVoidArg.type.toSemPointerTy(self.allocator),
                     .attributes = .LocalAttr,
                 };
-                std.log.warn("Pushing in {any}\n", .{arg.NonVoidArg.declarator.Ident});
-                std.debug.assert(std.meta.activeTag(arg.NonVoidArg.declarator.*) == .Ident);
-                try self.symbolTable.put(arg.NonVoidArg.declarator.Ident, argSym);
+                const argName = (try arg.NonVoidArg.declarator.unwrapIdentDecl()).Ident;
+                try self.symbolTable.put(argName, argSym);
             }
 
             for (functionDecl.blockItems.items) |blk| {
@@ -948,6 +942,14 @@ inline fn convert(allocator: std.mem.Allocator, expr: *AST.Expression, toType: A
             return expr;
         },
         .Deref => {
+            if (std.meta.activeTag(expr.Deref.type.?) != std.meta.activeTag(toType)) {
+                const castExpr = try allocator.create(AST.Expression);
+                castExpr.* = AST.Expression{ .Cast = .{
+                    .type = toType,
+                    .value = expr,
+                } };
+                return castExpr;
+            }
             return expr;
         },
         .Assignment => {

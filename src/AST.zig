@@ -85,16 +85,18 @@ pub const ExternalDecl = union(ExternalDeclType) {
                 const tacFunctionDef = try renderer.allocator.create(tac.FunctionDef);
                 var instructions = std.ArrayList(*tac.Instruction).init(renderer.allocator);
                 try functionDecl.genTAC(renderer, &instructions, symbolTable);
+                const functionDeclarator = try functionDecl.declarator.unwrapFuncDeclarator();
+                const fnName = (try functionDeclarator.declarator.unwrapIdentDecl()).Ident;
                 tacFunctionDef.* = .{
-                    .name = functionDecl.declarator.FunDeclarator.declarator.Ident,
+                    .name = fnName,
                     .args = std.ArrayList([]u8).init(renderer.allocator),
                     .instructions = instructions,
                     //TODO: Change this later
                     .global = true,
                 };
-                for (functionDecl.declarator.FunDeclarator.params.items) |arg| {
-                    std.debug.assert(arg.NonVoidArg.declarator.* == .Ident);
-                    try tacFunctionDef.args.append(arg.NonVoidArg.declarator.Ident);
+                for (functionDeclarator.params.items) |arg| {
+                    const argName = (try arg.NonVoidArg.declarator.unwrapIdentDecl()).Ident;
+                    try tacFunctionDef.args.append(argName);
                 }
                 return tacFunctionDef;
             },
@@ -292,6 +294,7 @@ fn convertSymToTAC(tacProgram: *tac.Program, symbolTable: std.StringHashMap(*sem
                                 .Long => .{ .Long = 0 },
                                 .ULong => .{ .ULong = 0 },
                                 .UInteger => .{ .UInt = 0 },
+                                .Pointer => .{ .ULong = 0 },
                                 else => unreachable,
                             },
                             .type = switch (value.typeInfo) {
@@ -299,6 +302,7 @@ fn convertSymToTAC(tacProgram: *tac.Program, symbolTable: std.StringHashMap(*sem
                                 .Long => .Long,
                                 .ULong => .ULong,
                                 .UInteger => .UInt,
+                                .Pointer => .ULong,
                                 else => unreachable,
                             },
                         };
@@ -377,6 +381,7 @@ pub const Type = union(enum) {
             .Long, .Integer => true,
             .UInteger, .ULong => false,
             .Float => false,
+            .Pointer => false,
             else => unreachable,
         };
     }
@@ -433,6 +438,25 @@ pub const Type = union(enum) {
 pub const NonVoidArg = struct {
     type: Type,
     declarator: *Declarator,
+    const Self = @This();
+
+    pub fn fixType(self: *Self, allocator: std.mem.Allocator) !void {
+        switch (self.declarator.*) {
+            .FunDeclarator => unreachable,
+            .Ident => {},
+            .PointerDeclarator => |ptr| {
+                var depth: usize = 1;
+                var runningPtr = ptr;
+                while (true) {
+                    if (std.meta.activeTag(runningPtr.*) == .Ident) break;
+                    if (std.meta.activeTag(runningPtr.*) == .FunDeclarator) unreachable;
+                    depth += 1;
+                    runningPtr = runningPtr.PointerDeclarator;
+                }
+                self.type = try astPointerTypeFromDepth(self.type, depth, allocator);
+            },
+        }
+    }
 };
 
 // INFO: Might be a bad idea, maybe look into this later?
@@ -554,7 +578,10 @@ inline fn chooseFloatCastInst(inner: *tac.Val, dest: *tac.Val, toType: Type) Cod
             .src = inner,
             .dest = dest,
         } },
-        else => unreachable,
+        else => |failingType| {
+            std.log.warn("failing type: {any}\n", .{failingType});
+            unreachable;
+        },
     };
 }
 
@@ -564,7 +591,7 @@ inline fn chooseIntCastInst(inner: *tac.Val, dest: *tac.Val, toType: Type, asmSy
             .src = inner,
             .dest = dest,
         } },
-        .Long, .ULong => if (toType.signed())
+        .Long, .ULong, .Pointer => if (toType.signed())
             .{ .SignExtend = .{
                 .src = inner,
                 .dest = dest,
@@ -1181,13 +1208,13 @@ pub const Expression = union(ExpressionType) {
             .Obj = .{
                 .type = switch (astType) {
                     .Integer, .UInteger => assembly.AsmType.LongWord,
-                    .Long, .ULong => assembly.AsmType.QuadWord,
+                    .Long, .ULong, .Pointer => assembly.AsmType.QuadWord,
                     .Float => if (!options.disableFloat) assembly.AsmType.Float else unreachable,
                     else => unreachable,
                 },
                 .signed = switch (astType) {
                     .Integer, .Long => true,
-                    .UInteger, .ULong => false,
+                    .UInteger, .ULong, .Pointer => false,
                     .Float => false,
                     else => unreachable,
                 },

@@ -496,6 +496,16 @@ test "multiple functions and call" {
     try ast.loopLabelPass(program, allocator);
     const tacRenderer = try ast.TACRenderer.init(allocator, typechecker.symbolTable);
     const tacProgram = try tacRenderer.render(program);
+
+    for (tacProgram.topLevelDecls.items) |topLevelDecl| {
+        if (std.meta.activeTag(topLevelDecl.*) == .Function) {
+            if (std.mem.eql(u8, topLevelDecl.Function.name, "main")) {
+                for (topLevelDecl.Function.instructions.items) |inst| {
+                    std.log.warn("inst: {}\n", .{inst});
+                }
+            }
+        }
+    }
     const asmRenderer = try tac.AsmRenderer.init(allocator, tacRenderer.asmSymbolTable);
     const asmProgram = try asmRenderer.render(tacProgram);
     try asmProgram.stringify(sFileWriter, allocator, tacRenderer.asmSymbolTable);
@@ -1488,6 +1498,132 @@ test "conversion from uint to double" {
     try ast.loopLabelPass(program, allocator);
     const tacRenderer = try ast.TACRenderer.init(allocator, typechecker.symbolTable);
     const tacProgram = try tacRenderer.render(program);
+    const asmRenderer = try tac.AsmRenderer.init(allocator, tacRenderer.asmSymbolTable);
+    const asmProgram = try asmRenderer.render(tacProgram);
+    try asmProgram.stringify(sFileWriter, allocator, tacRenderer.asmSymbolTable);
+    try cFileWriter.writeAll(programStr);
+}
+
+test "tac generation for pointers and deref" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    const cFileWriter = (try std.fs.cwd().createFile("./cFiles/C/pointers.c", .{})).writer();
+    const sFileWriter = (try std.fs.cwd().createFile("./cFiles/S/pointers.s", .{})).writer();
+    const programStr =
+        \\ int main(){
+        \\     int a = 5; 
+        \\     int *b = &a;
+        \\     *b = *b + 1;
+        \\     return *b;
+        \\ }
+    ;
+
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    const program = try p.parseProgram();
+    const varResolver = try ast.VarResolver.init(allocator);
+    try varResolver.resolve(program);
+    const typechecker = try semantic.Typechecker.init(allocator);
+    const hasTypeErr = try typechecker.check(program);
+    if (hasTypeErr) |typeError| {
+        std.log.warn("\x1b[33mError\x1b[0m: {s}\n", .{typeError});
+        std.debug.assert(false);
+    }
+    try ast.loopLabelPass(program, allocator);
+    const tacRenderer = try ast.TACRenderer.init(allocator, typechecker.symbolTable);
+    const tacProgram = try tacRenderer.render(program);
+    const asmRenderer = try tac.AsmRenderer.init(allocator, tacRenderer.asmSymbolTable);
+    const asmProgram = try asmRenderer.render(tacProgram);
+    try asmProgram.stringify(sFileWriter, allocator, tacRenderer.asmSymbolTable);
+    try cFileWriter.writeAll(programStr);
+}
+
+test "more pointers" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    const cFileWriter = (try std.fs.cwd().createFile("./cFiles/C/pointers2.c", .{})).writer();
+    const sFileWriter = (try std.fs.cwd().createFile("./cFiles/S/pointers2.s", .{})).writer();
+    const programStr =
+        \\ double *dPtr;
+        \\ 
+        \\ int updateThroughPtr(double newVal) {
+        \\     *dPtr = newVal;
+        \\     return *dPtr;
+        \\ }
+        \\ int main() {
+        \\     double a = 5.231;
+        \\     dPtr = &a;
+        \\     return updateThroughPtr(a);
+        \\ }
+    ;
+
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    const program = try p.parseProgram();
+    const varResolver = try ast.VarResolver.init(allocator);
+    try varResolver.resolve(program);
+    const typechecker = try semantic.Typechecker.init(allocator);
+    const hasTypeErr = try typechecker.check(program);
+    if (hasTypeErr) |typeError| {
+        std.log.warn("\x1b[33mError\x1b[0m: {s}\n", .{typeError});
+        std.debug.assert(false);
+    }
+    try ast.loopLabelPass(program, allocator);
+    const tacRenderer = try ast.TACRenderer.init(allocator, typechecker.symbolTable);
+    const tacProgram = try tacRenderer.render(program);
+    const asmRenderer = try tac.AsmRenderer.init(allocator, tacRenderer.asmSymbolTable);
+    const asmProgram = try asmRenderer.render(tacProgram);
+    try asmProgram.stringify(sFileWriter, allocator, tacRenderer.asmSymbolTable);
+    try cFileWriter.writeAll(programStr);
+}
+
+test "static pointers" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    const cFileWriter = (try std.fs.cwd().createFile("./cFiles/C/pointers3.c", .{})).writer();
+    const sFileWriter = (try std.fs.cwd().createFile("./cFiles/S/pointers3.s", .{})).writer();
+    const programStr =
+        \\ static long *longPtr;
+        \\ 
+        \\ long *getPtr() {
+        \\     return longPtr;
+        \\ }
+        \\ 
+        \\ int setPtr(long *newPtr) {
+        \\     longPtr = newPtr;
+        \\     return 0;
+        \\ }
+        \\ int main(){ 
+        \\    long a = 5;
+        \\    setPtr(&a);
+        \\    return *getPtr();
+        \\ }
+    ;
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    const program = try p.parseProgram();
+    const varResolver = try ast.VarResolver.init(allocator);
+    try varResolver.resolve(program);
+    const typechecker = try semantic.Typechecker.init(allocator);
+    const hasTypeErr = try typechecker.check(program);
+    if (hasTypeErr) |typeError| {
+        std.log.warn("\x1b[33mError\x1b[0m: {s}\n", .{typeError});
+        std.debug.assert(false);
+    }
+    try ast.loopLabelPass(program, allocator);
+    const tacRenderer = try ast.TACRenderer.init(allocator, typechecker.symbolTable);
+    const tacProgram = try tacRenderer.render(program);
+    for (tacProgram.topLevelDecls.items) |decl| {
+        if (std.meta.activeTag(decl.*) == .Function) {
+            std.log.warn("{s}:", .{decl.Function.name});
+            for (decl.Function.instructions.items) |inst| {
+                std.log.warn("\t{}\n", .{inst});
+            }
+        }
+    }
     const asmRenderer = try tac.AsmRenderer.init(allocator, tacRenderer.asmSymbolTable);
     const asmProgram = try asmRenderer.render(tacProgram);
     try asmProgram.stringify(sFileWriter, allocator, tacRenderer.asmSymbolTable);
