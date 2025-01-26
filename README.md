@@ -14,6 +14,33 @@ zig build
 ## Current Progress:
 - Can compile these programs:
 ```c
+ double calculateCompoundInterest(double* initialAmount, 
+                                double* monthlyContribution,
+                                double* interestRate,
+                                int* numyears) {
+     int months = *numyears * 12;
+     double rate = *interestRate / 1200;
+     double balance = *initialAmount;
+     
+     for (int i = 0; i < months; i = i + 1) {
+         balance = balance * (1 + rate);
+         balance = balance + *monthlyContribution;
+     }
+     
+     return balance;
+ }
+ 
+ int main() {
+     double initial = 1000.0;
+     double monthly = 100.0;
+     double rate = 7.0;
+     int years = 10;
+     
+     return calculateCompoundInterest(&initial, &monthly, &rate, &years);
+ }
+```
+
+```c
 int recurse(int n){
         static int accum = 0;
         static int k = 0;

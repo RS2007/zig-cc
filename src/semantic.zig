@@ -216,7 +216,8 @@ pub fn typecheckProgram(self: *Typechecker, program: *AST.Program) TypeCheckerEr
 
 inline fn handleNonPointerExpr(self: *Typechecker, varDecl: *AST.Declaration, expression: *AST.Expression, initializer: *InitValue) !void {
     const exprType = expression.getType();
-    if (std.meta.activeTag(varDecl.type) != std.meta.activeTag(exprType)) {
+
+    if (varDecl.type.deepEql(exprType)) {
         //TODO: handle pointers differently
 
         const castExpr = try self.allocator.create(AST.Expression);
@@ -393,6 +394,7 @@ pub fn typecheckExternalDecl(self: *Typechecker, externalDecl: *AST.ExternalDecl
                     .attributes = .LocalAttr,
                 };
                 const argName = (try arg.NonVoidArg.declarator.unwrapIdentDecl()).Ident;
+                std.log.warn("Arg name: {s} and argSym: {any}\n", .{ argName, argSym });
                 try self.symbolTable.put(argName, argSym);
             }
 
@@ -1066,7 +1068,7 @@ fn getCommonType(type1: AST.Type, type2: AST.Type) ?AST.Type {
     // Size is greater, more priority in case the sizes are unequal
     return if (type1.size() > type2.size()) type1 else type2;
 }
-pub fn xor(a: bool, b: bool) bool {
+pub inline fn xor(a: bool, b: bool) bool {
     return (a or b) and !(a and b);
 }
 

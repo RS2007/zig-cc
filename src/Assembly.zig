@@ -32,6 +32,7 @@ pub const Program = struct {
         for (self.topLevelDecls.items) |topLevelDecl| {
             switch (topLevelDecl.*) {
                 .Function => |function| {
+                    std.log.warn("Replacing pseudos in :{s}\n", .{function.name});
                     try replacePseudoRegs(function, allocator, asmSymbolTable);
                     const fixedAsmInstructions = try fixupInstructions(&function.instructions, allocator);
                     function.instructions = fixedAsmInstructions;
@@ -778,6 +779,7 @@ pub fn fixupInstructions(instructions: *std.ArrayList(*Instruction), allocator: 
                     .dest = movzx.dest,
                     .type = .QuadWord,
                 } };
+                std.log.warn("repalced the movsz with {any} and {any}\n", .{ movSrcToEax, movRaxToDest });
                 try fixedInstructions.append(movSrcToEax);
                 try fixedInstructions.append(movRaxToDest);
             },
@@ -966,7 +968,8 @@ pub fn fixupInstructions(instructions: *std.ArrayList(*Instruction), allocator: 
             //     }
             // },
             .Lea => |lea| {
-                if (lea.src.isOfKind(.Memory) and lea.dest.isOfKind(.Memory)) {
+                const isMem = (lea.src.isOfKind(.Memory) or lea.src.isOfKind(.Data)) and (lea.dest.isOfKind(.Memory) or lea.dest.isOfKind(.Data));
+                if (isMem) {
                     const movToR10D = try allocator.create(Instruction);
                     movToR10D.* = Instruction{ .Lea = Lea{
                         .src = lea.src,
@@ -1416,6 +1419,7 @@ inline fn replacePseudo(
     allocator: std.mem.Allocator,
 ) ast.CodegenError!void {
     if (lookup.contains(operand.Pseudo)) {
+        std.log.warn("Pseudo: {s} found in lookup\n", .{operand.Pseudo});
         operand.* = try Mem.createStack(allocator, lookup.get(operand.Pseudo).?);
     } else {
         const offset: i32 = switch (asmSymbolTable.get(operand.Pseudo).?.Obj.type) {

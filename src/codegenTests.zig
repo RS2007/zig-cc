@@ -1629,3 +1629,135 @@ test "static pointers" {
     try asmProgram.stringify(sFileWriter, allocator, tacRenderer.asmSymbolTable);
     try cFileWriter.writeAll(programStr);
 }
+
+test "pointers long case" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    const cFileWriter = (try std.fs.cwd().createFile("./cFiles/C/pointers4.c", .{})).writer();
+    const sFileWriter = (try std.fs.cwd().createFile("./cFiles/S/pointers4.s", .{})).writer();
+    const programStr =
+        \\ static long *longPtr;
+        \\ 
+        \\ long *getPointer() {
+        \\     return longPtr;
+        \\ }
+        \\ 
+        \\ int setPointer(long *newPtr) {
+        \\     longPtr = newPtr;
+        \\     return 0;
+        \\ }
+        \\ static long privateLong = 100L;
+        \\ int main() {
+        \\     long *initialPtr = getPointer();
+        \\     if (initialPtr) {
+        \\         return 1;
+        \\     }
+        \\     setPointer(&privateLong);
+        \\     long *newPtr = getPointer();
+        \\     if (initialPtr == newPtr) {
+        \\         return 2;
+        \\     }
+        \\     if (*newPtr != 100L) {
+        \\         return 3;
+        \\     }
+        \\     if (newPtr != &privateLong) {
+        \\         return 4;
+        \\     }
+        \\     setPointer(0);
+        \\     if (getPointer()) {
+        \\         return 5;
+        \\     }
+        \\     if (newPtr != &privateLong) {
+        \\         return 6;
+        \\     }
+        \\     return 0;
+        \\ }
+    ;
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    const program = try p.parseProgram();
+    const varResolver = try ast.VarResolver.init(allocator);
+    try varResolver.resolve(program);
+    const typechecker = try semantic.Typechecker.init(allocator);
+    const hasTypeErr = try typechecker.check(program);
+    if (hasTypeErr) |typeError| {
+        std.log.warn("\x1b[33mError\x1b[0m: {s}\n", .{typeError});
+        std.debug.assert(false);
+    }
+    try ast.loopLabelPass(program, allocator);
+    const tacRenderer = try ast.TACRenderer.init(allocator, typechecker.symbolTable);
+    const tacProgram = try tacRenderer.render(program);
+    for (tacProgram.topLevelDecls.items) |decl| {
+        if (std.meta.activeTag(decl.*) == .Function) {
+            std.log.warn("{s}:", .{decl.Function.name});
+            for (decl.Function.instructions.items) |inst| {
+                std.log.warn("\t{}\n", .{inst});
+            }
+        }
+    }
+    const asmRenderer = try tac.AsmRenderer.init(allocator, tacRenderer.asmSymbolTable);
+    const asmProgram = try asmRenderer.render(tacProgram);
+    try asmProgram.stringify(sFileWriter, allocator, tacRenderer.asmSymbolTable);
+    try cFileWriter.writeAll(programStr);
+}
+
+test "compound interest" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    const cFileWriter = (try std.fs.cwd().createFile("./cFiles/C/compoundInterest.c", .{})).writer();
+    const sFileWriter = (try std.fs.cwd().createFile("./cFiles/S/compoundInterest.s", .{})).writer();
+    const programStr =
+        \\ double calculateCompoundInterest(double* initialAmount, 
+        \\                                double* monthlyContribution,
+        \\                                double* interestRate,
+        \\                                int* numyears) {
+        \\     int months = *numyears * 12;
+        \\     double rate = *interestRate / 1200;
+        \\     double balance = *initialAmount;
+        \\     
+        \\     for (int i = 0; i < months; i = i + 1) {
+        \\         balance = balance * (1 + rate);
+        \\         balance = balance + *monthlyContribution;
+        \\     }
+        \\     
+        \\     return balance;
+        \\ }
+        \\ 
+        \\ int main() {
+        \\     double initial = 1000.0;
+        \\     double monthly = 100.0;
+        \\     double rate = 7.0;
+        \\     int years = 10;
+        \\     
+        \\     return calculateCompoundInterest(&initial, &monthly, &rate, &years);
+        \\ }
+    ;
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    const program = try p.parseProgram();
+    const varResolver = try ast.VarResolver.init(allocator);
+    try varResolver.resolve(program);
+    const typechecker = try semantic.Typechecker.init(allocator);
+    const hasTypeErr = try typechecker.check(program);
+    if (hasTypeErr) |typeError| {
+        std.log.warn("\x1b[33mError\x1b[0m: {s}\n", .{typeError});
+        std.debug.assert(false);
+    }
+    try ast.loopLabelPass(program, allocator);
+    const tacRenderer = try ast.TACRenderer.init(allocator, typechecker.symbolTable);
+    const tacProgram = try tacRenderer.render(program);
+    for (tacProgram.topLevelDecls.items) |decl| {
+        if (std.meta.activeTag(decl.*) == .Function) {
+            std.log.warn("{s}:", .{decl.Function.name});
+            for (decl.Function.instructions.items) |inst| {
+                std.log.warn("\t{}\n", .{inst});
+            }
+        }
+    }
+    const asmRenderer = try tac.AsmRenderer.init(allocator, tacRenderer.asmSymbolTable);
+    const asmProgram = try asmRenderer.render(tacProgram);
+    try asmProgram.stringify(sFileWriter, allocator, tacRenderer.asmSymbolTable);
+    try cFileWriter.writeAll(programStr);
+}

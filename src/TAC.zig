@@ -73,6 +73,7 @@ pub fn astSymTabToTacSymTab(allocator: std.mem.Allocator, astSymTab: std.StringH
             } },
             .Void => unreachable,
         };
+        std.log.warn("symName: {s} and asmSymbol: {any}\n", .{ symName, asmSymbol });
         try asmSymTab.put(
             @constCast(symName),
             asmSymbol,
@@ -83,7 +84,10 @@ pub fn astSymTabToTacSymTab(allocator: std.mem.Allocator, astSymTab: std.StringH
 pub const AsmRenderer = struct {
     asmSymbolTable: std.StringHashMap(*assembly.Symbol),
     allocator: std.mem.Allocator,
-    pub fn init(allocator: std.mem.Allocator, tacSymTab: std.StringHashMap(*assembly.Symbol)) ast.CodegenError!*AsmRenderer {
+    pub fn init(
+        allocator: std.mem.Allocator,
+        tacSymTab: std.StringHashMap(*assembly.Symbol),
+    ) ast.CodegenError!*AsmRenderer {
         const asmRenderer = try allocator.create(AsmRenderer);
         asmRenderer.* = .{
             .asmSymbolTable = tacSymTab,
@@ -854,7 +858,7 @@ pub const Instruction = union(InstructionType) {
                             .Reg = jmp.condition.getAsmTypeFromSymTab(symbolTable).?.getR10Variety(),
                         },
                         .op1 = assembly.Operand{ .Imm = 0 },
-                        .type = assembly.AsmType.LongWord,
+                        .type = jmp.condition.getAsmTypeFromSymTab(symbolTable).?,
                     }, allocator),
                     try assembly.createInst(.JmpCC, assembly.JmpCC{
                         .code = assembly.CondCode.E,
@@ -880,7 +884,7 @@ pub const Instruction = union(InstructionType) {
                         .op1 = assembly.Operand{
                             .Imm = 0,
                         },
-                        .type = assembly.AsmType.LongWord,
+                        .type = jmp.condition.getAsmTypeFromSymTab(symbolTable).?,
                     }, allocator),
                     try assembly.createInst(.JmpCC, assembly.JmpCC{
                         .code = assembly.CondCode.NE,
@@ -910,6 +914,7 @@ pub const Instruction = union(InstructionType) {
                     for (fnCall.args.items, 0..) |arg, i| {
                         const assemblyArg = try arg.codegen(symbolTable, allocator);
                         const assemblyArgType = arg.getAsmTypeFromSymTab(symbolTable).?;
+                        std.log.warn("arg: {any}, assemblyArgType: {any}\n", .{ arg, assemblyArgType });
                         try instructions.append(try assembly.createInst(.Mov, assembly.MovInst{
                             .src = assemblyArg,
                             .dest = assembly.Operand{ .Reg = switch (assemblyArgType) {
@@ -922,6 +927,18 @@ pub const Instruction = union(InstructionType) {
                             } },
                             .type = assemblyArgType,
                         }, allocator));
+                        std.log.warn("The unholy move: {any}", .{assembly.MovInst{
+                            .src = assemblyArg,
+                            .dest = assembly.Operand{ .Reg = switch (assemblyArgType) {
+                                .LongWord => registers32[i],
+                                .QuadWord => registers64[i],
+                                .Float => blk: {
+                                    floatArgsCount += 1;
+                                    break :blk registersFloat[i];
+                                },
+                            } },
+                            .type = assemblyArgType,
+                        }});
                     }
                     const asmDest = try fnCall.dest.codegen(symbolTable, allocator);
                     try instructions.append(try assembly.createInst(

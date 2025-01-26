@@ -1257,6 +1257,7 @@ pub const Expression = union(ExpressionType) {
                         .static = false,
                     },
                 };
+                std.log.warn("Pushing in {s} = {any}\n", .{ destName, asmSymbol });
                 try renderer.asmSymbolTable.put(destName, asmSymbol);
                 dest.* = tac.Val{ .Variable = destName };
                 boxed.* = tac.BoxedVal{ .PlainVal = dest };
@@ -1396,6 +1397,7 @@ pub const Expression = union(ExpressionType) {
                 const storeTemp = try renderer.allocator.create(tac.Val);
                 storeTemp.* = tac.Val{ .Variable = try tempGen.genTemp(renderer.allocator) };
                 const storeTempName = storeTemp.Variable;
+                std.log.warn("storeTempName: {s}\n", .{storeTempName});
                 const boxed = try renderer.allocator.create(tac.BoxedVal);
                 boxed.* = tac.BoxedVal{ .PlainVal = storeTemp };
                 if (binary.op == BinOp.LOGIC_AND or binary.op == BinOp.LOGIC_OR) {
@@ -1553,6 +1555,7 @@ pub const Expression = union(ExpressionType) {
                 const tacFnCall = try renderer.allocator.create(tac.Instruction);
                 var tacFnCallArgs = std.ArrayList(*tac.Val).init(renderer.allocator);
                 for (fnCall.args.items) |arg| {
+                    std.log.warn("converting {any} to tac", .{arg});
                     try tacFnCallArgs.append(try arg.genTACInstructionsAndCvt(renderer, instructions));
                 }
                 tacFnCall.* = .{ .FunctionCall = .{
