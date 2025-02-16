@@ -1,3 +1,4 @@
+.aider*
 zig-out/
 zig-cache/
 .zig-cache/
@@ -9,3 +10,5 @@ TODO.md
 temp*
 ssa.md
 a.md
+src/CFG.zig
+claude.md

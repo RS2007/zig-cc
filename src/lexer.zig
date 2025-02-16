@@ -52,6 +52,8 @@ pub const TokenType = enum {
     UNSIGNED_LONG,
     UNSIGNED_INT,
     FLOAT,
+    LSQUARE,
+    RSQUARE,
 };
 
 pub const Token = struct {
@@ -60,11 +62,11 @@ pub const Token = struct {
     end: u32,
 };
 
-pub const suffixMap = std.StaticStringMap(Suffix).initComptime(.{
-    .{ "u", .U },
-    .{ "L", .L },
-    .{ "UL", .UL },
-});
+//pub const suffixMap = std.StaticStringMap(Suffix).initComptime(.{
+//    .{ "u", .U },
+//    .{ "L", .L },
+//    .{ "UL", .UL },
+//});
 
 pub const LexerError = error{ BufferEmpty, OutOfMemory, InvalidToken };
 

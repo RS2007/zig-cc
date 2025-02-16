@@ -70,9 +70,9 @@ pub const TypeError = error{
     ConflictingDeclarations,
     FnPrevDeclArgMismatch,
     InvalidOperand,
-} || AST.CodegenError;
+} || AST.CodegenError || AST.DeclaratorError;
 
-const TypeCheckerError = error{OutOfMemory} || TypeError;
+const TypeCheckerError = error{OutOfMemory} || TypeError || AST.DeclaratorError;
 
 pub const TypeErrorStruct = struct {
     errorType: ?TypeError,
@@ -97,6 +97,7 @@ pub const TypeKind = enum {
     ULong,
     UInteger,
     Float,
+    Pointer,
 
     const Self = @This();
     pub fn from(self: AST.Type) Self {
@@ -107,6 +108,7 @@ pub const TypeKind = enum {
             .UInteger => .UInteger,
             .ULong => .ULong,
             .Float => .Float,
+            .Pointer => .Pointer,
         };
     }
 };
@@ -125,6 +127,7 @@ pub const TypeInfo = union(TypeKind) {
     ULong,
     UInteger,
     Float,
+    Pointer: *TypeInfo,
 
     const Self = @This();
     pub inline fn isOfKind(self: *Self, other: TypeKind) bool {
@@ -164,23 +167,38 @@ pub const Typechecker = struct {
         if (typeErrorStruct != null and typeErrorStruct.?.errorType != null) {
             return typeErrorStruct.?.errorPayload;
         }
-        try self.resolveReturns(program);
+        self.typecheckReturns(program) catch |err| {
+            if (err == error.InvalidOperand) {
+                const errorPayload = try std.fmt.allocPrint(self.allocator, "Type error at return statement\n", .{});
+                return errorPayload;
+            }
+        };
         return null;
     }
 
-    pub fn resolveReturns(self: *Self, program: *AST.Program) !void {
+    pub fn typecheckReturns(self: *Self, program: *AST.Program) TypeError!void {
         for (program.externalDecls.items) |externalDecl| {
             if (std.meta.activeTag(externalDecl.*) == .FunctionDecl) {
                 for (externalDecl.FunctionDecl.blockItems.items) |blkItem| {
-                    try resolveBlockReturns(self, blkItem, externalDecl.FunctionDecl.returnType);
+                    resolveBlockReturns(self, blkItem, externalDecl.FunctionDecl.returnType) catch |err| {
+                        std.log.warn("Error at fn: {s}\n", .{(try externalDecl.FunctionDecl.declarator.unwrapFuncDeclarator()).declarator.Ident});
+                        return err;
+                    };
                 }
             }
         }
     }
 };
 
-pub fn resolveBlockReturns(self: *Typechecker, blockItem: *AST.BlockItem, fnReturnType: AST.Type) !void {
+pub fn resolveBlockReturns(self: *Typechecker, blockItem: *AST.BlockItem, fnReturnType: AST.Type) TypeError!void {
     if (std.meta.activeTag(blockItem.*) == .Statement and std.meta.activeTag(blockItem.Statement.*) == .Return) {
+        const isFnTypePtr = std.meta.activeTag(fnReturnType) == .Pointer;
+        const isExprTypePtr = std.meta.activeTag(blockItem.Statement.Return.expression.getType()) == .Pointer;
+        if (isFnTypePtr and (!isExprTypePtr and !blockItem.Statement.Return.expression.isNullPtr())) {
+            std.log.warn("Invalid types: fn returns {any}, got {any} in return", .{ fnReturnType, blockItem.Statement.Return.expression.getType() });
+
+            return TypeError.InvalidOperand;
+        }
         blockItem.Statement.Return.expression = try convert(self.allocator, blockItem.Statement.Return.expression, fnReturnType);
     }
 }
@@ -196,8 +214,69 @@ pub fn typecheckProgram(self: *Typechecker, program: *AST.Program) TypeCheckerEr
     return null;
 }
 
+inline fn handleNonPointerExpr(self: *Typechecker, varDecl: *AST.Declaration, expression: *AST.Expression, initializer: *InitValue) !void {
+    const exprType = expression.getType();
+
+    if (varDecl.type.deepEql(exprType)) {
+        //TODO: handle pointers differently
+
+        const castExpr = try self.allocator.create(AST.Expression);
+        castExpr.* = AST.Expression{ .Cast = .{
+            .type = varDecl.type,
+            .value = expression,
+        } };
+        varDecl.expression = castExpr;
+        initializer.* = .{ .Initial = switch (varDecl.type) {
+            .Integer => .{ .type = .Integer, .value = .{
+                .Integer = expression.Constant.to(i32),
+            } },
+            .Long => .{ .type = .Long, .value = .{
+                .Long = expression.Constant.to(i64),
+            } },
+            .UInteger => .{ .type = .UInteger, .value = .{
+                .UInteger = expression.Constant.to(u32),
+            } },
+            .ULong => .{ .type = .ULong, .value = .{
+                .ULong = expression.Constant.to(u64),
+            } },
+
+            .Float => .{ .type = .Float, .value = .{
+                .Float = expression.Constant.value.Float,
+            } },
+            .Pointer => .{
+                .type = varDecl.type,
+                .value = .{ .ULong = 0 },
+            },
+            else => unreachable,
+        } };
+    } else {
+        initializer.* = .{ .Initial = switch (varDecl.type) {
+            .Integer => .{ .type = .Integer, .value = .{ .Integer = expression.Constant.value.Integer } },
+            .Long => .{ .type = .Long, .value = .{ .Long = expression.Constant.to(i64) } },
+            .Float => .{ .type = .Float, .value = .{ .Float = expression.Constant.value.Float } },
+            else => unreachable,
+        } };
+    }
+}
+
+fn globalDeclExprNotInteger(self: *Typechecker, expression: *AST.Expression, varName: []u8) TypeError!?*TypeErrorStruct {
+    if (std.meta.activeTag(expression.*) != .Constant) {
+        return TypeErrorStruct.typeError(
+            self.allocator,
+            TypeError.GlobalDeclarationNotInteger,
+            try std.fmt.allocPrint(
+                self.allocator,
+                "Global declarations only support constants for declaration of {s}\n",
+                .{varName},
+            ),
+        );
+    }
+    return null;
+}
+
 pub fn typecheckExternalDecl(self: *Typechecker, externalDecl: *AST.ExternalDecl) TypeCheckerError!?*TypeErrorStruct {
     switch (externalDecl.*) {
+
         // INFO: Function declarations should have the following checks:
         // 1. Return statements should be same as fn return type
         //     - This will be implemented later
@@ -210,12 +289,15 @@ pub fn typecheckExternalDecl(self: *Typechecker, externalDecl: *AST.ExternalDecl
         // different, and so is the arg length
         //     - This will be implemented later
         .FunctionDecl => |functionDecl| {
-            if (self.symbolTable.get(functionDecl.name)) |sym| {
+            const functionDeclarator = try functionDecl.declarator.unwrapFuncDeclarator();
+            functionDecl.fixReturnType(self.allocator) catch unreachable;
+            std.debug.assert(std.meta.activeTag(functionDeclarator.declarator.*) == .Ident);
+            if (self.symbolTable.get(functionDeclarator.declarator.Ident)) |sym| {
                 if (!sym.typeInfo.isOfKind(.Function)) {
                     return try TypeErrorStruct.typeError(
                         self.allocator,
                         TypeError.GlobVarRedeclaredAsFn,
-                        (try std.fmt.allocPrint(self.allocator, "Global variable {s} redeclared as function\n", .{functionDecl.name})),
+                        (try std.fmt.allocPrint(self.allocator, "Global variable {s} redeclared as function\n", .{functionDecl.declarator.FunDeclarator.declarator.Ident})),
                     );
                 }
                 const nonStaticLinkageMismatch = !sym.attributes.FunctionAttr.global and (functionDecl.storageClass != AST.Qualifier.STATIC);
@@ -224,7 +306,7 @@ pub fn typecheckExternalDecl(self: *Typechecker, externalDecl: *AST.ExternalDecl
                     return TypeErrorStruct.typeError(
                         self.allocator,
                         TypeError.LinkageMismatch,
-                        try std.fmt.allocPrint(self.allocator, "Global variable {s} redeclared as non-static\n", .{functionDecl.name}),
+                        try std.fmt.allocPrint(self.allocator, "Global variable {s} redeclared as non-static\n", .{functionDecl.declarator.FunDeclarator.declarator.Ident}),
                     );
                 }
 
@@ -235,52 +317,58 @@ pub fn typecheckExternalDecl(self: *Typechecker, externalDecl: *AST.ExternalDecl
                         try std.fmt.allocPrint(
                             self.allocator,
                             "Function redefinition of {s}\n",
-                            .{functionDecl.name},
+                            .{functionDecl.declarator.FunDeclarator.declarator.Ident},
                         ),
                     );
                 }
 
-                for (0..functionDecl.args.items.len) |i| {
-                    if (functionDecl.args.items[i].NonVoidArg.type != sym.typeInfo.Function.args.items[i]) {
+                for (0..functionDeclarator.params.items.len) |i| {
+                    if (std.meta.activeTag(functionDeclarator.params.items[i].NonVoidArg.type) != std.meta.activeTag(sym.typeInfo.Function.args.items[i])) {
                         return TypeErrorStruct.typeError(
                             self.allocator,
                             TypeError.FnPrevDeclArgMismatch,
                             try std.fmt.allocPrint(self.allocator, "Argument mismatch in function redeclaration: function name = {s}, function arg mismatch between {any} and {any}\n", .{
-                                functionDecl.name,
-                                functionDecl.args.items[i].NonVoidArg.type,
+                                functionDecl.declarator.FunDeclarator.declarator.Ident,
+                                functionDecl.declarator.FunDeclarator.params.items[i].NonVoidArg.type,
                                 sym.typeInfo.Function.args.items[i],
                             }),
                         );
                     }
                 }
 
-                if (functionDecl.returnType != sym.typeInfo.Function.returnType) {
+                // WARN: This is incorrect, write a seperate function for type
+                // equality
+                if (std.meta.activeTag(functionDecl.returnType) != std.meta.activeTag(sym.typeInfo.Function.returnType)) {
                     return TypeErrorStruct.typeError(
                         self.allocator,
                         TypeError.FnPrevDeclArgMismatch,
                         try std.fmt.allocPrint(
                             self.allocator,
                             "Function {s} has mismatching declarations\n",
-                            .{functionDecl.name},
+                            .{functionDecl.declarator.FunDeclarator.declarator.Ident},
                         ),
                     );
                 }
 
-                if (functionDecl.args.items.len != sym.typeInfo.Function.args.items.len) {
+                if (functionDeclarator.params.items.len != sym.typeInfo.Function.args.items.len) {
                     return TypeErrorStruct.typeError(
                         self.allocator,
                         TypeError.FnArgNumMismatch,
                         try std.fmt.allocPrint(
                             self.allocator,
                             "Function {s} has mismatching declarations\n",
-                            .{functionDecl.name},
+                            .{functionDecl.declarator.FunDeclarator.declarator.Ident},
                         ),
                     );
                 }
             }
             const fnSym = try self.allocator.create(Symbol);
+            const fnName = (try functionDeclarator.declarator.unwrapIdentDecl()).Ident;
             var fnArgsList = std.ArrayList(AST.Type).init(self.allocator);
-            for (functionDecl.args.items) |arg| {
+            std.log.warn("Params for {s}:\n", .{fnName});
+            for (functionDeclarator.params.items) |arg| {
+                arg.NonVoidArg.fixType(self.allocator) catch unreachable;
+                std.log.warn("\targ: {any}\n", .{arg.NonVoidArg.type});
                 try fnArgsList.append(arg.NonVoidArg.type);
             }
             fnSym.* = .{
@@ -297,24 +385,17 @@ pub fn typecheckExternalDecl(self: *Typechecker, externalDecl: *AST.ExternalDecl
                     },
                 },
             };
-            try self.symbolTable.put(functionDecl.name, fnSym);
+            try self.symbolTable.put(fnName, fnSym);
 
-            for (functionDecl.args.items) |arg| {
+            for (functionDeclarator.params.items) |arg| {
                 const argSym = try self.allocator.create(Symbol);
                 argSym.* = .{
-                    .typeInfo = switch (TypeKind.from(arg.NonVoidArg.type)) {
-                        .Void => unreachable,
-                        .Integer => .Integer,
-                        .Function => unreachable,
-                        .ULong => .ULong,
-                        .UInteger => .UInteger,
-                        .Long => .Long,
-                        .Float => .Float,
-                    },
+                    .typeInfo = try arg.NonVoidArg.type.toSemPointerTy(self.allocator),
                     .attributes = .LocalAttr,
                 };
-                std.log.warn("Pushing in {any}\n", .{arg.NonVoidArg.identifier});
-                try self.symbolTable.put(arg.NonVoidArg.identifier, argSym);
+                const argName = (try arg.NonVoidArg.declarator.unwrapIdentDecl()).Ident;
+                std.log.warn("Arg name: {s} and argSym: {any}\n", .{ argName, argSym });
+                try self.symbolTable.put(argName, argSym);
             }
 
             for (functionDecl.blockItems.items) |blk| {
@@ -345,60 +426,36 @@ pub fn typecheckExternalDecl(self: *Typechecker, externalDecl: *AST.ExternalDecl
             // 5. If there is no initiliazer for the current case and the
             // earlier value was not a constant, then assign tentative
 
+            varDecl.fixReturnType(self.allocator) catch unreachable;
             var initializer: InitValue = .NoInit;
             var global = false;
+            const varName = (try varDecl.declarator.unwrapIdentDecl()).Ident;
 
             // INFO: Has expression
             if (varDecl.expression) |expression| {
                 // INFO: Should be constant initialized
 
-                if (std.meta.activeTag(expression.*) != .Constant) {
-                    return TypeErrorStruct.typeError(
-                        self.allocator,
-                        TypeError.GlobalDeclarationNotInteger,
-                        try std.fmt.allocPrint(
+                if (try globalDeclExprNotInteger(self, expression, varName)) |typeError| return typeError;
+
+                // INFO: handle pointers here, no casting is really required, except
+                // changing the type of the rhs explicitly(only 0 is allowed in
+                // the RHS)
+
+                if (std.meta.activeTag(varDecl.type) == .Pointer) {
+                    if (!expression.isNullPtr())
+                        return TypeErrorStruct.typeError(
                             self.allocator,
-                            "Global declarations only support integers for declaration of {s}\n",
-                            .{varDecl.name},
-                        ),
-                    );
-                }
-
-                // INFO: Assign the expression value to the decl
-                if (varDecl.type != expression.getType()) {
-                    const castExpr = try self.allocator.create(AST.Expression);
-                    castExpr.* = AST.Expression{ .Cast = .{
-                        .type = varDecl.type,
-                        .value = expression,
-                    } };
-                    varDecl.expression = castExpr;
-                    // INFO: This is shady
-                    initializer = .{ .Initial = switch (varDecl.type) {
-                        .Integer => .{ .type = .Integer, .value = .{
-                            .Integer = expression.Constant.to(i32),
-                        } },
-                        .Long => .{ .type = .Long, .value = .{
-                            .Long = expression.Constant.to(i64),
-                        } },
-                        .UInteger => .{ .type = .UInteger, .value = .{
-                            .UInteger = expression.Constant.to(u32),
-                        } },
-                        .ULong => .{ .type = .ULong, .value = .{
-                            .ULong = expression.Constant.to(u64),
-                        } },
-
-                        .Float => .{ .type = .Float, .value = .{
-                            .Float = expression.Constant.value.Float,
-                        } },
-                        else => unreachable,
-                    } };
+                            TypeError.GlobalDeclarationNotInteger,
+                            try std.fmt.allocPrint(
+                                self.allocator,
+                                "Global pointer declarations only support 0 as rhs: assignment of {s}\n",
+                                .{varDecl.declarator.Ident},
+                            ),
+                        );
+                    varDecl.expression.?.Constant.type = varDecl.type;
+                    varDecl.expression.?.Constant.value = .{ .ULong = 0 };
                 } else {
-                    initializer = .{ .Initial = switch (varDecl.type) {
-                        .Integer => .{ .type = .Integer, .value = .{ .Integer = expression.Constant.value.Integer } },
-                        .Long => .{ .type = .Long, .value = .{ .Long = expression.Constant.value.Long } },
-                        .Float => .{ .type = .Float, .value = .{ .Float = expression.Constant.value.Float } },
-                        else => unreachable,
-                    } };
+                    try handleNonPointerExpr(self, varDecl, expression, &initializer);
                 }
 
                 // INFO: Extern decls no assignment check
@@ -409,7 +466,7 @@ pub fn typecheckExternalDecl(self: *Typechecker, externalDecl: *AST.ExternalDecl
                         try std.fmt.allocPrint(
                             self.allocator,
                             "Extern declarations cant have an assignment: {s}\n",
-                            .{varDecl.name},
+                            .{varDecl.declarator.Ident},
                         ),
                     );
                 }
@@ -423,7 +480,7 @@ pub fn typecheckExternalDecl(self: *Typechecker, externalDecl: *AST.ExternalDecl
             }
 
             global = varDecl.storageClass != AST.Qualifier.STATIC;
-            if (self.symbolTable.get(varDecl.name)) |varSym| {
+            if (self.symbolTable.get(varName)) |varSym| {
                 //INFO: Function redeclaration as variable handling
                 if (varSym.typeInfo.isOfKind(.Function)) {
                     return TypeErrorStruct.typeError(
@@ -432,7 +489,7 @@ pub fn typecheckExternalDecl(self: *Typechecker, externalDecl: *AST.ExternalDecl
                         try std.fmt.allocPrint(
                             self.allocator,
                             "Function redeclared as var: {s}\n",
-                            .{varDecl.name},
+                            .{(try varDecl.declarator.unwrapIdentDecl()).Ident},
                         ),
                     );
                 }
@@ -461,7 +518,7 @@ pub fn typecheckExternalDecl(self: *Typechecker, externalDecl: *AST.ExternalDecl
                             try std.fmt.allocPrint(
                                 self.allocator,
                                 "Type mismatch for declaration of {s}\n",
-                                .{varDecl.name},
+                                .{varDecl.declarator.Ident},
                             ),
                         );
                     }
@@ -480,7 +537,7 @@ pub fn typecheckExternalDecl(self: *Typechecker, externalDecl: *AST.ExternalDecl
                                     .errorPayload = (try std.fmt.allocPrint(
                                         self.allocator,
                                         "Static and non-static(conflicting) declarations for {s}\n",
-                                        .{varDecl.name},
+                                        .{varDecl.declarator.Ident},
                                     )),
                                 };
                                 return typeErrorStruct;
@@ -499,7 +556,7 @@ pub fn typecheckExternalDecl(self: *Typechecker, externalDecl: *AST.ExternalDecl
                         .errorPayload = (try std.fmt.allocPrint(
                             self.allocator,
                             "Type mismatch for declaration of {s}\n",
-                            .{varDecl.name},
+                            .{varDecl.declarator.Ident},
                         )),
                     };
                     return typeErrorStruct;
@@ -523,6 +580,7 @@ pub fn typecheckExternalDecl(self: *Typechecker, externalDecl: *AST.ExternalDecl
                     .UInteger => .UInteger,
                     .ULong => .ULong,
                     .Float => .Float,
+                    .Pointer => try varDecl.type.toSemPointerTy(self.allocator),
                     else => unreachable,
                 },
                 .attributes = .{
@@ -532,11 +590,25 @@ pub fn typecheckExternalDecl(self: *Typechecker, externalDecl: *AST.ExternalDecl
                     },
                 },
             };
-            try self.symbolTable.put(varDecl.name, sym);
+            try self.symbolTable.put((try varDecl.declarator.unwrapIdentDecl()).Ident, sym);
         },
     }
     return null;
 }
+
+fn checkConversion(from: AST.Type, to: AST.Type) bool {
+    // if both are numeric, its a valid conversion
+    if (from.isNumeric() and to.isNumeric()) return true;
+    if (from.isNumeric() or to.isNumeric()) return false;
+    // Here both types are pointers, do a strict equality, if not then false
+    return from.deepEql(to);
+}
+
+fn isNullPtrAssignment(expr: *AST.Expression, toType: AST.Type) bool {
+    if (std.meta.activeTag(toType) != .Pointer) return false;
+    return expr.isNullPtr();
+}
+
 fn typecheckBlkItem(self: *Typechecker, blkItem: *AST.BlockItem) TypeCheckerError!?*TypeErrorStruct {
     switch (blkItem.*) {
         .Declaration => |decl| {
@@ -560,35 +632,41 @@ fn typecheckBlkItem(self: *Typechecker, blkItem: *AST.BlockItem) TypeCheckerErro
             // 2.if var is extern: look if there is a declaration outside
 
             // Typecheck the expression
+            try decl.fixReturnType(self.allocator);
             if (decl.expression) |declExpression| {
-                // INFO: Type error witin expression
+                // Stages of typechecking an assigned expression
+                // 1. Typecheck within the expression and retrieve the
+                // expression type
+                // 2. Check if a possible casting rule exists for declaration
+                // and expression type
+                // 3. If casting is possible, cast using convert function
+                // 4. Check if the cast has overwritten the type of the
+                // expression(Final assert)
                 const exprType = typecheckExpr(self, declExpression) catch |err| {
                     const typeErrorStruct = try self.allocator.create(TypeErrorStruct);
+                    std.log.warn("error: {any}\n", .{err});
                     typeErrorStruct.* = .{
                         .errorType = err,
-                        .errorPayload = (try std.fmt.allocPrint(self.allocator, "Type error at for init\n", .{})),
+                        .errorPayload = (try std.fmt.allocPrint(self.allocator, "Type error at local declaration expression\n", .{})),
                     };
                     return typeErrorStruct;
                 };
-                std.log.warn("Conversion from {any} to {any}\n", .{ exprType, decl.type });
-                std.log.warn("Expression: {any}\n", .{declExpression});
-                decl.expression = try convert(self.allocator, decl.expression.?, decl.type);
-                std.log.warn("Expression post conversion: {any}\n", .{declExpression});
-                std.debug.assert(if (decl.expression == null) true else decl.expression.?.getType() == decl.type);
 
-                //INFO: Checking type equality
-                //if (decl.type != exprType) {
-                //    const typeErrorStruct = try self.allocator.create(TypeErrorStruct);
-                //    typeErrorStruct.* = .{
-                //        .errorType = TypeError.TypeMismatch,
-                //        .errorPayload = (try std.fmt.allocPrint(
-                //            self.allocator,
-                //            "Type mismatch at declaration of {s}, got lhs to be {any} and rhs to be {any}\n",
-                //            .{ decl.name, decl.type, exprType },
-                //        )),
-                //    };
-                //    return typeErrorStruct;
-                //}
+                // Not all conversions are allowed, this has to be done before
+                // calling convert, if checkConversion and null pointer
+                // assignment fails then its a type error
+                if (!checkConversion(decl.type, exprType) and !isNullPtrAssignment(declExpression, decl.type)) {
+                    std.log.warn("error: check conversion\n", .{});
+                    const typeErrorStruct = try self.allocator.create(TypeErrorStruct);
+                    typeErrorStruct.* = .{
+                        .errorType = TypeError.TypeMismatch,
+                        .errorPayload = (try std.fmt.allocPrint(self.allocator, "Type error at local declaration\n", .{})),
+                    };
+                    return typeErrorStruct;
+                }
+
+                decl.expression = try convert(self.allocator, decl.expression.?, decl.type);
+                std.debug.assert(std.meta.activeTag(decl.expression.?.getType()) == decl.type);
             }
 
             // handle qualifiers
@@ -600,11 +678,11 @@ fn typecheckBlkItem(self: *Typechecker, blkItem: *AST.BlockItem) TypeCheckerErro
                             typeErrorStruct.* = .{ .errorType = TypeError.ExternVarDeclared, .errorPayload = (try std.fmt.allocPrint(
                                 self.allocator,
                                 "Extern variable {s} defined\n",
-                                .{decl.name},
+                                .{decl.declarator.Ident},
                             )) };
                             return typeErrorStruct;
                         }
-                        if (self.symbolTable.get(decl.name)) |olderSym| {
+                        if (self.symbolTable.get(decl.declarator.Ident)) |olderSym| {
                             std.log.warn("This: {any} and {any}\n", .{ olderSym.typeInfo, TypeKind.from(decl.type) });
                             if (!olderSym.typeInfo.isOfKind(TypeKind.from(decl.type))) {
                                 const typeErrorStruct = try self.allocator.create(TypeErrorStruct);
@@ -613,7 +691,7 @@ fn typecheckBlkItem(self: *Typechecker, blkItem: *AST.BlockItem) TypeCheckerErro
                                     .errorPayload = (try std.fmt.allocPrint(
                                         self.allocator,
                                         "Extern variable type error for symbol {s}\n",
-                                        .{decl.name},
+                                        .{decl.declarator.Ident},
                                     )),
                                 };
                                 return typeErrorStruct;
@@ -625,7 +703,7 @@ fn typecheckBlkItem(self: *Typechecker, blkItem: *AST.BlockItem) TypeCheckerErro
                                     .errorPayload = (try std.fmt.allocPrint(
                                         self.allocator,
                                         "Function {s} redefined as a variable\n",
-                                        .{decl.name},
+                                        .{decl.declarator.Ident},
                                     )),
                                 };
                             }
@@ -635,13 +713,11 @@ fn typecheckBlkItem(self: *Typechecker, blkItem: *AST.BlockItem) TypeCheckerErro
                                 .global = true,
                                 .init = .NoInit,
                             } } };
-                            try self.symbolTable.put(decl.name, sym);
+                            try self.symbolTable.put(decl.declarator.Ident, sym);
                         }
                     },
                     .STATIC => {
                         if (decl.expression) |expr| {
-                            //@compileLog("Typename: " ++ @typeName(@TypeOf(decl.name)) ++ "\n");
-                            // std.log.err("Pushing in this decl: {any}\n", .{decl.name});
                             if (!std.mem.eql(u8, @tagName(expr.*), "Constant")) {
                                 const typeErrorStruct = try self.allocator.create(TypeErrorStruct);
                                 typeErrorStruct.* = .{
@@ -649,7 +725,7 @@ fn typecheckBlkItem(self: *Typechecker, blkItem: *AST.BlockItem) TypeCheckerErro
                                     .errorPayload = (try std.fmt.allocPrint(
                                         self.allocator,
                                         "Static variable {s} must have a constant initializer\n",
-                                        .{decl.name},
+                                        .{decl.declarator.Ident},
                                     )),
                                 };
                                 return typeErrorStruct;
@@ -667,7 +743,7 @@ fn typecheckBlkItem(self: *Typechecker, blkItem: *AST.BlockItem) TypeCheckerErro
                                     .global = true,
                                 } },
                             };
-                            try self.symbolTable.put(decl.name, sym);
+                            try self.symbolTable.put(decl.declarator.Ident, sym);
                         } else {
                             const sym = try self.allocator.create(Symbol);
                             sym.* = .{
@@ -677,7 +753,7 @@ fn typecheckBlkItem(self: *Typechecker, blkItem: *AST.BlockItem) TypeCheckerErro
                                     .global = false,
                                 } },
                             };
-                            try self.symbolTable.put(decl.name, sym);
+                            try self.symbolTable.put(decl.declarator.Ident, sym);
                         }
                     },
                 }
@@ -685,17 +761,10 @@ fn typecheckBlkItem(self: *Typechecker, blkItem: *AST.BlockItem) TypeCheckerErro
                 // No decl
                 const sym = try self.allocator.create(Symbol);
                 sym.* = .{
-                    .typeInfo = switch (decl.type) {
-                        .Integer => .Integer,
-                        .Long => .Long,
-                        .ULong => .ULong,
-                        .UInteger => .UInteger,
-                        .Float => .Float,
-                        else => unreachable,
-                    },
+                    .typeInfo = try decl.type.toSemPointerTy(self.allocator),
                     .attributes = .LocalAttr,
                 };
-                try self.symbolTable.put(decl.name, sym);
+                try self.symbolTable.put((try decl.declarator.unwrapIdentDecl()).Ident, sym);
             }
         },
         .Statement => |stmt| {
@@ -832,7 +901,7 @@ fn typecheckForInit(self: *Typechecker, forInit: *AST.ForInit) TypeCheckerError!
                 .typeInfo = .Integer,
                 .attributes = .LocalAttr,
             };
-            try self.symbolTable.put(decl.name, sym);
+            try self.symbolTable.put(decl.declarator.Ident, sym);
             if (decl.expression) |expression| {
                 _ = typecheckExpr(self, expression) catch |err| {
                     return try TypeErrorStruct.typeError(
@@ -863,8 +932,30 @@ inline fn convert(allocator: std.mem.Allocator, expr: *AST.Expression, toType: A
         .Cast => {
             return expr;
         },
+        .AddrOf => {
+            if (!expr.getType().deepEql(toType)) {
+                const castExpr = try allocator.create(AST.Expression);
+                castExpr.* = AST.Expression{ .Cast = .{
+                    .type = toType,
+                    .value = expr,
+                } };
+                return castExpr;
+            }
+            return expr;
+        },
+        .Deref => {
+            if (std.meta.activeTag(expr.Deref.type.?) != std.meta.activeTag(toType)) {
+                const castExpr = try allocator.create(AST.Expression);
+                castExpr.* = AST.Expression{ .Cast = .{
+                    .type = toType,
+                    .value = expr,
+                } };
+                return castExpr;
+            }
+            return expr;
+        },
         .Assignment => {
-            if (expr.Assignment.type != toType) {
+            if (std.meta.activeTag(expr.Assignment.type.?) != std.meta.activeTag(toType)) {
                 const castExpr = try allocator.create(AST.Expression);
                 castExpr.* = AST.Expression{ .Cast = .{
                     .type = toType,
@@ -876,7 +967,7 @@ inline fn convert(allocator: std.mem.Allocator, expr: *AST.Expression, toType: A
             return expr;
         },
         .Binary => {
-            if (expr.Binary.type != toType) {
+            if (std.meta.activeTag(expr.Binary.type.?) != std.meta.activeTag(toType)) {
                 const castExpr = try allocator.create(AST.Expression);
                 castExpr.* = AST.Expression{ .Cast = .{
                     .type = toType,
@@ -888,7 +979,7 @@ inline fn convert(allocator: std.mem.Allocator, expr: *AST.Expression, toType: A
             return expr;
         },
         .FunctionCall => {
-            if (expr.FunctionCall.type != toType) {
+            if (std.meta.activeTag(expr.FunctionCall.type.?) != std.meta.activeTag(toType)) {
                 const castExpr = try allocator.create(AST.Expression);
                 castExpr.* = AST.Expression{ .Cast = .{
                     .type = toType,
@@ -900,7 +991,7 @@ inline fn convert(allocator: std.mem.Allocator, expr: *AST.Expression, toType: A
             return expr;
         },
         .Identifier => {
-            if (expr.Identifier.type != toType) {
+            if (std.meta.activeTag(expr.Identifier.type.?) != toType) {
                 const castExpr = try allocator.create(AST.Expression);
                 castExpr.* = AST.Expression{ .Cast = .{
                     .type = toType,
@@ -912,7 +1003,7 @@ inline fn convert(allocator: std.mem.Allocator, expr: *AST.Expression, toType: A
             return expr;
         },
         .Constant => {
-            if (expr.Constant.type != toType) {
+            if (std.meta.activeTag(expr.Constant.type) != toType) {
                 const castExpr = try allocator.create(AST.Expression);
                 castExpr.* = AST.Expression{ .Cast = .{
                     .type = toType,
@@ -924,7 +1015,7 @@ inline fn convert(allocator: std.mem.Allocator, expr: *AST.Expression, toType: A
             return expr;
         },
         .Unary => {
-            if (expr.Unary.type != toType) {
+            if (std.meta.activeTag(expr.Unary.type.?) != toType) {
                 const castExpr = try allocator.create(AST.Expression);
                 castExpr.* = AST.Expression{ .Cast = .{
                     .type = toType,
@@ -936,7 +1027,7 @@ inline fn convert(allocator: std.mem.Allocator, expr: *AST.Expression, toType: A
             return expr;
         },
         .Ternary => {
-            if (expr.Ternary.type != toType) {
+            if (std.meta.activeTag(expr.Ternary.type.?) != toType) {
                 const castExpr = try allocator.create(AST.Expression);
                 castExpr.* = AST.Expression{ .Cast = .{
                     .type = toType,
@@ -950,10 +1041,19 @@ inline fn convert(allocator: std.mem.Allocator, expr: *AST.Expression, toType: A
     }
 }
 
-fn getCommonType(type1: AST.Type, type2: AST.Type) AST.Type {
+fn getCommonPtrType(lhs: *AST.Expression, rhs: *AST.Expression) ?AST.Type {
+    const type1 = lhs.getType();
+    const type2 = rhs.getType();
+    if (type1.deepEql(type2)) return type1;
+    if (lhs.isNullPtr()) return type2;
+    if (rhs.isNullPtr()) return type1;
+    return null;
+}
+
+fn getCommonType(type1: AST.Type, type2: AST.Type) ?AST.Type {
     // INFO: same types => return the type
-    if (type1 == type2) return type1;
-    if (type1 == .Float or type2 == .Float) {
+    if (std.meta.activeTag(type1) == std.meta.activeTag(type2)) return type1;
+    if (std.meta.activeTag(type1) == .Float or std.meta.activeTag(type2) == .Float) {
         return .Float;
     }
     if (type1.size() == type2.size()) {
@@ -968,12 +1068,31 @@ fn getCommonType(type1: AST.Type, type2: AST.Type) AST.Type {
     // Size is greater, more priority in case the sizes are unequal
     return if (type1.size() > type2.size()) type1 else type2;
 }
+pub inline fn xor(a: bool, b: bool) bool {
+    return (a or b) and !(a and b);
+}
 
 fn typecheckExpr(self: *Typechecker, expr: *AST.Expression) TypeError!AST.Type {
     // Expr can error because of a type issue,
     // for now we can just return a generic type error
     // and handle it from the outer functions (no diagnostic)
     switch (expr.*) {
+        .AddrOf => |addrOf| {
+            const innerType = try self.allocator.create(AST.Type);
+            innerType.* = try typecheckExpr(self, addrOf.exp);
+            expr.AddrOf.type = .{ .Pointer = innerType };
+            std.log.warn("Assigning type to AddrOf: pointer to {any} \n", .{innerType});
+            return .{ .Pointer = innerType };
+        },
+        .Deref => |deref| {
+            const innerType = try typecheckExpr(self, deref.exp);
+            if (std.meta.activeTag(innerType) != .Pointer) {
+                std.log.warn("Dereferenced type is not a pointer, got {any} instead\n", .{std.meta.activeTag(innerType)});
+                return TypeError.InvalidOperand;
+            }
+            expr.Deref.type = innerType.Pointer.*;
+            return innerType.Pointer.*;
+        },
         .Cast => |cast| {
             return cast.type;
         },
@@ -987,20 +1106,39 @@ fn typecheckExpr(self: *Typechecker, expr: *AST.Expression) TypeError!AST.Type {
         .Binary => {
             const lhsType = try typecheckExpr(self, expr.Binary.lhs);
             const rhsType = try typecheckExpr(self, expr.Binary.rhs);
+            const isLhsPointer = std.meta.activeTag(lhsType) == .Pointer;
+            const isRhsPointer = std.meta.activeTag(rhsType) == .Pointer;
+
+            if (isLhsPointer and
+                isRhsPointer and (expr.Binary.op == .MULTIPLY or
+                expr.Binary.op == .DIVIDE))
+            {
+                std.log.warn("Cant {any} pointers\n", .{expr.Binary.op});
+                return TypeError.InvalidOperand;
+            }
+
+            if (xor(isLhsPointer, isRhsPointer) and expr.Binary.op.isCompareOp()) {
+                std.log.warn("Cant compare pointers and non-pointers\n", .{});
+                return TypeError.InvalidOperand;
+            }
 
             //INFO: Conversion logic
-            const commonType = getCommonType(lhsType, rhsType);
-            if (commonType == .Float and expr.Binary.op == .REMAINDER) {
+            const commonType = if (isLhsPointer or isRhsPointer) getCommonPtrType(expr.Binary.lhs, expr.Binary.rhs).? else getCommonType(lhsType, rhsType);
+            if (commonType == null) {
+                std.log.warn("Invalid pointer comparisions", .{});
+                return TypeError.InvalidOperand;
+            }
+            if (commonType.? == .Float and expr.Binary.op == .REMAINDER) {
                 std.log.warn("Cannot apply {any} to {any}", .{ expr.Binary.op, commonType });
                 return TypeError.InvalidOperand;
             }
-            expr.Binary.lhs = try convert(self.allocator, expr.Binary.lhs, commonType);
-            expr.Binary.rhs = try convert(self.allocator, expr.Binary.rhs, commonType);
-
+            expr.Binary.lhs = try convert(self.allocator, expr.Binary.lhs, commonType.?);
+            expr.Binary.rhs = try convert(self.allocator, expr.Binary.rhs, commonType.?);
             expr.Binary.type = switch (expr.Binary.op) {
-                .ADD, .SUBTRACT, .MULTIPLY, .DIVIDE, .REMAINDER => commonType,
+                .ADD, .SUBTRACT, .MULTIPLY, .DIVIDE, .REMAINDER => commonType.?,
                 else => AST.Type.Integer,
             };
+
             return expr.Binary.type.?;
         },
         .FunctionCall => |fnCall| {
@@ -1018,7 +1156,7 @@ fn typecheckExpr(self: *Typechecker, expr: *AST.Expression) TypeError!AST.Type {
             }
             for (0..fnSymbol.typeInfo.Function.args.items.len) |i| {
                 const argType = try typecheckExpr(self, fnCall.args.items[i]);
-                if (fnSymbol.typeInfo.Function.args.items[i] != argType) {
+                if (std.meta.activeTag(fnSymbol.typeInfo.Function.args.items[i]) != std.meta.activeTag(argType)) {
                     std.log.warn("Casting function argument in fn: {s} from {any} to {any}\n", .{
                         fnCall.name,
                         fnCall.args.items[i].getType(),
@@ -1028,8 +1166,9 @@ fn typecheckExpr(self: *Typechecker, expr: *AST.Expression) TypeError!AST.Type {
                     fnCall.args.items[i] = converted;
                 }
             }
-            _ = try convert(self.allocator, expr, fnSymbol.typeInfo.Function.returnType);
             expr.FunctionCall.type = fnSymbol.typeInfo.Function.returnType;
+            // FIXME: This convert call is stupid, delete it after some checks
+            _ = try convert(self.allocator, expr, fnSymbol.typeInfo.Function.returnType);
             return fnSymbol.typeInfo.Function.returnType;
         },
         .Identifier => |identifier| {
@@ -1037,7 +1176,7 @@ fn typecheckExpr(self: *Typechecker, expr: *AST.Expression) TypeError!AST.Type {
                 std.log.warn("Unknown identifier: {s}\n", .{identifier.name});
                 return TypeError.UnknownIdentifier;
             };
-            const astType = AST.Type.fromSemType(symbol.typeInfo);
+            const astType = try AST.Type.fromSemType(&symbol.typeInfo, self.allocator);
             std.log.warn("Identifier({s}) type registered as: {any}", .{ identifier.name, symbol.typeInfo });
             expr.Identifier.type = astType;
             return astType;
@@ -1050,6 +1189,7 @@ fn typecheckExpr(self: *Typechecker, expr: *AST.Expression) TypeError!AST.Type {
                 .UInteger => .UInteger,
                 .Float => .Float,
             };
+            // INFO: Constant floats need to be in .rodata/.data
             if (t == .Float) {
                 const tempId = try AST.tempGen.genTemp(self.allocator);
                 std.log.warn("tempId: {any}\n", .{tempId});
@@ -1095,12 +1235,29 @@ fn typecheckExpr(self: *Typechecker, expr: *AST.Expression) TypeError!AST.Type {
         },
         .Ternary => |ternary| {
             _ = try typecheckExpr(self, ternary.condition);
+
             const lhsType = try typecheckExpr(self, ternary.lhs);
-            std.debug.assert(lhsType == AST.Type.Integer);
             const rhsType = try typecheckExpr(self, ternary.rhs);
-            std.debug.assert(rhsType == AST.Type.Integer);
-            expr.Ternary.type = AST.Type.Integer;
-            return AST.Type.Integer;
+            const ternaryLhsPointer = std.meta.activeTag(lhsType) == .Pointer;
+            const ternaryRhsPointer = std.meta.activeTag(rhsType) == .Pointer;
+
+            // zig fmt: off
+            expr.Ternary.type = if (ternaryLhsPointer or ternaryRhsPointer) getCommonPtrType(ternary.lhs, ternary.rhs) 
+                                else getCommonType(lhsType, rhsType);
+            //zig fmt:on
+            std.debug.assert(expr.Ternary.type != null);
+            if (!checkConversion(lhsType, expr.Ternary.type.?) and !isNullPtrAssignment(ternary.lhs, expr.Ternary.type.?)) {
+                std.log.warn("Invalid types: lhs type {any}, rhs type {any}, ternary type {any}\n", .{ lhsType, ternary.type, ternary.type });
+                return TypeError.TypeMismatch;
+            }
+            expr.Ternary.lhs = try convert(self.allocator, ternary.lhs, expr.Ternary.type.?);
+
+            if (!checkConversion(rhsType, expr.Ternary.type.?) and !isNullPtrAssignment(ternary.rhs, expr.Ternary.type.?)) {
+                std.log.warn("Invalid types: lhs type {any}, rhs type {any}, ternary type {any}\n", .{ lhsType, ternary.type, ternary.type });
+                return TypeError.TypeMismatch;
+            }
+            expr.Ternary.rhs = try convert(self.allocator, ternary.rhs, expr.Ternary.type.?);
+            return expr.Ternary.type.?;
         },
     }
 }

@@ -66,8 +66,14 @@ pub fn astSymTabToTacSymTab(allocator: std.mem.Allocator, astSymTab: std.StringH
                 .static = std.meta.activeTag(sym.attributes) == .StaticAttr,
                 .signed = false,
             } },
+            .Pointer => .{ .Obj = .{
+                .type = .QuadWord,
+                .static = std.meta.activeTag(sym.attributes) == .StaticAttr,
+                .signed = false,
+            } },
             .Void => unreachable,
         };
+        std.log.warn("symName: {s} and asmSymbol: {any}\n", .{ symName, asmSymbol });
         try asmSymTab.put(
             @constCast(symName),
             asmSymbol,
@@ -78,7 +84,10 @@ pub fn astSymTabToTacSymTab(allocator: std.mem.Allocator, astSymTab: std.StringH
 pub const AsmRenderer = struct {
     asmSymbolTable: std.StringHashMap(*assembly.Symbol),
     allocator: std.mem.Allocator,
-    pub fn init(allocator: std.mem.Allocator, tacSymTab: std.StringHashMap(*assembly.Symbol)) ast.CodegenError!*AsmRenderer {
+    pub fn init(
+        allocator: std.mem.Allocator,
+        tacSymTab: std.StringHashMap(*assembly.Symbol),
+    ) ast.CodegenError!*AsmRenderer {
         const asmRenderer = try allocator.create(AsmRenderer);
         asmRenderer.* = .{
             .asmSymbolTable = tacSymTab,
@@ -186,6 +195,9 @@ pub const InstructionType = enum {
     FloatToInt,
     IntToFloat,
     UIntToFloat,
+    GetAddress,
+    Store,
+    Load,
 };
 
 pub const Return = struct {
@@ -306,6 +318,20 @@ pub inline fn createInst(comptime kind: InstructionType, contents: anytype, allo
     unreachable;
 }
 
+pub const GetAddress = struct {
+    src: *Val,
+    dest: *Val,
+};
+
+pub const Store = struct {
+    src: *Val,
+    destPointer: *Val,
+};
+pub const Load = struct {
+    srcPointer: *Val,
+    dest: *Val,
+};
+
 pub const Instruction = union(InstructionType) {
     Return: Return,
     Unary: Unary,
@@ -323,6 +349,91 @@ pub const Instruction = union(InstructionType) {
     FloatToInt: FloatToInt,
     IntToFloat: IntToFloat,
     UIntToFloat: UIntToFloat,
+    GetAddress: GetAddress,
+    Store: Store,
+    Load: Load,
+
+    pub fn format(
+        self: Instruction,
+        comptime fmt: []const u8,
+        options: std.fmt.FormatOptions,
+        writer: anytype,
+    ) !void {
+        _ = fmt;
+        _ = options;
+        switch (self) {
+            .Return => |ret| try writer.print("return {any}", .{ret.val.*}),
+
+            .Unary => |unary| try writer.print("{any} = {any} {any}", .{
+                unary.dest.*,
+                switch (unary.op) {
+                    .NEGATE => "-",
+                    .COMPLEMENT => "~",
+                },
+                unary.src.*,
+            }),
+
+            .Binary => |binary| try writer.print("{any} = {any} {s} {any}", .{
+                binary.dest.*,
+                binary.left.*,
+                switch (binary.op) {
+                    .ADD => "+",
+                    .SUBTRACT => "-",
+                    .MULTIPLY => "*",
+                    .DIVIDE => "/",
+                    .REMAINDER => "%",
+                    .EQ => "==",
+                    .NOT_EQ => "!=",
+                    .LT => "<",
+                    .LT_EQ => "<=",
+                    .GT => ">",
+                    .GT_EQ => ">=",
+                    .OR => "||",
+                    .AND => "&&",
+                },
+                binary.right.*,
+            }),
+
+            .Copy => |cp| try writer.print("{any} = {any}", .{ cp.dest.*, cp.src.* }),
+
+            .Jump => |label| try writer.print("jmp {s}", .{label}),
+
+            .JumpIfZero => |jmp| try writer.print("jz {s} if {any}", .{ jmp.target, jmp.condition.* }),
+
+            .JumpIfNotZero => |jmp| try writer.print("jnz {s} if {any}", .{ jmp.target, jmp.condition.* }),
+
+            .Label => |label| try writer.print("{s}:", .{label}),
+
+            .FunctionCall => |call| {
+                try writer.print("{any} = {s}(", .{ call.dest.*, call.name });
+                for (call.args.items, 0..) |arg, i| {
+                    if (i > 0) try writer.writeAll(", ");
+                    try writer.print("{any}", .{arg.*});
+                }
+                try writer.writeAll(")");
+            },
+
+            .SignExtend => |ext| try writer.print("{any} = sext {any}", .{ ext.dest.*, ext.src.* }),
+
+            .Truncate => |trunc| try writer.print("{any} = trunc {any}", .{ trunc.dest.*, trunc.src.* }),
+
+            .ZeroExtend => |ext| try writer.print("{any} = zext {any}", .{ ext.dest.*, ext.src.* }),
+
+            .FloatToUInt => |conv| try writer.print("{any} = f2u {any}", .{ conv.dest.*, conv.src.* }),
+
+            .FloatToInt => |conv| try writer.print("{any} = f2i {any}", .{ conv.dest.*, conv.src.* }),
+
+            .IntToFloat => |conv| try writer.print("{any} = i2f {any}", .{ conv.dest.*, conv.src.* }),
+
+            .UIntToFloat => |conv| try writer.print("{any} = u2f {any}", .{ conv.dest.*, conv.src.* }),
+
+            .GetAddress => |addr| try writer.print("{any} = &{any}", .{ addr.dest.*, addr.src.* }),
+
+            .Store => |store| try writer.print("*{any} = {any}", .{ store.destPointer.*, store.src.* }),
+
+            .Load => |load| try writer.print("{any} = *{any}", .{ load.dest.*, load.srcPointer.* }),
+        }
+    }
 
     pub fn codegen(
         instruction: *Instruction,
@@ -676,13 +787,16 @@ pub const Instruction = union(InstructionType) {
                     },
                     .EQ, .NOT_EQ, .LT, .LT_EQ, .GT, .GT_EQ => {
                         const lhsSigned = binary.left.isSignedFromSymTab(symbolTable);
-                        const rhsSigned = binary.right.isSignedFromSymTab(symbolTable);
-                        if (lhsSigned != rhsSigned) {
-                            std.log.warn("lhsSigned: {any}\n", .{lhsSigned});
-                            std.log.warn("rhsSigned: {any}\n", .{rhsSigned});
-                            std.log.err("binary: {any}\n", .{binary});
-                            unreachable;
-                        }
+                        //const rhsSigned = binary.right.isSignedFromSymTab(symbolTable);
+                        //if (lhsSigned != rhsSigned) {
+                        //    // This branch gets hit when comparing a signed and
+                        //    // unsigned number, in that case we can just
+                        //    // copmare them normally
+                        //    std.log.warn("lhsSigned: {any}\n", .{lhsSigned});
+                        //    std.log.warn("rhsSigned: {any}\n", .{rhsSigned});
+                        //    std.log.err("binary: {any}\n", .{binary});
+                        //    unreachable;
+                        //}
                         var comparisionInst = [_]*assembly.Instruction{
                             try assembly.createInst(.Mov, assembly.MovInst{
                                 .src = left,
@@ -744,7 +858,7 @@ pub const Instruction = union(InstructionType) {
                             .Reg = jmp.condition.getAsmTypeFromSymTab(symbolTable).?.getR10Variety(),
                         },
                         .op1 = assembly.Operand{ .Imm = 0 },
-                        .type = assembly.AsmType.LongWord,
+                        .type = jmp.condition.getAsmTypeFromSymTab(symbolTable).?,
                     }, allocator),
                     try assembly.createInst(.JmpCC, assembly.JmpCC{
                         .code = assembly.CondCode.E,
@@ -770,7 +884,7 @@ pub const Instruction = union(InstructionType) {
                         .op1 = assembly.Operand{
                             .Imm = 0,
                         },
-                        .type = assembly.AsmType.LongWord,
+                        .type = jmp.condition.getAsmTypeFromSymTab(symbolTable).?,
                     }, allocator),
                     try assembly.createInst(.JmpCC, assembly.JmpCC{
                         .code = assembly.CondCode.NE,
@@ -782,6 +896,15 @@ pub const Instruction = union(InstructionType) {
             .Label => |labelName| {
                 try instructions.append(try assembly.createInst(.Label, labelName, allocator));
             },
+            .GetAddress => |getAddr| {
+                const src = try getAddr.src.codegen(symbolTable, allocator);
+                const dest = try getAddr.dest.codegen(symbolTable, allocator);
+                try instructions.append(try assembly.createInst(.Lea, assembly.Lea{
+                    .type = .QuadWord,
+                    .src = src,
+                    .dest = dest,
+                }, allocator));
+            },
             .FunctionCall => |fnCall| {
                 const registers32 = [_]assembly.Reg{ assembly.Reg.EDI, assembly.Reg.ESI, assembly.Reg.EDX, assembly.Reg.ECX, assembly.Reg.R8, assembly.Reg.R9 };
                 const registers64 = [_]assembly.Reg{ assembly.Reg.RDI, assembly.Reg.RSI, assembly.Reg.RDX, assembly.Reg.RCX, assembly.Reg.R8_64, assembly.Reg.R9_64 };
@@ -791,6 +914,7 @@ pub const Instruction = union(InstructionType) {
                     for (fnCall.args.items, 0..) |arg, i| {
                         const assemblyArg = try arg.codegen(symbolTable, allocator);
                         const assemblyArgType = arg.getAsmTypeFromSymTab(symbolTable).?;
+                        std.log.warn("arg: {any}, assemblyArgType: {any}\n", .{ arg, assemblyArgType });
                         try instructions.append(try assembly.createInst(.Mov, assembly.MovInst{
                             .src = assemblyArg,
                             .dest = assembly.Operand{ .Reg = switch (assemblyArgType) {
@@ -803,6 +927,18 @@ pub const Instruction = union(InstructionType) {
                             } },
                             .type = assemblyArgType,
                         }, allocator));
+                        std.log.warn("The unholy move: {any}", .{assembly.MovInst{
+                            .src = assemblyArg,
+                            .dest = assembly.Operand{ .Reg = switch (assemblyArgType) {
+                                .LongWord => registers32[i],
+                                .QuadWord => registers64[i],
+                                .Float => blk: {
+                                    floatArgsCount += 1;
+                                    break :blk registersFloat[i];
+                                },
+                            } },
+                            .type = assemblyArgType,
+                        }});
                     }
                     const asmDest = try fnCall.dest.codegen(symbolTable, allocator);
                     try instructions.append(try assembly.createInst(
@@ -827,6 +963,55 @@ pub const Instruction = union(InstructionType) {
                     // arguments
                     unreachable();
                 }
+            },
+            .Store => |store| {
+                const src = try store.src.codegen(symbolTable, allocator);
+                const destPointer = try store.destPointer.codegen(symbolTable, allocator);
+                const moveToRAX = try allocator.create(assembly.Instruction);
+                const derefMove = try allocator.create(assembly.Instruction);
+                const rax = try allocator.create(assembly.Operand);
+                rax.* = .{ .Reg = .RAX };
+                moveToRAX.* = .{ .Mov = .{
+                    .type = .QuadWord,
+                    .src = destPointer,
+                    .dest = rax.*,
+                } };
+                derefMove.* = .{ .Mov = .{
+                    .type = store.src.getAsmTypeFromSymTab(symbolTable).?,
+                    .dest = .{
+                        .Memory = .{
+                            .base = rax,
+                            .index = 0,
+                        },
+                    },
+                    .src = src,
+                } };
+                try instructions.appendSlice(&[_]*assembly.Instruction{
+                    moveToRAX,
+                    derefMove,
+                });
+            },
+            .Load => |load| {
+                const srcPointer = try load.srcPointer.codegen(symbolTable, allocator);
+                const dest = try load.dest.codegen(symbolTable, allocator);
+                const moveToRAX = try allocator.create(assembly.Instruction);
+                const derefMove = try allocator.create(assembly.Instruction);
+                const rax = try allocator.create(assembly.Operand);
+                rax.* = .{ .Reg = .RAX };
+                moveToRAX.* = .{ .Mov = .{
+                    .type = .QuadWord,
+                    .src = srcPointer,
+                    .dest = rax.*,
+                } };
+                derefMove.* = .{ .Mov = .{
+                    .type = load.dest.getAsmTypeFromSymTab(symbolTable).?,
+                    .dest = dest,
+                    .src = .{ .Memory = .{ .base = rax, .index = 0 } },
+                } };
+                try instructions.appendSlice(&[_]*assembly.Instruction{
+                    moveToRAX,
+                    derefMove,
+                });
             },
         }
     }
@@ -853,11 +1038,39 @@ pub const Constant = union(ConstantType) {
     Float: f64,
 };
 
+pub const BoxedVal = union(enum) {
+    // INFO: With pointers, there are some edge cases during assignment, see
+    // notes.md
+    PlainVal: *Val,
+    DerefedVal: *Val,
+};
+
 pub const Val = union(ValType) {
     Constant: Constant,
     Variable: []u8,
 
     const Self = @This();
+
+    pub fn format(
+        self: Val,
+        comptime fmt: []const u8,
+        options: std.fmt.FormatOptions,
+        writer: anytype,
+    ) !void {
+        _ = fmt;
+        _ = options;
+        // Format values with clear type indicators
+        switch (self) {
+            .Constant => |constant| switch (constant) {
+                .Integer => |i| try writer.print("{d}", .{i}),
+                .Long => |l| try writer.print("{d}L", .{l}),
+                .UInt => |u| try writer.print("{d}u", .{u}),
+                .ULong => |ul| try writer.print("{d}uL", .{ul}),
+                .Float => |f| try writer.print("{d:.6}f", .{f}),
+            },
+            .Variable => |name| try writer.print("%{s}", .{name}),
+        }
+    }
 
     pub fn isSignedFromSymTab(self: *Self, symbolTable: *std.StringHashMap(*assembly.Symbol)) bool {
         return switch (self.*) {

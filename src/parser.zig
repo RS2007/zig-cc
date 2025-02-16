@@ -47,6 +47,7 @@ pub const Parser = struct {
         program.externalDecls = externalDeclList;
         while ((try self.l.peekToken(self.allocator)) != null) {
             const externalDecl = try self.parseExternalDecl();
+            std.log.warn("external decl:{any} and current token:{any} \n", .{ externalDecl, self.l.currentToken });
             try program.externalDecls.append(externalDecl);
         }
         return program;
@@ -161,34 +162,158 @@ pub const Parser = struct {
         }
     }
 
+    pub fn parseDirectDeclarator(self: *Parser) ParserError!*AST.Declarator {
+        const simple = try self.parseSimpleDeclarator();
+        var argList = std.ArrayList(*AST.Arg).init(self.allocator);
+        if ((try self.l.peekToken(self.allocator)).?.type == .LPAREN) {
+            _ = try self.l.nextToken(self.allocator);
+            while ((try self.l.peekToken(self.allocator)).?.type != lexer.TokenType.RPAREN) {
+                const arg = try self.parseArg();
+                try argList.append(arg);
+                if ((try self.l.peekToken(self.allocator)).?.type == lexer.TokenType.COMMA) {
+                    _ = try self.l.nextToken(self.allocator);
+                }
+            }
+            const rparen = try self.l.nextToken(self.allocator);
+            std.debug.assert(rparen.type == .RPAREN);
+
+            const funcDeclarator = try self.allocator.create(AST.FunDeclarator);
+            funcDeclarator.* = .{
+                .declarator = simple,
+                .params = argList,
+            };
+            const directDecl = try self.allocator.create(AST.Declarator);
+            directDecl.* = .{ .FunDeclarator = funcDeclarator };
+            return directDecl;
+        }
+        return simple;
+    }
+
+    pub inline fn parseSimpleDeclarator(self: *Parser) ParserError!*AST.Declarator {
+        switch ((try self.l.peekToken(self.allocator)).?.type) {
+            .IDENTIFIER => {
+                const iden = try self.l.nextToken(self.allocator);
+                const decl = try self.allocator.create(AST.Declarator);
+                decl.* = .{
+                    .Ident = self.l.buffer[iden.start .. iden.end + 1],
+                };
+                return decl;
+            },
+            .LPAREN => {
+                _ = try self.l.nextToken(self.allocator);
+                const decl = try self.parseDeclarator();
+                const rparen = try self.l.nextToken(self.allocator);
+                std.debug.assert(rparen.type == .RPAREN);
+                return decl;
+            },
+            else => {
+                unreachable;
+            },
+        }
+    }
+
+    pub fn parseDeclarator(self: *Parser) ParserError!*AST.Declarator {
+        switch ((try self.l.peekToken(self.allocator)).?.type) {
+            .MULTIPLY => {
+                _ = try self.l.nextToken(self.allocator);
+                const decl = try self.parseDeclarator();
+                const outerDecl = try self.allocator.create(AST.Declarator);
+                outerDecl.* = .{
+                    .PointerDeclarator = decl,
+                };
+                return outerDecl;
+            },
+            else => {
+                return self.parseDirectDeclarator();
+            },
+        }
+    }
+
     pub fn parseExternalDecl(self: *Parser) ParserError!*AST.ExternalDecl {
         const qualifier = AST.Qualifier.from((try self.l.peekToken(self.allocator)).?.type);
         if (qualifier != null) {
             _ = try self.l.nextToken(self.allocator);
         }
         const returnType = try self.parseType();
-        const peekTwo = try self.l.peekTwoTokens(self.allocator);
-        std.log.warn("peekTwo: {s}\n", .{self.l.buffer[peekTwo[0].?.start .. peekTwo[0].?.end + 1]});
-        if (peekTwo[1].?.type != lexer.TokenType.LPAREN) {
-            const varDecl = try self.parseVarDecl(qualifier, returnType);
-            const externalDecl = try self.allocator.create(AST.ExternalDecl);
+        const declarator = try self.parseDeclarator();
+        const externalDecl = try self.allocator.create(AST.ExternalDecl);
+        std.log.warn("Declarator: {any} and peek token:{any}\n", .{ declarator, (try self.l.peekToken(self.allocator)) });
+        // INFO: We are not implementing function pointers for now, so if there
+        // is a function declarator, that implies a function declaration.
+        if (declarator.containsFuncDeclarator()) {
+            const functionDecl = try self.allocator.create(AST.FunctionDef);
+            functionDecl.* = .{
+                .declarator = declarator,
+                .blockItems = switch ((try self.l.peekToken(self.allocator)).?.type) {
+                    .SEMICOLON => blk: {
+                        _ = try self.l.nextToken(self.allocator);
+                        break :blk std.ArrayList(*AST.BlockItem).init(self.allocator);
+                    },
+                    .LBRACE => blk: {
+                        _ = try self.l.nextToken(self.allocator);
+                        var blockList = std.ArrayList(*AST.BlockItem).init(self.allocator);
+                        var peeked = try self.l.peekToken(self.allocator);
+                        while (peeked != null and peeked.?.type != .RBRACE) {
+                            const blockItem = try self.parseBlockItem();
+                            try blockList.append(blockItem);
+                            peeked = try self.l.peekToken(self.allocator);
+                        }
+                        _ = self.l.nextToken(self.allocator) catch |err| {
+                            if (err == error.BufferEmpty) {
+                                break :blk blockList;
+                            }
+                        };
+                        break :blk blockList;
+                    },
+                    else => |tok| {
+                        std.log.warn("semicolon or lbrace expected, got {any}\n", .{tok});
+                        unreachable;
+                    },
+                },
+                .returnType = returnType,
+                .storageClass = qualifier,
+            };
             externalDecl.* = .{
-                .VarDeclaration = varDecl,
+                .FunctionDecl = functionDecl,
             };
             return externalDecl;
         }
-        return try self.parseFunctionDecl(qualifier, returnType);
+        const varDeclaration = try self.allocator.create(AST.Declaration);
+        varDeclaration.* = .{
+            .declarator = declarator,
+            .expression = switch ((try self.l.nextToken(self.allocator)).type) {
+                .SEMICOLON => null,
+                .ASSIGN => blk: {
+                    const expression = try self.parseExpression(0);
+                    const semicolon = try self.l.nextToken(self.allocator);
+                    std.debug.assert(semicolon.type == lexer.TokenType.SEMICOLON);
+                    break :blk expression;
+                },
+                else => |tok| {
+                    std.log.warn("semicolon or assign expected,got: {any}\n", .{tok});
+                    unreachable;
+                },
+            },
+            .type = returnType,
+            .storageClass = qualifier,
+        };
+        externalDecl.* = .{
+            .VarDeclaration = varDeclaration,
+        };
+        return externalDecl;
     }
 
     pub fn parseArg(self: *Parser) ParserError!*AST.Arg {
         const argType = try self.parseType();
+        //INFO: The lines following this has to change and should parse a declarator instead
         const arg = try self.allocator.create(AST.Arg);
+
         arg.* = if (argType == .Void) .{ .Void = {} } else blk: {
-            const argName = try self.l.nextToken(self.allocator);
+            const argDeclarator = try self.parseDeclarator();
             break :blk .{
                 .NonVoidArg = .{
                     .type = argType,
-                    .identifier = self.l.buffer[argName.start .. argName.end + 1],
+                    .declarator = argDeclarator,
                 },
             };
         };
@@ -224,7 +349,31 @@ pub const Parser = struct {
             _ = try self.l.nextToken(self.allocator);
         }
         const returnType = try self.parseType();
-        return try self.parseVarDecl(qualifier, returnType);
+        const declarator = try self.parseDeclarator();
+        const declaration = try self.allocator.create(AST.Declaration);
+        declaration.* = .{
+            .declarator = declarator,
+            .type = returnType,
+            .expression = switch ((try self.l.peekToken(self.allocator)).?.type) {
+                .SEMICOLON => blk: {
+                    _ = try self.l.nextToken(self.allocator);
+                    break :blk null;
+                },
+                .ASSIGN => blk: {
+                    _ = try self.l.nextToken(self.allocator);
+                    const expression = try self.parseExpression(0);
+                    const semicolon = try self.l.nextToken(self.allocator);
+                    std.debug.assert(semicolon.type == lexer.TokenType.SEMICOLON);
+                    break :blk expression;
+                },
+                else => |tok| {
+                    std.log.warn("Expected semicolon or assign, got {any}\n", .{tok});
+                    unreachable;
+                },
+            },
+            .storageClass = qualifier,
+        };
+        return declaration;
     }
 
     pub fn parseForInit(self: *Parser) ParserError!*AST.ForInit {
@@ -592,6 +741,28 @@ pub const Parser = struct {
         return longNode;
     }
 
+    pub fn parseDeref(self: *Parser) ParserError!*AST.Expression {
+        _ = try self.l.nextToken(self.allocator);
+        const exp = try self.parseFactor();
+        const derefNode = try self.allocator.create(AST.Expression);
+        derefNode.* = AST.Expression{ .Deref = .{
+            .type = null,
+            .exp = exp,
+        } };
+        return derefNode;
+    }
+
+    pub fn parseAddrOf(self: *Parser) ParserError!*AST.Expression {
+        _ = try self.l.nextToken(self.allocator);
+        const exp = try self.parseFactor();
+        const addrOfNode = try self.allocator.create(AST.Expression);
+        addrOfNode.* = AST.Expression{ .AddrOf = .{
+            .type = null,
+            .exp = exp,
+        } };
+        return addrOfNode;
+    }
+
     pub fn parseFactor(self: *Parser) ParserError!*AST.Expression {
         const peekToken = (try self.l.peekToken(self.allocator)).?;
         return switch (peekToken.type) {
@@ -603,6 +774,8 @@ pub const Parser = struct {
             .UNSIGNED_INT => try self.parseUnsignedInt(),
             .UNSIGNED_LONG => try self.parseUnsignedLong(),
             .FLOAT => try self.parseFloat(),
+            .MULTIPLY => try self.parseDeref(),
+            .BITWISE_AND => try self.parseAddrOf(),
             else => |tokType| {
                 std.log.warn("Parse factor unknown type: {any}\n", .{tokType});
                 unreachable;
@@ -610,7 +783,7 @@ pub const Parser = struct {
         };
     }
 
-    fn getPrecedence(tok: lexer.TokenType) ?u32 {
+    inline fn getPrecedence(tok: lexer.TokenType) ?u32 {
         return switch (tok) {
             .MULTIPLY, .DIVIDE, .MODULO => 50,
             .PLUS, .MINUS => 45,
@@ -623,7 +796,7 @@ pub const Parser = struct {
             else => null,
         };
     }
-    fn binaryOpFromTokType(tok: lexer.TokenType) AST.BinOp {
+    inline fn binaryOpFromTokType(tok: lexer.TokenType) AST.BinOp {
         return switch (tok) {
             .MINUS => AST.BinOp.SUBTRACT,
             .PLUS => AST.BinOp.ADD,
@@ -653,6 +826,7 @@ pub const Parser = struct {
     }
 
     pub fn parseInfix(self: *Parser, lhs: *AST.Expression) ParserError!*AST.Expression {
+        std.debug.assert(self.l.currentToken != null);
         if (self.l.currentToken) |currToken| {
             const op = self.l.currentToken.?;
             switch (op.type) {
@@ -691,8 +865,6 @@ pub const Parser = struct {
                     return lhs;
                 },
             }
-        } else {
-            unreachable;
         }
         return lhs;
     }
@@ -708,12 +880,10 @@ pub const Parser = struct {
                 const hasPeekedPrecedence = getPrecedence(peeked.type);
                 std.log.warn("Precedence: {any} and peeked type: {s}\n", .{ peeked, self.l.buffer[peeked.start .. peeked.end + 1] });
                 if (hasPeekedPrecedence == null) {
-                    //logz.info().fmt("parseExpression", "exited cause of no precdence for token and token={any}\n", .{peeked}).log();
                     return lhs;
                 }
                 const peekedPrecedence = hasPeekedPrecedence.?;
                 if (precedence > peekedPrecedence) {
-                    //logz.info().fmt("parseExpression", "exited cause of precedence of token being greater", .{}).log();
                     return lhs;
                 }
                 const hasNextToken = self.l.nextToken(self.allocator) catch null;
