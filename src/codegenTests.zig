@@ -1761,3 +1761,111 @@ test "compound interest" {
     try asmProgram.stringify(sFileWriter, allocator, tacRenderer.asmSymbolTable);
     try cFileWriter.writeAll(programStr);
 }
+
+test "taylor series calc e^x" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    const cFileWriter = (try std.fs.cwd().createFile("./cFiles/C/epow.c", .{})).writer();
+    const sFileWriter = (try std.fs.cwd().createFile("./cFiles/S/epow.s", .{})).writer();
+    const programStr =
+        \\ double expTaylor(double x, int terms, double *errorEstimate) {
+        \\   double result = 1.0;
+        \\   double term = 1.0;
+        \\   double factorial = 1.0;
+        \\ 
+        \\   for (int i = 1; i < terms; i=i+1) {
+        \\     term = term * ( x / i );
+        \\     result = result + term;
+        \\ 
+        \\     if (i == (terms - 1)) {
+        \\       *errorEstimate = term;
+        \\     }
+        \\   }
+        \\   return result;
+        \\ }
+        \\ 
+        \\ int main() {
+        \\   double x = 2.0;
+        \\   double ee;
+        \\   return expTaylor(2, 10, &ee);
+        \\ }
+    ;
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    const program = try p.parseProgram();
+    const varResolver = try ast.VarResolver.init(allocator);
+    try varResolver.resolve(program);
+    const typechecker = try semantic.Typechecker.init(allocator);
+    const hasTypeErr = try typechecker.check(program);
+    if (hasTypeErr) |typeError| {
+        std.log.warn("\x1b[33mError\x1b[0m: {s}\n", .{typeError});
+        std.debug.assert(false);
+    }
+    try ast.loopLabelPass(program, allocator);
+    const tacRenderer = try ast.TACRenderer.init(allocator, typechecker.symbolTable);
+    const tacProgram = try tacRenderer.render(program);
+    for (tacProgram.topLevelDecls.items) |decl| {
+        if (std.meta.activeTag(decl.*) == .Function) {
+            std.log.warn("{s}:", .{decl.Function.name});
+            for (decl.Function.instructions.items) |inst| {
+                std.log.warn("\t{}\n", .{inst});
+            }
+        }
+    }
+    const asmRenderer = try tac.AsmRenderer.init(allocator, tacRenderer.asmSymbolTable);
+    const asmProgram = try asmRenderer.render(tacProgram);
+    try asmProgram.stringify(sFileWriter, allocator, tacRenderer.asmSymbolTable);
+    try cFileWriter.writeAll(programStr);
+}
+
+test "gcd" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    const cFileWriter = (try std.fs.cwd().createFile("./cFiles/C/gcd.c", .{})).writer();
+    const sFileWriter = (try std.fs.cwd().createFile("./cFiles/S/gcd.s", .{})).writer();
+    const programStr =
+        \\ int gcd(int a, int b, int* steps) {
+        \\     *steps = 0;
+        \\     
+        \\     while (b != 0) {
+        \\         int temp = b;
+        \\         b = a % b;
+        \\         a = temp;
+        \\         (*steps) = (*steps) + 1;
+        \\     }
+        \\     return a;
+        \\ }
+        \\ int main() {
+        \\     int s = 0;
+        \\     return gcd(45,9, &s);
+        \\ }
+    ;
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    const program = try p.parseProgram();
+    const varResolver = try ast.VarResolver.init(allocator);
+    try varResolver.resolve(program);
+    const typechecker = try semantic.Typechecker.init(allocator);
+    const hasTypeErr = try typechecker.check(program);
+    if (hasTypeErr) |typeError| {
+        std.log.warn("\x1b[33mError\x1b[0m: {s}\n", .{typeError});
+        std.debug.assert(false);
+    }
+    try ast.loopLabelPass(program, allocator);
+    const tacRenderer = try ast.TACRenderer.init(allocator, typechecker.symbolTable);
+    const tacProgram = try tacRenderer.render(program);
+    for (tacProgram.topLevelDecls.items) |decl| {
+        if (std.meta.activeTag(decl.*) == .Function) {
+            std.log.warn("{s}:", .{decl.Function.name});
+            for (decl.Function.instructions.items) |inst| {
+                std.log.warn("\t{}\n", .{inst});
+            }
+        }
+    }
+    const asmRenderer = try tac.AsmRenderer.init(allocator, tacRenderer.asmSymbolTable);
+    const asmProgram = try asmRenderer.render(tacProgram);
+    try asmProgram.stringify(sFileWriter, allocator, tacRenderer.asmSymbolTable);
+    try cFileWriter.writeAll(programStr);
+}

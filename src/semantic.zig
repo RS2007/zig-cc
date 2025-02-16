@@ -1235,17 +1235,23 @@ fn typecheckExpr(self: *Typechecker, expr: *AST.Expression) TypeError!AST.Type {
         },
         .Ternary => |ternary| {
             _ = try typecheckExpr(self, ternary.condition);
+
             const lhsType = try typecheckExpr(self, ternary.lhs);
             const rhsType = try typecheckExpr(self, ternary.rhs);
             const ternaryLhsPointer = std.meta.activeTag(lhsType) == .Pointer;
             const ternaryRhsPointer = std.meta.activeTag(rhsType) == .Pointer;
-            expr.Ternary.type = if (ternaryLhsPointer or ternaryRhsPointer) getCommonPtrType(ternary.lhs, ternary.rhs) else getCommonType(lhsType, rhsType);
+
+            // zig fmt: off
+            expr.Ternary.type = if (ternaryLhsPointer or ternaryRhsPointer) getCommonPtrType(ternary.lhs, ternary.rhs) 
+                                else getCommonType(lhsType, rhsType);
+            //zig fmt:on
             std.debug.assert(expr.Ternary.type != null);
             if (!checkConversion(lhsType, expr.Ternary.type.?) and !isNullPtrAssignment(ternary.lhs, expr.Ternary.type.?)) {
                 std.log.warn("Invalid types: lhs type {any}, rhs type {any}, ternary type {any}\n", .{ lhsType, ternary.type, ternary.type });
                 return TypeError.TypeMismatch;
             }
             expr.Ternary.lhs = try convert(self.allocator, ternary.lhs, expr.Ternary.type.?);
+
             if (!checkConversion(rhsType, expr.Ternary.type.?) and !isNullPtrAssignment(ternary.rhs, expr.Ternary.type.?)) {
                 std.log.warn("Invalid types: lhs type {any}, rhs type {any}, ternary type {any}\n", .{ lhsType, ternary.type, ternary.type });
                 return TypeError.TypeMismatch;
