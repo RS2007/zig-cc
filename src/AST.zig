@@ -153,10 +153,15 @@ pub const BlockItem = union(BlockItemType) {
     }
 };
 
+pub const VarInitialValue = union(enum) {
+    SingleInitializer: *Expression,
+    ListInitializer: []*Expression,
+};
+
 pub const Declaration = struct {
     declarator: *Declarator,
     type: Type,
-    expression: ?*Expression,
+    varInitValue: ?*VarInitialValue,
     storageClass: ?Qualifier = null,
 
     //pub fn format(
@@ -175,7 +180,12 @@ pub const Declaration = struct {
     //}
 
     const Self = @This();
-    pub fn genTACInstructions(self: Self, renderer: *TACRenderer, instructions: *std.ArrayList(*tac.Instruction), symbolTable: *std.StringHashMap(*semantic.Symbol)) CodegenError!void {
+    pub fn genTACInstructions(
+        self: Self,
+        renderer: *TACRenderer,
+        instructions: *std.ArrayList(*tac.Instruction),
+        symbolTable: *std.StringHashMap(*semantic.Symbol),
+    ) CodegenError!void {
         const hasExpr = self.expression;
         if (hasExpr) |expression| {
             const symbolIdentifier = (try self.declarator.unwrapIdentDecl()).Ident;
@@ -325,6 +335,11 @@ pub const Return = struct {
     expression: *Expression,
 };
 
+pub const ArrayTy = struct {
+    ty: *Type,
+    size: usize,
+};
+
 pub const Type = union(enum) {
     Integer,
     Void,
@@ -332,6 +347,7 @@ pub const Type = union(enum) {
     UInteger,
     ULong,
     Float,
+    Array: ArrayTy,
     Pointer: *Type,
 
     const Self = @This();
@@ -361,6 +377,9 @@ pub const Type = union(enum) {
                 const inner = try allocator.create(Type);
                 inner.* = try fromSemType(ptr, allocator);
                 return .{ .Pointer = inner };
+            },
+            else => {
+                unreachable;
             },
         };
     }
@@ -428,6 +447,9 @@ pub const Type = union(enum) {
             .UInteger => try writer.print("unsigned int", .{}),
             .ULong => try writer.print("unsigned long", .{}),
             .Float => try writer.print("float", .{}),
+            .Array => |arr| {
+                try writer.print("{any}[{any}]", .{ arr.ty, arr.size });
+            },
             .Pointer => |ptr| {
                 try writer.print("*{any}", .{ptr});
             },
@@ -1009,10 +1031,21 @@ pub const DeclaratorError = error{
     FunctionDeclCantUnwrapIdent,
 };
 
+pub const ArrDeclarator = struct {
+    declarator: *Declarator,
+    size: std.ArrayList(usize),
+};
+
+pub const DeclaratorSuffix = union(enum) {
+    ArgList: std.ArrayList(*Arg),
+    ArraySuffix: std.ArrayList(usize),
+};
+
 pub const Declarator = union(enum) {
     Ident: []u8,
     PointerDeclarator: *Declarator,
     FunDeclarator: *FunDeclarator,
+    ArrayDeclarator: *ArrDeclarator,
 
     const Self = @This();
     pub fn unwrapFuncDeclarator(self: *Self) DeclaratorError!*FunDeclarator {
@@ -1020,6 +1053,7 @@ pub const Declarator = union(enum) {
             .FunDeclarator => |funDeclarator| return funDeclarator,
             .PointerDeclarator => |pointerDeclarator| return pointerDeclarator.unwrapFuncDeclarator(),
             .Ident => return error.NoInnerFuncDeclarator,
+            else => unreachable,
         }
     }
     pub fn unwrapIdentDecl(self: *Self) DeclaratorError!*Declarator {
@@ -1027,6 +1061,7 @@ pub const Declarator = union(enum) {
             .Ident => @constCast(self),
             .PointerDeclarator => |pointerDeclarator| pointerDeclarator.unwrapIdentDecl(),
             .FunDeclarator => DeclaratorError.FunctionDeclCantUnwrapIdent,
+            else => unreachable,
         };
     }
     pub fn containsFuncDeclarator(self: *Self) bool {
@@ -1034,6 +1069,7 @@ pub const Declarator = union(enum) {
             .FunDeclarator => true,
             .Ident => false,
             .PointerDeclarator => |pointerDeclarator| pointerDeclarator.containsFuncDeclarator(),
+            else => unreachable,
         };
     }
     pub fn format(
@@ -1058,6 +1094,9 @@ pub const Declarator = union(enum) {
                     try writer.print("\t{}\n", .{param});
                 }
                 try writer.print("]\n", .{});
+            },
+            else => {
+                try writer.print("chilling", .{});
             },
         }
     }

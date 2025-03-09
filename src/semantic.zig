@@ -250,8 +250,19 @@ inline fn handleNonPointerExpr(self: *Typechecker, varDecl: *AST.Declaration, ex
             else => unreachable,
         } };
     } else {
+        // TODO: This looks like a place for a bug. Future me should add a test
+        // case with the following:
+        // 1. int with a long number assignment (global)
+        // 2. float with a long number assignment (global)
+        // INFO: Clang behaviour:
+        // 1. Cast to integer
+        // 2. Just a warning (a cast till)
+        // Probable fix:
+        // 1. Copy the cast behaviour into a zig function and cast at compile time
+        // 2. Throw a warning (skip untill warnings are implemented)
+
         initializer.* = .{ .Initial = switch (varDecl.type) {
-            .Integer => .{ .type = .Integer, .value = .{ .Integer = expression.Constant.value.Integer } },
+            .Integer => .{ .type = .Integer, .value = .{ .Integer = expression.Constant.to(i32) } },
             .Long => .{ .type = .Long, .value = .{ .Long = expression.Constant.to(i64) } },
             .Float => .{ .type = .Float, .value = .{ .Float = expression.Constant.value.Float } },
             else => unreachable,

@@ -52,6 +52,7 @@ pub const Parser = struct {
         }
         return program;
     }
+
     pub fn parseType(self: *Parser) ParserError!AST.Type {
         const next = try self.l.nextToken(self.allocator);
         return switch (next.type) {
@@ -162,31 +163,84 @@ pub const Parser = struct {
         }
     }
 
+    pub fn parseDeclaratorSuffix(self: *Parser) ParserError!?*AST.DeclaratorSuffix {
+        const declaratorSuffix = try self.allocator.create(AST.DeclaratorSuffix);
+        switch ((try self.l.peekToken(self.allocator)).?.type) {
+            .LPAREN => {
+                _ = try self.l.nextToken(self.allocator);
+                var argList = std.ArrayList(*AST.Arg).init(self.allocator);
+                while ((try self.l.peekToken(self.allocator)).?.type != lexer.TokenType.RPAREN) {
+                    const arg = try self.parseArg();
+                    try argList.append(arg);
+                    if ((try self.l.peekToken(self.allocator)).?.type == lexer.TokenType.COMMA) {
+                        _ = try self.l.nextToken(self.allocator);
+                    }
+                }
+                const rparen = try self.l.nextToken(self.allocator);
+                std.debug.assert(rparen.type == .RPAREN);
+                declaratorSuffix.* = .{ .ArgList = argList };
+                return declaratorSuffix;
+            },
+            .LSQUARE => {
+                // parse multiple
+                var exprList = std.ArrayList(usize).init(self.allocator);
+                while ((try self.l.peekToken(self.allocator)).?.type == .LSQUARE) {
+                    _ = try self.l.nextToken(self.allocator);
+                    const expression = try self.parseExpression(0);
+                    std.debug.assert(expression.getType() == .Integer);
+                    const rsquare = try self.l.nextToken(self.allocator);
+                    std.debug.assert(rsquare.type == .RSQUARE);
+                    if (expression.Constant.value.Integer < 0) {
+                        std.log.err("Yo your array size is negative\n", .{});
+                        return ParserError.InvalidArgument;
+                    }
+                    try exprList.append(@intCast(expression.Constant.value.Integer));
+                }
+                declaratorSuffix.* = .{ .ArraySuffix = exprList };
+                return declaratorSuffix;
+            },
+            else => {
+                return null;
+            },
+        }
+    }
+
     pub fn parseDirectDeclarator(self: *Parser) ParserError!*AST.Declarator {
         const simple = try self.parseSimpleDeclarator();
-        var argList = std.ArrayList(*AST.Arg).init(self.allocator);
-        if ((try self.l.peekToken(self.allocator)).?.type == .LPAREN) {
-            _ = try self.l.nextToken(self.allocator);
-            while ((try self.l.peekToken(self.allocator)).?.type != lexer.TokenType.RPAREN) {
-                const arg = try self.parseArg();
-                try argList.append(arg);
-                if ((try self.l.peekToken(self.allocator)).?.type == lexer.TokenType.COMMA) {
-                    _ = try self.l.nextToken(self.allocator);
-                }
-            }
-            const rparen = try self.l.nextToken(self.allocator);
-            std.debug.assert(rparen.type == .RPAREN);
-
-            const funcDeclarator = try self.allocator.create(AST.FunDeclarator);
-            funcDeclarator.* = .{
-                .declarator = simple,
-                .params = argList,
-            };
-            const directDecl = try self.allocator.create(AST.Declarator);
-            directDecl.* = .{ .FunDeclarator = funcDeclarator };
-            return directDecl;
+        // Can be one of these:
+        // 1. Just a simple identifier
+        // 2. Be a (*iden) => the first part of a function pointer (Not supported will assert false in the latter states of the compiler)
+        // * Can be followed by a (type arg,type arg...), (simple identifier + (type arg, type arg) ) => Func Declarator
+        // * Can be followed by nothing: just an identifier
+        // When array literals are introduced, the second case can have the [ integer ] suffix
+        // parseDeclaratorSuffix
+        const declaratorSuffix = try self.parseDeclaratorSuffix();
+        if (declaratorSuffix == null) {
+            return simple;
         }
-        return simple;
+
+        const directDecl = try self.allocator.create(AST.Declarator);
+        switch (declaratorSuffix.?.*) {
+            .ArgList => |argList| {
+                const funcDeclarator = try self.allocator.create(AST.FunDeclarator);
+                funcDeclarator.* = .{
+                    .declarator = simple,
+                    .params = argList,
+                };
+                directDecl.* = .{ .FunDeclarator = funcDeclarator };
+                return directDecl;
+            },
+            .ArraySuffix => |arraySuffix| {
+                const arrDeclarator = try self.allocator.create(AST.ArrDeclarator);
+                arrDeclarator.* = .{
+                    .declarator = simple,
+                    .size = arraySuffix,
+                };
+                directDecl.* = .{ .ArrayDeclarator = arrDeclarator };
+                return directDecl;
+            },
+        }
+        unreachable;
     }
 
     pub inline fn parseSimpleDeclarator(self: *Parser) ParserError!*AST.Declarator {
@@ -281,13 +335,17 @@ pub const Parser = struct {
         const varDeclaration = try self.allocator.create(AST.Declaration);
         varDeclaration.* = .{
             .declarator = declarator,
-            .expression = switch ((try self.l.nextToken(self.allocator)).type) {
+            .varInitValue = switch ((try self.l.nextToken(self.allocator)).type) {
                 .SEMICOLON => null,
                 .ASSIGN => blk: {
                     const expression = try self.parseExpression(0);
                     const semicolon = try self.l.nextToken(self.allocator);
                     std.debug.assert(semicolon.type == lexer.TokenType.SEMICOLON);
-                    break :blk expression;
+                    const varInitVal = try self.allocator.create(AST.VarInitialValue);
+                    varInitVal.* = .{
+                        .SingleInitializer = expression,
+                    };
+                    break :blk varInitVal;
                 },
                 else => |tok| {
                     std.log.warn("semicolon or assign expected,got: {any}\n", .{tok});
@@ -354,17 +412,23 @@ pub const Parser = struct {
         declaration.* = .{
             .declarator = declarator,
             .type = returnType,
-            .expression = switch ((try self.l.peekToken(self.allocator)).?.type) {
+            .varInitValue = switch ((try self.l.peekToken(self.allocator)).?.type) {
                 .SEMICOLON => blk: {
                     _ = try self.l.nextToken(self.allocator);
                     break :blk null;
                 },
                 .ASSIGN => blk: {
                     _ = try self.l.nextToken(self.allocator);
+                    const peeked = try self.l.peekToken(self.allocator);
+                    std.debug.assert(peeked.?.type == .LBRACE);
+                    const varInitValue = try self.allocator.create(AST.VarInitialValue);
                     const expression = try self.parseExpression(0);
                     const semicolon = try self.l.nextToken(self.allocator);
                     std.debug.assert(semicolon.type == lexer.TokenType.SEMICOLON);
-                    break :blk expression;
+                    varInitValue.* = .{
+                        .SingleInitializer = expression,
+                    };
+                    break :blk varInitValue;
                 },
                 else => |tok| {
                     std.log.warn("Expected semicolon or assign, got {any}\n", .{tok});

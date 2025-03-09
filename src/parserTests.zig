@@ -259,6 +259,27 @@ test "lexing doubles" {
     _ = try std.testing.expectEqual(lexer.TokenType.BITWISE_AND, ampersand.type);
 }
 
+test "array literal" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const programStr = "int a[3] = {1,2,3}";
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    _ = try std.testing.expectEqual((try l.nextToken(allocator)).type, lexer.TokenType.INT_TYPE);
+    _ = try std.testing.expectEqual((try l.nextToken(allocator)).type, lexer.TokenType.IDENTIFIER);
+    _ = try std.testing.expectEqual((try l.nextToken(allocator)).type, lexer.TokenType.LSQUARE);
+    _ = try std.testing.expectEqual((try l.nextToken(allocator)).type, lexer.TokenType.INTEGER);
+    _ = try std.testing.expectEqual((try l.nextToken(allocator)).type, lexer.TokenType.RSQUARE);
+    _ = try std.testing.expectEqual((try l.nextToken(allocator)).type, lexer.TokenType.ASSIGN);
+    _ = try std.testing.expectEqual((try l.nextToken(allocator)).type, lexer.TokenType.LBRACE);
+    _ = try std.testing.expectEqual((try l.nextToken(allocator)).type, lexer.TokenType.INTEGER);
+    _ = try std.testing.expectEqual((try l.nextToken(allocator)).type, lexer.TokenType.COMMA);
+    _ = try std.testing.expectEqual((try l.nextToken(allocator)).type, lexer.TokenType.INTEGER);
+    _ = try std.testing.expectEqual((try l.nextToken(allocator)).type, lexer.TokenType.COMMA);
+    _ = try std.testing.expectEqual((try l.nextToken(allocator)).type, lexer.TokenType.INTEGER);
+    _ = try std.testing.expectEqual((try l.nextToken(allocator)).type, lexer.TokenType.RBRACE);
+}
+
 test "testing basic parser" {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     const allocator = arena.allocator();
@@ -683,4 +704,15 @@ test "deref and addrof parsing" {
     const program = try p.parseProgram();
     const varResolver = try ast.VarResolver.init(allocator);
     try varResolver.resolve(program);
+}
+
+test "parse array literal" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const programStr = "int array[4] = {1,2,3,4};";
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    const declaration = try p.parseDeclaration();
+    std.log.warn("\n{}", .{declaration});
 }

@@ -61,10 +61,10 @@ Return(Unary(Negate,
   - [x] Typechecker(void lexing + writing a pass)
   - [x] Unit tests for error messages (parser + semantic analysis level)
 - [x] Storage specifiers
-- [ ] long
-- [ ] uint
-- [ ] floating point
-- [ ] pointers
+- [x ] long
+- [x ] uint
+- [x ] floating point
+- [x ] pointers
 - [ ] arrays + pointer arithmetic
 - [ ] chars and strings
 - [ ] dynamic memory allocation (can we support garbage collection?)
@@ -76,6 +76,10 @@ Return(Unary(Negate,
 - [ ] Peephole optimizations
 - [ ] Register Allocation
 - [ ] Support for function inlining (call graph construction)
+
+> [!IMPORTANT]
+> The todo has been moved to `TODO.md`
+
 
 ### Can we support garbage collection?
 
@@ -379,3 +383,14 @@ declarators.
             * This is dereferenced, might have to operate on the pointer during
               assignment
         * Plain Value
+
+
+### Array literal
+
+- accomodating the array syntax within declarator?
+- New grammar:
+
+```ebnf
+
+```
+

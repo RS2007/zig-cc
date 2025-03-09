@@ -330,6 +330,12 @@ pub const Lexer = struct {
             ',' => {
                 return (try createSingleWidthToken(TokenType.COMMA, allocator, lexer));
             },
+            '[' => {
+                return (try createSingleWidthToken(TokenType.LSQUARE, allocator, lexer));
+            },
+            ']' => {
+                return (try createSingleWidthToken(TokenType.RSQUARE, allocator, lexer));
+            },
             '<' => {
                 return (try createDoubleWidthToken(&[_]u8{'='}, &[_]TokenType{TokenType.LESSEQ}, TokenType.LESS, allocator, lexer));
             },
@@ -493,6 +499,12 @@ pub const Lexer = struct {
             },
             ',' => {
                 nextSingleWidthTokMacro(TokenType.COMMA, token, lexer);
+            },
+            '[' => {
+                nextSingleWidthTokMacro(TokenType.LSQUARE, token, lexer);
+            },
+            ']' => {
+                nextSingleWidthTokMacro(TokenType.RSQUARE, token, lexer);
             },
             '!' => {
                 try nextDoubleWidthTokMacro(&[_]TokenType{TokenType.ASSIGN}, &[_]TokenType{TokenType.NOT_EQUALS}, TokenType.NOT, lexer, token, allocator);
