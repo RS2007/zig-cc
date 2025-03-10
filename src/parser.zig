@@ -421,14 +421,10 @@ pub const Parser = struct {
                     _ = try self.l.nextToken(self.allocator);
                     const peeked = try self.l.peekToken(self.allocator);
                     std.debug.assert(peeked.?.type == .LBRACE);
-                    const varInitValue = try self.allocator.create(AST.VarInitialValue);
-                    const expression = try self.parseExpression(0);
+                    const initializer = try self.parseInitializer();
                     const semicolon = try self.l.nextToken(self.allocator);
                     std.debug.assert(semicolon.type == lexer.TokenType.SEMICOLON);
-                    varInitValue.* = .{
-                        .SingleInitializer = expression,
-                    };
-                    break :blk varInitValue;
+                    break :blk initializer;
                 },
                 else => |tok| {
                     std.log.warn("Expected semicolon or assign, got {any}\n", .{tok});
@@ -931,6 +927,53 @@ pub const Parser = struct {
             }
         }
         return lhs;
+    }
+
+    pub fn parseInitializer(self: *Parser) ParserError!*AST.Initializer {
+        switch ((try self.l.peekToken(self.allocator)).?.type) {
+            .LBRACE => {
+                _ = try self.l.nextToken(self.allocator);
+                const firstElem = try self.parseInitializer();
+                var initializers = std.ArrayList(*AST.Initializer).init(self.allocator);
+                try initializers.append(firstElem);
+                while (true) {
+                    const commaOrRBrace = try self.l.peekToken(self.allocator);
+                    std.debug.assert(commaOrRBrace.?.type == .COMMA or commaOrRBrace.?.type == .RBRACE);
+                    _ = try self.l.nextToken(self.allocator);
+                    switch (commaOrRBrace.?.type) {
+                        .COMMA => {
+                            if ((try self.l.peekToken(self.allocator)).?.type == .RBRACE) {
+                                _ = try self.l.nextToken(self.allocator);
+                                const initializer = try self.allocator.create(AST.Initializer);
+                                initializer.* = .{
+                                    .ArrayExpr = initializers,
+                                };
+                                return initializer;
+                            } else {
+                                const initializer = try self.parseInitializer();
+                                try initializers.append(initializer);
+                            }
+                        },
+                        .RBRACE => {
+                            const initializer = try self.allocator.create(AST.Initializer);
+                            initializer.* = .{
+                                .ArrayExpr = initializers,
+                            };
+                            return initializer;
+                        },
+                        else => unreachable,
+                    }
+                }
+            },
+            else => {
+                const expr = try self.parseExpression(0);
+                const initializer = try self.allocator.create(AST.Initializer);
+                initializer.* = .{
+                    .Expression = expr,
+                };
+                return initializer;
+            },
+        }
     }
 
     pub fn parseExpression(self: *Parser, precedence: u32) ParserError!*AST.Expression {

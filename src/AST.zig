@@ -153,15 +153,11 @@ pub const BlockItem = union(BlockItemType) {
     }
 };
 
-pub const VarInitialValue = union(enum) {
-    SingleInitializer: *Expression,
-    ListInitializer: []*Expression,
-};
 
 pub const Declaration = struct {
     declarator: *Declarator,
     type: Type,
-    varInitValue: ?*VarInitialValue,
+    varInitValue: ?*Initializer,
     storageClass: ?Qualifier = null,
 
     //pub fn format(
@@ -1039,6 +1035,11 @@ pub const ArrDeclarator = struct {
 pub const DeclaratorSuffix = union(enum) {
     ArgList: std.ArrayList(*Arg),
     ArraySuffix: std.ArrayList(usize),
+};
+
+pub const Initializer = union(enum) {
+    Expression: *Expression,
+    ArrayExpr: std.ArrayList(*Initializer),
 };
 
 pub const Declarator = union(enum) {

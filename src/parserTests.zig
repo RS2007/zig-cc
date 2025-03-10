@@ -704,6 +704,24 @@ test "deref and addrof parsing" {
     const program = try p.parseProgram();
     const varResolver = try ast.VarResolver.init(allocator);
     try varResolver.resolve(program);
+
+}
+
+test "parse initializer" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const programStrings = [_][]u8{
+        @constCast("{1}"),
+        @constCast("{1,2}"),
+        @constCast("{1,2,3,}"),
+    };
+    for (programStrings) |programStr| {
+        const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+        var p = try parser.Parser.init(allocator, l);
+        const initializer = try p.parseInitializer();
+        std.log.warn("\n{}", .{initializer});
+    }
 }
 
 test "parse array literal" {
@@ -714,5 +732,6 @@ test "parse array literal" {
     const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
     var p = try parser.Parser.init(allocator, l);
     const declaration = try p.parseDeclaration();
+    _ = try std.testing.expectEqual(declaration.varInitValue.?.ArrayExpr.items.len,4);
     std.log.warn("\n{}", .{declaration});
 }
