@@ -845,6 +845,7 @@ pub const Parser = struct {
 
     inline fn getPrecedence(tok: lexer.TokenType) ?u32 {
         return switch (tok) {
+            .LSQUARE => 55,
             .MULTIPLY, .DIVIDE, .MODULO => 50,
             .PLUS, .MINUS => 45,
             .LESS, .LESSEQ, .GREATER, .GREATEREQ => 35,
@@ -920,6 +921,18 @@ pub const Parser = struct {
                         .condition = lhs,
                     } };
                     return expr;
+                },
+                .LSQUARE => {
+                    const index = try self.parseExpression(0);
+                    const rsquare = try self.l.nextToken(self.allocator);
+                    std.debug.assert(rsquare.type == .RSQUARE);
+                    const expr = try self.allocator.create(AST.Expression);
+                    expr.* = AST.Expression{.ArrSubscript = .{
+                        .arr = lhs,
+                        .index = index,
+                    }};
+                    return expr;
+
                 },
                 else => {
                     return lhs;

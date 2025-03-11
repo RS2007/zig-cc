@@ -704,7 +704,6 @@ test "deref and addrof parsing" {
     const program = try p.parseProgram();
     const varResolver = try ast.VarResolver.init(allocator);
     try varResolver.resolve(program);
-
 }
 
 test "parse initializer" {
@@ -728,10 +727,46 @@ test "parse array literal" {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     const allocator = arena.allocator();
     defer arena.deinit();
-    const programStr = "int array[4] = {1,2,3,4};";
+    const programStrings = [_][]u8{
+        @constCast("double array[4] = {1.0,2.0,3.0,4.};"),
+        @constCast("long array[4] = {1};"),
+    };
+    const lengths = [_]usize{ 4, 1 };
+    for (programStrings, lengths) |programStr, length| {
+        const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+        var p = try parser.Parser.init(allocator, l);
+        const declaration = try p.parseDeclaration();
+        _ = try std.testing.expectEqual(declaration.varInitValue.?.ArrayExpr.items.len, length);
+    }
+}
+
+test "indexing an array" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const programStrings = [_][]u8{
+        @constCast("array[4]"),
+        @constCast("array[4][8]"),
+    };
+
+    for (programStrings) |programStr| {
+        const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+        var p = try parser.Parser.init(allocator, l);
+        const expression = try p.parseExpression(0);
+        std.log.warn("Expression: {any}\n", .{expression.ArrSubscript.index});
+        if (std.meta.activeTag(expression.ArrSubscript.arr.*) == .ArrSubscript) {
+            std.log.warn("Inner dimension: {any}\n", .{expression.ArrSubscript.arr.ArrSubscript.index});
+        }
+    }
+}
+
+test "multidim array declaration" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const programStr = "int k[2][2] = {{1,2},{2,3}};";
     const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
     var p = try parser.Parser.init(allocator, l);
-    const declaration = try p.parseDeclaration();
-    _ = try std.testing.expectEqual(declaration.varInitValue.?.ArrayExpr.items.len,4);
-    std.log.warn("\n{}", .{declaration});
+    const externalDecl = try p.parseDeclaration();
+    std.log.warn("externalDecl: {any}\n", .{externalDecl});
 }

@@ -255,6 +255,7 @@ pub const ExpressionType = enum {
     // If later it's found that these ops do share them, then they can be moved to unary
     AddrOf,
     Deref,
+    ArrSubscript,
 };
 
 fn convertSymToTAC(tacProgram: *tac.Program, symbolTable: std.StringHashMap(*semantic.Symbol)) MemoryError!void {
@@ -1137,6 +1138,11 @@ pub const TACRenderer = struct {
     }
 };
 
+pub const ArrSubscript = struct {
+    arr: *Expression,
+    index: *Expression,
+};
+
 pub const Expression = union(ExpressionType) {
     Constant: Constant,
     Unary: Unary,
@@ -1148,6 +1154,7 @@ pub const Expression = union(ExpressionType) {
     Cast: Cast,
     AddrOf: AddrOf,
     Deref: Deref,
+    ArrSubscript: ArrSubscript,
     const Self = @This();
 
     pub fn getType(self: *Self) Type {
