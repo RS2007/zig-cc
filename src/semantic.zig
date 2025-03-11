@@ -1134,7 +1134,10 @@ fn typecheckExpr(self: *Typechecker, expr: *AST.Expression) TypeError!AST.Type {
             }
 
             //INFO: Conversion logic
-            const commonType = if (isLhsPointer or isRhsPointer) getCommonPtrType(expr.Binary.lhs, expr.Binary.rhs).? else getCommonType(lhsType, rhsType);
+            const commonType = if (isLhsPointer or isRhsPointer) getCommonPtrType(
+                expr.Binary.lhs,
+                expr.Binary.rhs,
+            ).? else getCommonType(lhsType, rhsType);
             if (commonType == null) {
                 std.log.warn("Invalid pointer comparisions", .{});
                 return TypeError.InvalidOperand;

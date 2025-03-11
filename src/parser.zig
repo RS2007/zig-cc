@@ -341,9 +341,9 @@ pub const Parser = struct {
                     const expression = try self.parseExpression(0);
                     const semicolon = try self.l.nextToken(self.allocator);
                     std.debug.assert(semicolon.type == lexer.TokenType.SEMICOLON);
-                    const varInitVal = try self.allocator.create(AST.VarInitialValue);
+                    const varInitVal = try self.allocator.create(AST.Initializer);
                     varInitVal.* = .{
-                        .SingleInitializer = expression,
+                        .Expression = expression,
                     };
                     break :blk varInitVal;
                 },
@@ -928,6 +928,7 @@ pub const Parser = struct {
                     std.debug.assert(rsquare.type == .RSQUARE);
                     const expr = try self.allocator.create(AST.Expression);
                     expr.* = AST.Expression{.ArrSubscript = .{
+                        .type = null,
                         .arr = lhs,
                         .index = index,
                     }};

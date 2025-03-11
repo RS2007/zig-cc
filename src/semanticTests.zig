@@ -1104,6 +1104,7 @@ test "ternary pointer conversions" {
     var p = try parser.Parser.init(allocator, l);
     const program = try p.parseProgram();
     const varResolver = try ast.VarResolver.init(allocator);
+
     try varResolver.resolve(program);
 
     const typechecker = try semantic.Typechecker.init(allocator);
@@ -1111,4 +1112,22 @@ test "ternary pointer conversions" {
     std.log.warn("type of ternary rhs:  {any}\n", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[2].Declaration.expression.?.Ternary.rhs.getType()});
     _ = try std.testing.expect(hasTypeErr == null);
     //std.log.warn("\x1b[31mError:\x1b[0m {s}\n", .{hasTypeErr.?});
+}
+
+test "assigning to an array" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const programStr =
+        \\ int main(){
+        \\     int k[3] = {1,2,3};
+        \\     k[0] = k[0]+k[1]+k[2];
+        \\     return 0;
+        \\ }
+    ;
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    const program = try p.parseProgram();
+    const varResolver = try ast.VarResolver.init(allocator);
+    try varResolver.resolve(program);
 }

@@ -153,7 +153,6 @@ pub const BlockItem = union(BlockItemType) {
     }
 };
 
-
 pub const Declaration = struct {
     declarator: *Declarator,
     type: Type,
@@ -1063,7 +1062,7 @@ pub const Declarator = union(enum) {
             .Ident => @constCast(self),
             .PointerDeclarator => |pointerDeclarator| pointerDeclarator.unwrapIdentDecl(),
             .FunDeclarator => DeclaratorError.FunctionDeclCantUnwrapIdent,
-            else => unreachable,
+            .ArrayDeclarator => |arrDeclarator| arrDeclarator.declarator.unwrapIdentDecl(),
         };
     }
     pub fn containsFuncDeclarator(self: *Self) bool {
@@ -1139,6 +1138,7 @@ pub const TACRenderer = struct {
 };
 
 pub const ArrSubscript = struct {
+    type: ?Type,
     arr: *Expression,
     index: *Expression,
 };
@@ -1169,6 +1169,7 @@ pub const Expression = union(ExpressionType) {
             .Ternary => |ternary| ternary.type.?,
             .Deref => |deref| deref.type.?,
             .AddrOf => |addrOf| addrOf.type.?,
+            .ArrSubscript => |arrSubscript| arrSubscript.type.?,
         };
     }
 
@@ -1181,7 +1182,7 @@ pub const Expression = union(ExpressionType) {
 
     pub fn isLvalue(self: *Self) bool {
         return switch (self.*) {
-            .Identifier, .Deref, .AddrOf, .Assignment => true,
+            .Identifier, .Deref, .AddrOf, .Assignment, .ArrSubscript => true,
             else => false,
         };
     }
@@ -1666,6 +1667,10 @@ pub fn expressionScopeVariableResolve(self: *VarResolver, expression: *Expressio
         .Deref => |deref| {
             try expressionScopeVariableResolve(self, deref.exp, currentScope);
         },
+        .ArrSubscript => |arrSubscript| {
+            try expressionScopeVariableResolve(self, arrSubscript.arr, currentScope);
+            try expressionScopeVariableResolve(self, arrSubscript.index, currentScope);
+        },
     }
 }
 
@@ -1747,12 +1752,26 @@ pub fn blockStatementScopeVariableResolve(self: *VarResolver, blockItem: *BlockI
             std.log.warn("Pushing in {s} = {any}\n", .{ identDecl.Ident, sym });
             try self.varMap.getLast().put(identDecl.Ident, sym);
             identDecl.Ident = sym.newName;
-            if (decl.expression) |expression| {
-                try expressionScopeVariableResolve(self, expression, currentScope);
+            if (decl.varInitValue) |varInitValue| {
+                try varInitValueScopeVariableResolve(self, varInitValue, currentScope);
             }
         },
     }
 }
+
+pub fn varInitValueScopeVariableResolve(self: *VarResolver, varInitValue: *Initializer, currentScope: u32) VarResolveError!void {
+    switch (varInitValue.*) {
+        .ArrayExpr => |arrayExpr| {
+            for (arrayExpr.items) |initValue| {
+                try varInitValueScopeVariableResolve(self, initValue, currentScope);
+            }
+        },
+        .Expression => |expression| {
+            try expressionScopeVariableResolve(self, expression, currentScope);
+        },
+    }
+}
+
 pub fn statementScopeVariableResolve(self: *VarResolver, statement: *Statement, currentScope: u32) VarResolveError!void {
     switch (statement.*) {
         .Compound => |compound| {
@@ -1851,6 +1870,10 @@ pub const VarResolver = struct {
             .FunDeclarator => |funcDeclarator| {
                 try self.resolveDeclarator(funcDeclarator.declarator, currentScope);
             },
+            .ArrayDeclarator => |arrDeclarator| {
+                _ = arrDeclarator;
+                unreachable;
+            }
         }
     }
 
