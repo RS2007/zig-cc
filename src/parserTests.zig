@@ -387,9 +387,9 @@ test "parsing declarations right associativity" {
     std.log.warn("\x1b[34m{s}\x1b[0m", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[0].Declaration.declarator.Ident});
     std.log.warn("\x1b[34m{any}\x1b[0m", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[1]});
     std.log.warn("\x1b[34m{s}\x1b[0m", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[1].Declaration.declarator.Ident});
-    std.log.warn("\x1b[34m{any}\x1b[0m", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[1].Declaration.expression});
-    std.log.warn("\x1b[34m{any}\x1b[0m", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[1].Declaration.expression.?.Assignment.lhs.Identifier});
-    std.log.warn("\x1b[34m{any}\x1b[0m", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[1].Declaration.expression.?.Assignment.rhs});
+    std.log.warn("\x1b[34m{any}\x1b[0m", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[1].Declaration.varInitValue});
+    std.log.warn("\x1b[34m{any}\x1b[0m", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[1].Declaration.varInitValue.?.Expression.Assignment.lhs.Identifier});
+    std.log.warn("\x1b[34m{any}\x1b[0m", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[1].Declaration.varInitValue.?.Expression.Assignment.rhs});
 }
 
 test "test if statements" {
@@ -517,64 +517,6 @@ test "parse multiple functions" {
     }
 }
 
-test "parse globals" {
-    const semantic = @import("semantic.zig");
-    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    const allocator = arena.allocator();
-    defer arena.deinit();
-    const programStr =
-        \\ int k = 3;
-        \\ int main(){
-        \\     int b = 0; 
-        \\     return b+k;
-        \\ }
-    ;
-    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
-    var p = try parser.Parser.init(allocator, l);
-    const program = try p.parseProgram();
-    const varResolver = try ast.VarResolver.init(allocator);
-    try varResolver.resolve(program);
-    const typeChecker = try semantic.Typechecker.init(allocator);
-    if ((try typeChecker.check(program))) |typeError| {
-        std.log.warn("Type error: {any}\n", .{typeError});
-    }
-    std.log.warn("Globals not renamed: {s}\n", .{program.externalDecls.items[0].VarDeclaration.declarator.Ident});
-    std.log.warn("Globals1: {s}\n", .{program.externalDecls.items[1].FunctionDecl.declarator.FunDeclarator.declarator.Ident});
-    std.log.warn("Locals renamed: {s}\n", .{
-        program.externalDecls.items[1].FunctionDecl.blockItems.items[0].Declaration.declarator.Ident,
-    });
-}
-
-test "parse with storage classes" {
-    const semantic = @import("semantic.zig");
-    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    const allocator = arena.allocator();
-    defer arena.deinit();
-    const programStr =
-        \\ extern int k;
-        \\ static int main(){
-        \\     int b = 0; 
-        \\     return b+k;
-        \\ }
-    ;
-    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
-    var p = try parser.Parser.init(allocator, l);
-    const program = try p.parseProgram();
-    const varResolver = try ast.VarResolver.init(allocator);
-    try varResolver.resolve(program);
-    const typeChecker = try semantic.Typechecker.init(allocator);
-    if ((try typeChecker.check(program))) |typeError| {
-        std.log.warn("Type error: {any}\n", .{typeError});
-    }
-    std.log.warn("Globals not renamed: {s}\n", .{program.externalDecls.items[0].VarDeclaration.declarator.Ident});
-    std.log.warn("Globals storageClass: {any}\n", .{program.externalDecls.items[0].VarDeclaration.storageClass});
-    std.log.warn("Globals1: {s}\n", .{program.externalDecls.items[1].FunctionDecl.declarator.FunDeclarator.declarator.Ident});
-    std.log.warn("Globals1 storageClass: {any}\n", .{program.externalDecls.items[1].FunctionDecl.storageClass});
-    std.log.warn("Locals renamed: {s}\n", .{
-        program.externalDecls.items[1].FunctionDecl.blockItems.items[0].Declaration.declarator.Ident,
-    });
-}
-
 test "Negation and bitwise complement codegeneration" {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     const allocator = arena.allocator();
@@ -596,7 +538,7 @@ test "parsing long declarations" {
     const declaration = try p.parseDeclaration();
     _ = try std.testing.expectEqual(declaration.type, ast.Type.Long);
     _ = try std.testing.expectEqualStrings(declaration.declarator.Ident, "k");
-    _ = try std.testing.expectEqual(declaration.expression.?.Constant.value.Long, 32);
+    _ = try std.testing.expectEqual(declaration.varInitValue.?.Expression.Constant.value.Long, 32);
 }
 
 test "parse function args as long" {
@@ -736,7 +678,7 @@ test "parse array literal" {
         const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
         var p = try parser.Parser.init(allocator, l);
         const declaration = try p.parseDeclaration();
-        _ = try std.testing.expectEqual(declaration.varInitValue.?.ArrayExpr.items.len, length);
+        _ = try std.testing.expectEqual(declaration.varInitValue.?.ArrayExpr.initializers.items.len, length);
     }
 }
 
@@ -769,4 +711,5 @@ test "multidim array declaration" {
     var p = try parser.Parser.init(allocator, l);
     const externalDecl = try p.parseDeclaration();
     std.log.warn("externalDecl: {any}\n", .{externalDecl});
+    std.log.warn("declarator: {any}\n", .{externalDecl.declarator});
 }

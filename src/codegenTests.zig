@@ -18,11 +18,10 @@ test "testing assembly generation - unary" {
     const varResolver = try ast.VarResolver.init(allocator);
     try varResolver.resolve(program);
     const typechecker = try semantic.Typechecker.init(allocator);
-    const hasTypeErr = try typechecker.check(program);
-    if (hasTypeErr) |typeError| {
-        std.log.warn("\x1b[33mError\x1b[0m: {s}\n", .{typeError});
+    typechecker.check(program) catch {
+        std.log.warn("\x1b[33mError\x1b[0m: {s}", .{try typechecker.getErrString()});
         std.debug.assert(false);
-    }
+    };
     try ast.loopLabelPass(program, allocator);
     const tacRenderer = try ast.TACRenderer.init(allocator, typechecker.symbolTable);
     const tacProgram = try tacRenderer.render(program);
@@ -45,11 +44,10 @@ test "testing assembly generation - binary" {
     const varResolver = try ast.VarResolver.init(allocator);
     try varResolver.resolve(program);
     const typechecker = try semantic.Typechecker.init(allocator);
-    const hasTypeErr = try typechecker.check(program);
-    if (hasTypeErr) |typeError| {
-        std.log.warn("\x1b[33mError\x1b[0m: {s}\n", .{typeError});
+    typechecker.check(program) catch {
+        std.log.warn("\x1b[33mError\x1b[0m: {s}", .{try typechecker.getErrString()});
         std.debug.assert(false);
-    }
+    };
     try ast.loopLabelPass(program, allocator);
     const tacRenderer = try ast.TACRenderer.init(allocator, typechecker.symbolTable);
     const tacProgram = try tacRenderer.render(program);
@@ -73,11 +71,10 @@ test "testing assembly generation - >= and <=" {
     const varResolver = try ast.VarResolver.init(allocator);
     try varResolver.resolve(program);
     const typechecker = try semantic.Typechecker.init(allocator);
-    const hasTypeErr = try typechecker.check(program);
-    if (hasTypeErr) |typeError| {
-        std.log.warn("\x1b[33mError\x1b[0m: {s}\n", .{typeError});
+    typechecker.check(program) catch {
+        std.log.warn("\x1b[33mError\x1b[0m: {s} ", .{try typechecker.getErrString()});
         std.debug.assert(false);
-    }
+    };
     try ast.loopLabelPass(program, allocator);
     const tacRenderer = try ast.TACRenderer.init(allocator, typechecker.symbolTable);
     const tacProgram = try tacRenderer.render(program);
@@ -101,11 +98,10 @@ test "testing assembly generation - short circuiting with logical AND and OR" {
     const varResolver = try ast.VarResolver.init(allocator);
     try varResolver.resolve(program);
     const typechecker = try semantic.Typechecker.init(allocator);
-    const hasTypeErr = try typechecker.check(program);
-    if (hasTypeErr) |typeError| {
-        std.log.warn("\x1b[33mError\x1b[0m: {s}\n", .{typeError});
+    typechecker.check(program) catch {
+        std.log.warn("\x1b[33mError\x1b[0m: {s} ", .{try typechecker.getErrString()});
         std.debug.assert(false);
-    }
+    };
     try ast.loopLabelPass(program, allocator);
     const tacRenderer = try ast.TACRenderer.init(allocator, typechecker.symbolTable);
     const tacProgram = try tacRenderer.render(program);
@@ -128,11 +124,10 @@ test "testing assembly generation - declarations" {
     const varResolver = try ast.VarResolver.init(allocator);
     try varResolver.resolve(program);
     const typechecker = try semantic.Typechecker.init(allocator);
-    const hasTypeErr = try typechecker.check(program);
-    if (hasTypeErr) |typeError| {
-        std.log.warn("\x1b[33mError\x1b[0m: {s}\n", .{typeError});
+    typechecker.check(program) catch {
+        std.log.warn("\x1b[33mError\x1b[0m: {s} ", .{try typechecker.getErrString()});
         std.debug.assert(false);
-    }
+    };
     try ast.loopLabelPass(program, allocator);
     const tacRenderer = try ast.TACRenderer.init(allocator, typechecker.symbolTable);
     const tacProgram = try tacRenderer.render(program);
@@ -165,11 +160,10 @@ test "tac generation - if" {
     const varResolver = try ast.VarResolver.init(allocator);
     try varResolver.resolve(program);
     const typechecker = try semantic.Typechecker.init(allocator);
-    const hasTypeErr = try typechecker.check(program);
-    if (hasTypeErr) |typeError| {
-        std.log.warn("\x1b[31mError\x1b[0m: {s}\n", .{typeError});
+    typechecker.check(program) catch {
+        std.log.warn("\x1b[33mError\x1b[0m: {s} ", .{try typechecker.getErrString()});
         std.debug.assert(false);
-    }
+    };
     try ast.loopLabelPass(program, allocator);
     const tacRenderer = try ast.TACRenderer.init(allocator, typechecker.symbolTable);
     const tacProgram = try tacRenderer.render(program);
@@ -192,11 +186,10 @@ test "tac generation - if nested" {
     const varResolver = try ast.VarResolver.init(allocator);
     try varResolver.resolve(program);
     const typechecker = try semantic.Typechecker.init(allocator);
-    const hasTypeErr = try typechecker.check(program);
-    if (hasTypeErr) |typeError| {
-        std.log.warn("\x1b[33mError\x1b[0m: {s}\n", .{typeError});
+    typechecker.check(program) catch {
+        std.log.warn("\x1b[33mError\x1b[0m: {s} ", .{try typechecker.getErrString()});
         std.debug.assert(false);
-    }
+    };
     try ast.loopLabelPass(program, allocator);
     const tacRenderer = try ast.TACRenderer.init(allocator, typechecker.symbolTable);
     const tacProgram = try tacRenderer.render(program);
@@ -219,11 +212,10 @@ test "assembly generation with ternary" {
     const varResolver = try ast.VarResolver.init(allocator);
     try varResolver.resolve(program);
     const typechecker = try semantic.Typechecker.init(allocator);
-    const hasTypeErr = try typechecker.check(program);
-    if (hasTypeErr) |typeError| {
-        std.log.warn("\x1b[33mError\x1b[0m: {s}\n", .{typeError});
+    typechecker.check(program) catch {
+        std.log.warn("\x1b[33mError\x1b[0m: {s} ", .{try typechecker.getErrString()});
         std.debug.assert(false);
-    }
+    };
     try ast.loopLabelPass(program, allocator);
     const tacRenderer = try ast.TACRenderer.init(allocator, typechecker.symbolTable);
     const tacProgram = try tacRenderer.render(program);
@@ -246,11 +238,10 @@ test "assembly generation with nested ternary" {
     const varResolver = try ast.VarResolver.init(allocator);
     try varResolver.resolve(program);
     const typechecker = try semantic.Typechecker.init(allocator);
-    const hasTypeErr = try typechecker.check(program);
-    if (hasTypeErr) |typeError| {
-        std.log.warn("\x1b[33mError\x1b[0m: {s}\n", .{typeError});
+    typechecker.check(program) catch {
+        std.log.warn("\x1b[33mError\x1b[0m: {s} ", .{try typechecker.getErrString()});
         std.debug.assert(false);
-    }
+    };
     try ast.loopLabelPass(program, allocator);
     const tacRenderer = try ast.TACRenderer.init(allocator, typechecker.symbolTable);
     const tacProgram = try tacRenderer.render(program);
@@ -273,11 +264,10 @@ test "assembly generation with labelled statements and goto" {
     const varResolver = try ast.VarResolver.init(allocator);
     try varResolver.resolve(program);
     const typechecker = try semantic.Typechecker.init(allocator);
-    const hasTypeErr = try typechecker.check(program);
-    if (hasTypeErr) |typeError| {
-        std.log.warn("\x1b[33mError\x1b[0m: {s}\n", .{typeError});
+    typechecker.check(program) catch {
+        std.log.warn("\x1b[33mError\x1b[0m: {s} ", .{try typechecker.getErrString()});
         std.debug.assert(false);
-    }
+    };
     try ast.loopLabelPass(program, allocator);
     const tacRenderer = try ast.TACRenderer.init(allocator, typechecker.symbolTable);
     const tacProgram = try tacRenderer.render(program);
@@ -300,11 +290,10 @@ test "testing assembly generation with compound statement parsing" {
     const varResolver = try ast.VarResolver.init(allocator);
     try varResolver.resolve(program);
     const typechecker = try semantic.Typechecker.init(allocator);
-    const hasTypeErr = try typechecker.check(program);
-    if (hasTypeErr) |typeError| {
-        std.log.warn("\x1b[33mError\x1b[0m: {s}\n", .{typeError});
+    typechecker.check(program) catch {
+        std.log.warn("\x1b[33mError\x1b[0m: {s} ", .{try typechecker.getErrString()});
         std.debug.assert(false);
-    }
+    };
     const tacRenderer = try ast.TACRenderer.init(allocator, typechecker.symbolTable);
     const tacProgram = try tacRenderer.render(program);
     const asmRenderer = try tac.AsmRenderer.init(allocator, tacRenderer.asmSymbolTable);
@@ -333,11 +322,10 @@ test "testing assembly generation with do and while loop" {
     const varResolver = try ast.VarResolver.init(allocator);
     try varResolver.resolve(program);
     const typechecker = try semantic.Typechecker.init(allocator);
-    const hasTypeErr = try typechecker.check(program);
-    if (hasTypeErr) |typeError| {
-        std.log.warn("\x1b[33mError\x1b[0m: {s}\n", .{typeError});
+    typechecker.check(program) catch {
+        std.log.warn("\x1b[33mError\x1b[0m: {s} ", .{try typechecker.getErrString()});
         std.debug.assert(false);
-    }
+    };
     try ast.loopLabelPass(program, allocator);
     const tacRenderer = try ast.TACRenderer.init(allocator, typechecker.symbolTable);
     const tacProgram = try tacRenderer.render(program);
@@ -382,11 +370,10 @@ test "testing assembly generation loop with breaks and continue" {
     //    program.externalDecls.items[0].FunctionDecl.blockItems.items[1].Statement.While.body.Compound.items[1].Statement.Expression.Assignment.rhs.Binary.rhs,
     //});
     const typechecker = try semantic.Typechecker.init(allocator);
-    const hasTypeErr = try typechecker.check(program);
-    if (hasTypeErr) |typeError| {
-        std.log.warn("\x1b[33mError\x1b[0m: {s}\n", .{typeError});
+    typechecker.check(program) catch {
+        std.log.warn("\x1b[33mError\x1b[0m: {s} ", .{try typechecker.getErrString()});
         std.debug.assert(false);
-    }
+    };
     try ast.loopLabelPass(program, allocator);
     const tacRenderer = try ast.TACRenderer.init(allocator, typechecker.symbolTable);
     const tacProgram = try tacRenderer.render(program);
@@ -423,11 +410,10 @@ test "nested while and do while loops with continue" {
     const varResolver = try ast.VarResolver.init(allocator);
     try varResolver.resolve(program);
     const typechecker = try semantic.Typechecker.init(allocator);
-    const hasTypeErr = try typechecker.check(program);
-    if (hasTypeErr) |typeError| {
-        std.log.warn("\x1b[33mError\x1b[0m: {s}\n", .{typeError});
+    typechecker.check(program) catch {
+        std.log.warn("\x1b[33mError\x1b[0m: {s} ", .{try typechecker.getErrString()});
         std.debug.assert(false);
-    }
+    };
     try ast.loopLabelPass(program, allocator);
     const tacRenderer = try ast.TACRenderer.init(allocator, typechecker.symbolTable);
     const tacProgram = try tacRenderer.render(program);
@@ -456,11 +442,10 @@ test "test assembly generation for for loops" {
     const varResolver = try ast.VarResolver.init(allocator);
     try varResolver.resolve(program);
     const typechecker = try semantic.Typechecker.init(allocator);
-    const hasTypeErr = try typechecker.check(program);
-    if (hasTypeErr) |typeError| {
-        std.log.warn("\x1b[33mError\x1b[0m: {s}\n", .{typeError});
+    typechecker.check(program) catch {
+        std.log.warn("\x1b[33mError\x1b[0m: {s} ", .{try typechecker.getErrString()});
         std.debug.assert(false);
-    }
+    };
     try ast.loopLabelPass(program, allocator);
     const tacRenderer = try ast.TACRenderer.init(allocator, typechecker.symbolTable);
     const tacProgram = try tacRenderer.render(program);
@@ -488,11 +473,10 @@ test "multiple functions and call" {
     const varResolver = try ast.VarResolver.init(allocator);
     try varResolver.resolve(program);
     const typechecker = try semantic.Typechecker.init(allocator);
-    const hasTypeErr = try typechecker.check(program);
-    if (hasTypeErr) |typeError| {
-        std.log.warn("\x1b[33mError\x1b[0m: {s}\n", .{typeError});
+    typechecker.check(program) catch {
+        std.log.warn("\x1b[33mError\x1b[0m: {s} ", .{try typechecker.getErrString()});
         std.debug.assert(false);
-    }
+    };
     try ast.loopLabelPass(program, allocator);
     const tacRenderer = try ast.TACRenderer.init(allocator, typechecker.symbolTable);
     const tacProgram = try tacRenderer.render(program);
@@ -530,11 +514,10 @@ test "global variable codegeneration" {
     const varResolver = try ast.VarResolver.init(allocator);
     try varResolver.resolve(program);
     const typechecker = try semantic.Typechecker.init(allocator);
-    const hasTypeErr = try typechecker.check(program);
-    if (hasTypeErr) |typeError| {
-        std.log.warn("\x1b[33mError\x1b[0m: {s}\n", .{typeError});
+    typechecker.check(program) catch {
+        std.log.warn("\x1b[33mError\x1b[0m: {s} ", .{try typechecker.getErrString()});
         std.debug.assert(false);
-    }
+    };
     try ast.loopLabelPass(program, allocator);
     const tacRenderer = try ast.TACRenderer.init(allocator, typechecker.symbolTable);
     const tacProgram = try tacRenderer.render(program);
@@ -563,11 +546,10 @@ test "global variable codegenaration with multiple funcs" {
     const varResolver = try ast.VarResolver.init(allocator);
     try varResolver.resolve(program);
     const typechecker = try semantic.Typechecker.init(allocator);
-    const hasTypeErr = try typechecker.check(program);
-    if (hasTypeErr) |typeError| {
-        std.log.warn("\x1b[33mError\x1b[0m: {s}\n", .{typeError});
+    typechecker.check(program) catch {
+        std.log.warn("\x1b[33mError\x1b[0m: {s} ", .{try typechecker.getErrString()});
         std.debug.assert(false);
-    }
+    };
     try ast.loopLabelPass(program, allocator);
     const tacRenderer = try ast.TACRenderer.init(allocator, typechecker.symbolTable);
     const tacProgram = try tacRenderer.render(program);
@@ -597,11 +579,10 @@ test "casting program" {
     const varResolver = try ast.VarResolver.init(allocator);
     try varResolver.resolve(program);
     const typechecker = try semantic.Typechecker.init(allocator);
-    const hasTypeErr = try typechecker.check(program);
-    if (hasTypeErr) |typeError| {
-        std.log.warn("\x1b[33mError\x1b[0m: {s}\n", .{typeError});
+    typechecker.check(program) catch {
+        std.log.warn("\x1b[33mError\x1b[0m: {s} ", .{try typechecker.getErrString()});
         std.debug.assert(false);
-    }
+    };
     try ast.loopLabelPass(program, allocator);
     const tacRenderer = try ast.TACRenderer.init(allocator, typechecker.symbolTable);
     const tacProgram = try tacRenderer.render(program);
@@ -631,11 +612,10 @@ test "casting with div" {
     const varResolver = try ast.VarResolver.init(allocator);
     try varResolver.resolve(program);
     const typechecker = try semantic.Typechecker.init(allocator);
-    const hasTypeErr = try typechecker.check(program);
-    if (hasTypeErr) |typeError| {
-        std.log.warn("\x1b[33mError\x1b[0m: {s}\n", .{typeError});
+    typechecker.check(program) catch {
+        std.log.warn("\x1b[33mError\x1b[0m: {s} ", .{try typechecker.getErrString()});
         std.debug.assert(false);
-    }
+    };
     try ast.loopLabelPass(program, allocator);
     const tacRenderer = try ast.TACRenderer.init(allocator, typechecker.symbolTable);
     const tacProgram = try tacRenderer.render(program);
@@ -664,11 +644,10 @@ test "truncation" {
     const varResolver = try ast.VarResolver.init(allocator);
     try varResolver.resolve(program);
     const typechecker = try semantic.Typechecker.init(allocator);
-    const hasTypeErr = try typechecker.check(program);
-    if (hasTypeErr) |typeError| {
-        std.log.warn("\x1b[33mError\x1b[0m: {s}\n", .{typeError});
+    typechecker.check(program) catch {
+        std.log.warn("\x1b[33mError\x1b[0m: {s} ", .{try typechecker.getErrString()});
         std.debug.assert(false);
-    }
+    };
     try ast.loopLabelPass(program, allocator);
     const tacRenderer = try ast.TACRenderer.init(allocator, typechecker.symbolTable);
     const tacProgram = try tacRenderer.render(program);
@@ -758,11 +737,10 @@ test "big test for casting" {
     const varResolver = try ast.VarResolver.init(allocator);
     try varResolver.resolve(program);
     const typechecker = try semantic.Typechecker.init(allocator);
-    const hasTypeErr = try typechecker.check(program);
-    if (hasTypeErr) |typeError| {
-        std.log.warn("\x1b[33mError\x1b[0m: {s}\n", .{typeError});
+    typechecker.check(program) catch {
+        std.log.warn("\x1b[33mError\x1b[0m: {s} ", .{try typechecker.getErrString()});
         std.debug.assert(false);
-    }
+    };
     try ast.loopLabelPass(program, allocator);
     const tacRenderer = try ast.TACRenderer.init(allocator, typechecker.symbolTable);
     const tacProgram = try tacRenderer.render(program);
@@ -797,11 +775,10 @@ test "basic unsigned numbers" {
     const varResolver = try ast.VarResolver.init(allocator);
     try varResolver.resolve(program);
     const typechecker = try semantic.Typechecker.init(allocator);
-    const hasTypeErr = try typechecker.check(program);
-    if (hasTypeErr) |typeError| {
-        std.log.warn("\x1b[33mError\x1b[0m: {s}\n", .{typeError});
+    typechecker.check(program) catch {
+        std.log.warn("\x1b[33mError\x1b[0m: {s} ", .{try typechecker.getErrString()});
         std.debug.assert(false);
-    }
+    };
     try ast.loopLabelPass(program, allocator);
     const tacRenderer = try ast.TACRenderer.init(allocator, typechecker.symbolTable);
     const tacProgram = try tacRenderer.render(program);
@@ -844,11 +821,10 @@ test "test unsigned divide" {
     const varResolver = try ast.VarResolver.init(allocator);
     try varResolver.resolve(program);
     const typechecker = try semantic.Typechecker.init(allocator);
-    const hasTypeErr = try typechecker.check(program);
-    if (hasTypeErr) |typeError| {
-        std.log.warn("\x1b[33mError\x1b[0m: {s}\n", .{typeError});
+    typechecker.check(program) catch {
+        std.log.warn("\x1b[33mError\x1b[0m: {s} ", .{try typechecker.getErrString()});
         std.debug.assert(false);
-    }
+    };
     try ast.loopLabelPass(program, allocator);
     const tacRenderer = try ast.TACRenderer.init(allocator, typechecker.symbolTable);
     const tacProgram = try tacRenderer.render(program);
@@ -883,11 +859,10 @@ test "unsigned compare" {
     const varResolver = try ast.VarResolver.init(allocator);
     try varResolver.resolve(program);
     const typechecker = try semantic.Typechecker.init(allocator);
-    const hasTypeErr = try typechecker.check(program);
-    if (hasTypeErr) |typeError| {
-        std.log.warn("\x1b[33mError\x1b[0m: {s}\n", .{typeError});
+    typechecker.check(program) catch {
+        std.log.warn("\x1b[33mError\x1b[0m: {s} ", .{try typechecker.getErrString()});
         std.debug.assert(false);
-    }
+    };
     try ast.loopLabelPass(program, allocator);
     const tacRenderer = try ast.TACRenderer.init(allocator, typechecker.symbolTable);
     const tacProgram = try tacRenderer.render(program);
@@ -949,11 +924,10 @@ test "big test for unsigned" {
     const varResolver = try ast.VarResolver.init(allocator);
     try varResolver.resolve(program);
     const typechecker = try semantic.Typechecker.init(allocator);
-    const hasTypeErr = try typechecker.check(program);
-    if (hasTypeErr) |typeError| {
-        std.log.warn("\x1b[33mError\x1b[0m: {s}\n", .{typeError});
+    typechecker.check(program) catch {
+        std.log.warn("\x1b[33mError\x1b[0m: {s} ", .{try typechecker.getErrString()});
         std.debug.assert(false);
-    }
+    };
     try ast.loopLabelPass(program, allocator);
     const tacRenderer = try ast.TACRenderer.init(allocator, typechecker.symbolTable);
     const tacProgram = try tacRenderer.render(program);
@@ -980,11 +954,10 @@ test "float to int" {
     const varResolver = try ast.VarResolver.init(allocator);
     try varResolver.resolve(program);
     const typechecker = try semantic.Typechecker.init(allocator);
-    const hasTypeErr = try typechecker.check(program);
-    if (hasTypeErr) |typeError| {
-        std.log.warn("\x1b[33mError\x1b[0m: {s}\n", .{typeError});
+    typechecker.check(program) catch {
+        std.log.warn("\x1b[33mError\x1b[0m: {s} ", .{try typechecker.getErrString()});
         std.debug.assert(false);
-    }
+    };
     try ast.loopLabelPass(program, allocator);
     const tacRenderer = try ast.TACRenderer.init(allocator, typechecker.symbolTable);
     const tacProgram = try tacRenderer.render(program);
@@ -1012,11 +985,10 @@ test "float arithmetic" {
     const varResolver = try ast.VarResolver.init(allocator);
     try varResolver.resolve(program);
     const typechecker = try semantic.Typechecker.init(allocator);
-    const hasTypeErr = try typechecker.check(program);
-    if (hasTypeErr) |typeError| {
-        std.log.warn("\x1b[33mError\x1b[0m: {s}\n", .{typeError});
+    typechecker.check(program) catch {
+        std.log.warn("\x1b[33mError\x1b[0m: {s} ", .{try typechecker.getErrString()});
         std.debug.assert(false);
-    }
+    };
     try ast.loopLabelPass(program, allocator);
     const tacRenderer = try ast.TACRenderer.init(allocator, typechecker.symbolTable);
     const tacProgram = try tacRenderer.render(program);
@@ -1047,11 +1019,10 @@ test "int to float" {
     const varResolver = try ast.VarResolver.init(allocator);
     try varResolver.resolve(program);
     const typechecker = try semantic.Typechecker.init(allocator);
-    const hasTypeErr = try typechecker.check(program);
-    if (hasTypeErr) |typeError| {
-        std.log.warn("\x1b[33mError\x1b[0m: {s}\n", .{typeError});
+    typechecker.check(program) catch {
+        std.log.warn("\x1b[33mError\x1b[0m: {s} ", .{try typechecker.getErrString()});
         std.debug.assert(false);
-    }
+    };
     try ast.loopLabelPass(program, allocator);
     const tacRenderer = try ast.TACRenderer.init(allocator, typechecker.symbolTable);
     const tacProgram = try tacRenderer.render(program);
@@ -1083,11 +1054,10 @@ test "basic float" {
     const varResolver = try ast.VarResolver.init(allocator);
     try varResolver.resolve(program);
     const typechecker = try semantic.Typechecker.init(allocator);
-    const hasTypeErr = try typechecker.check(program);
-    if (hasTypeErr) |typeError| {
-        std.log.warn("\x1b[33mError\x1b[0m: {s}\n", .{typeError});
+    typechecker.check(program) catch {
+        std.log.warn("\x1b[33mError\x1b[0m: {s} ", .{try typechecker.getErrString()});
         std.debug.assert(false);
-    }
+    };
     try ast.loopLabelPass(program, allocator);
     const tacRenderer = try ast.TACRenderer.init(allocator, typechecker.symbolTable);
     const tacProgram = try tacRenderer.render(program);
@@ -1117,11 +1087,10 @@ test "float comparision" {
     const varResolver = try ast.VarResolver.init(allocator);
     try varResolver.resolve(program);
     const typechecker = try semantic.Typechecker.init(allocator);
-    const hasTypeErr = try typechecker.check(program);
-    if (hasTypeErr) |typeError| {
-        std.log.warn("\x1b[33mError\x1b[0m: {s}\n", .{typeError});
+    typechecker.check(program) catch {
+        std.log.warn("\x1b[33mError\x1b[0m: {s} ", .{try typechecker.getErrString()});
         std.debug.assert(false);
-    }
+    };
     try ast.loopLabelPass(program, allocator);
     const tacRenderer = try ast.TACRenderer.init(allocator, typechecker.symbolTable);
     const tacProgram = try tacRenderer.render(program);
@@ -1152,11 +1121,10 @@ test "float to uint conversion" {
     const varResolver = try ast.VarResolver.init(allocator);
     try varResolver.resolve(program);
     const typechecker = try semantic.Typechecker.init(allocator);
-    const hasTypeErr = try typechecker.check(program);
-    if (hasTypeErr) |typeError| {
-        std.log.warn("\x1b[33mError\x1b[0m: {s}\n", .{typeError});
+    typechecker.check(program) catch {
+        std.log.warn("\x1b[33mError\x1b[0m: {s} ", .{try typechecker.getErrString()});
         std.debug.assert(false);
-    }
+    };
     try ast.loopLabelPass(program, allocator);
     const tacRenderer = try ast.TACRenderer.init(allocator, typechecker.symbolTable);
     const tacProgram = try tacRenderer.render(program);
@@ -1188,11 +1156,10 @@ test "calling external library" {
     const varResolver = try ast.VarResolver.init(allocator);
     try varResolver.resolve(program);
     const typechecker = try semantic.Typechecker.init(allocator);
-    const hasTypeErr = try typechecker.check(program);
-    if (hasTypeErr) |typeError| {
-        std.log.warn("\x1b[33mError\x1b[0m: {s}\n", .{typeError});
+    typechecker.check(program) catch {
+        std.log.warn("\x1b[33mError\x1b[0m: {s} ", .{try typechecker.getErrString()});
         std.debug.assert(false);
-    }
+    };
     try ast.loopLabelPass(program, allocator);
     const tacRenderer = try ast.TACRenderer.init(allocator, typechecker.symbolTable);
     const tacProgram = try tacRenderer.render(program);
@@ -1281,11 +1248,10 @@ test "comparision big for floats" {
     const varResolver = try ast.VarResolver.init(allocator);
     try varResolver.resolve(program);
     const typechecker = try semantic.Typechecker.init(allocator);
-    const hasTypeErr = try typechecker.check(program);
-    if (hasTypeErr) |typeError| {
-        std.log.warn("\x1b[33mError\x1b[0m: {s}\n", .{typeError});
+    typechecker.check(program) catch {
+        std.log.warn("\x1b[33mError\x1b[0m: {s} ", .{try typechecker.getErrString()});
         std.debug.assert(false);
-    }
+    };
     try ast.loopLabelPass(program, allocator);
     const tacRenderer = try ast.TACRenderer.init(allocator, typechecker.symbolTable);
     const tacProgram = try tacRenderer.render(program);
@@ -1373,11 +1339,10 @@ test "big test for float arith" {
     const varResolver = try ast.VarResolver.init(allocator);
     try varResolver.resolve(program);
     const typechecker = try semantic.Typechecker.init(allocator);
-    const hasTypeErr = try typechecker.check(program);
-    if (hasTypeErr) |typeError| {
-        std.log.warn("\x1b[33mError\x1b[0m: {s}\n", .{typeError});
+    typechecker.check(program) catch {
+        std.log.warn("\x1b[33mError\x1b[0m: {s} ", .{try typechecker.getErrString()});
         std.debug.assert(false);
-    }
+    };
     try ast.loopLabelPass(program, allocator);
     const tacRenderer = try ast.TACRenderer.init(allocator, typechecker.symbolTable);
     const tacProgram = try tacRenderer.render(program);
@@ -1407,11 +1372,10 @@ test "function and integer args, float to uint" {
     const varResolver = try ast.VarResolver.init(allocator);
     try varResolver.resolve(program);
     const typechecker = try semantic.Typechecker.init(allocator);
-    const hasTypeErr = try typechecker.check(program);
-    if (hasTypeErr) |typeError| {
-        std.log.warn("\x1b[33mError\x1b[0m: {s}\n", .{typeError});
+    typechecker.check(program) catch {
+        std.log.warn("\x1b[33mError\x1b[0m: {s} ", .{try typechecker.getErrString()});
         std.debug.assert(false);
-    }
+    };
     try ast.loopLabelPass(program, allocator);
     const tacRenderer = try ast.TACRenderer.init(allocator, typechecker.symbolTable);
     const tacProgram = try tacRenderer.render(program);
@@ -1444,11 +1408,10 @@ test "conversion from float to long" {
     const varResolver = try ast.VarResolver.init(allocator);
     try varResolver.resolve(program);
     const typechecker = try semantic.Typechecker.init(allocator);
-    const hasTypeErr = try typechecker.check(program);
-    if (hasTypeErr) |typeError| {
-        std.log.warn("\x1b[33mError\x1b[0m: {s}\n", .{typeError});
+    typechecker.check(program) catch {
+        std.log.warn("\x1b[33mError\x1b[0m: {s} ", .{try typechecker.getErrString()});
         std.debug.assert(false);
-    }
+    };
     try ast.loopLabelPass(program, allocator);
     const tacRenderer = try ast.TACRenderer.init(allocator, typechecker.symbolTable);
     const tacProgram = try tacRenderer.render(program);
@@ -1490,11 +1453,10 @@ test "conversion from uint to double" {
     const varResolver = try ast.VarResolver.init(allocator);
     try varResolver.resolve(program);
     const typechecker = try semantic.Typechecker.init(allocator);
-    const hasTypeErr = try typechecker.check(program);
-    if (hasTypeErr) |typeError| {
-        std.log.warn("\x1b[33mError\x1b[0m: {s}\n", .{typeError});
+    typechecker.check(program) catch {
+        std.log.warn("\x1b[33mError\x1b[0m: {s} ", .{try typechecker.getErrString()});
         std.debug.assert(false);
-    }
+    };
     try ast.loopLabelPass(program, allocator);
     const tacRenderer = try ast.TACRenderer.init(allocator, typechecker.symbolTable);
     const tacProgram = try tacRenderer.render(program);
@@ -1525,11 +1487,10 @@ test "tac generation for pointers and deref" {
     const varResolver = try ast.VarResolver.init(allocator);
     try varResolver.resolve(program);
     const typechecker = try semantic.Typechecker.init(allocator);
-    const hasTypeErr = try typechecker.check(program);
-    if (hasTypeErr) |typeError| {
-        std.log.warn("\x1b[33mError\x1b[0m: {s}\n", .{typeError});
+    typechecker.check(program) catch {
+        std.log.warn("\x1b[33mError\x1b[0m: {s} ", .{try typechecker.getErrString()});
         std.debug.assert(false);
-    }
+    };
     try ast.loopLabelPass(program, allocator);
     const tacRenderer = try ast.TACRenderer.init(allocator, typechecker.symbolTable);
     const tacProgram = try tacRenderer.render(program);
@@ -1565,11 +1526,10 @@ test "more pointers" {
     const varResolver = try ast.VarResolver.init(allocator);
     try varResolver.resolve(program);
     const typechecker = try semantic.Typechecker.init(allocator);
-    const hasTypeErr = try typechecker.check(program);
-    if (hasTypeErr) |typeError| {
-        std.log.warn("\x1b[33mError\x1b[0m: {s}\n", .{typeError});
+    typechecker.check(program) catch {
+        std.log.warn("\x1b[33mError\x1b[0m: {s} ", .{try typechecker.getErrString()});
         std.debug.assert(false);
-    }
+    };
     try ast.loopLabelPass(program, allocator);
     const tacRenderer = try ast.TACRenderer.init(allocator, typechecker.symbolTable);
     const tacProgram = try tacRenderer.render(program);
@@ -1608,11 +1568,10 @@ test "static pointers" {
     const varResolver = try ast.VarResolver.init(allocator);
     try varResolver.resolve(program);
     const typechecker = try semantic.Typechecker.init(allocator);
-    const hasTypeErr = try typechecker.check(program);
-    if (hasTypeErr) |typeError| {
-        std.log.warn("\x1b[33mError\x1b[0m: {s}\n", .{typeError});
+    typechecker.check(program) catch {
+        std.log.warn("\x1b[33mError\x1b[0m: {s} ", .{try typechecker.getErrString()});
         std.debug.assert(false);
-    }
+    };
     try ast.loopLabelPass(program, allocator);
     const tacRenderer = try ast.TACRenderer.init(allocator, typechecker.symbolTable);
     const tacProgram = try tacRenderer.render(program);
@@ -1680,11 +1639,10 @@ test "pointers long case" {
     const varResolver = try ast.VarResolver.init(allocator);
     try varResolver.resolve(program);
     const typechecker = try semantic.Typechecker.init(allocator);
-    const hasTypeErr = try typechecker.check(program);
-    if (hasTypeErr) |typeError| {
-        std.log.warn("\x1b[33mError\x1b[0m: {s}\n", .{typeError});
+    typechecker.check(program) catch {
+        std.log.warn("\x1b[33mError\x1b[0m: {s} ", .{try typechecker.getErrString()});
         std.debug.assert(false);
-    }
+    };
     try ast.loopLabelPass(program, allocator);
     const tacRenderer = try ast.TACRenderer.init(allocator, typechecker.symbolTable);
     const tacProgram = try tacRenderer.render(program);
@@ -1740,11 +1698,10 @@ test "compound interest" {
     const varResolver = try ast.VarResolver.init(allocator);
     try varResolver.resolve(program);
     const typechecker = try semantic.Typechecker.init(allocator);
-    const hasTypeErr = try typechecker.check(program);
-    if (hasTypeErr) |typeError| {
-        std.log.warn("\x1b[33mError\x1b[0m: {s}\n", .{typeError});
+    typechecker.check(program) catch {
+        std.log.warn("\x1b[33mError\x1b[0m: {s} ", .{try typechecker.getErrString()});
         std.debug.assert(false);
-    }
+    };
     try ast.loopLabelPass(program, allocator);
     const tacRenderer = try ast.TACRenderer.init(allocator, typechecker.symbolTable);
     const tacProgram = try tacRenderer.render(program);
@@ -1797,11 +1754,10 @@ test "taylor series calc e^x" {
     const varResolver = try ast.VarResolver.init(allocator);
     try varResolver.resolve(program);
     const typechecker = try semantic.Typechecker.init(allocator);
-    const hasTypeErr = try typechecker.check(program);
-    if (hasTypeErr) |typeError| {
-        std.log.warn("\x1b[33mError\x1b[0m: {s}\n", .{typeError});
+    typechecker.check(program) catch {
+        std.log.warn("\x1b[33mError\x1b[0m: {s} ", .{try typechecker.getErrString()});
         std.debug.assert(false);
-    }
+    };
     try ast.loopLabelPass(program, allocator);
     const tacRenderer = try ast.TACRenderer.init(allocator, typechecker.symbolTable);
     const tacProgram = try tacRenderer.render(program);
@@ -1847,13 +1803,14 @@ test "gcd" {
     const program = try p.parseProgram();
     const varResolver = try ast.VarResolver.init(allocator);
     try varResolver.resolve(program);
+
     const typechecker = try semantic.Typechecker.init(allocator);
-    const hasTypeErr = try typechecker.check(program);
-    if (hasTypeErr) |typeError| {
-        std.log.warn("\x1b[33mError\x1b[0m: {s}\n", .{typeError});
+
+    typechecker.check(program) catch {
+        std.log.warn("\x1b[33mError\x1b[0m: {s}", .{try typechecker.getErrString()});
         std.debug.assert(false);
-    }
-    try ast.loopLabelPass(program, allocator);
+    };
+
     const tacRenderer = try ast.TACRenderer.init(allocator, typechecker.symbolTable);
     const tacProgram = try tacRenderer.render(program);
     for (tacProgram.topLevelDecls.items) |decl| {
@@ -1866,6 +1823,60 @@ test "gcd" {
     }
     const asmRenderer = try tac.AsmRenderer.init(allocator, tacRenderer.asmSymbolTable);
     const asmProgram = try asmRenderer.render(tacProgram);
+    try asmProgram.stringify(sFileWriter, allocator, tacRenderer.asmSymbolTable);
+    try cFileWriter.writeAll(programStr);
+}
+
+test "arrays - linear search" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    const cFileWriter = (try std.fs.cwd().createFile("./cFiles/C/linearsearch.c", .{})).writer();
+    const sFileWriter = (try std.fs.cwd().createFile("./cFiles/S/linearsearch.s", .{})).writer();
+    const programStr =
+        \\ int linearsearch(int *arr, int arrLen, int target) {
+        \\     int s = 0;
+        \\     int e = arrLen - 1;
+        \\
+        \\     while (s <= e) {
+        \\         int m = s + (e-s)/2;
+        \\         if (arr[m] == target) return m;
+        \\         if (arr[m] > target) e = m - 1;
+        \\         else s = m + 1;
+        \\     }
+        \\     return -1;
+        \\ }
+        \\ int main() {
+        \\     int arr[4] = {1,2,3,4};
+        \\     int rc = linearsearch(arr, 4, 3);
+        \\     return rc == 2 ? 0: -1;
+        \\ }
+    ;
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    const program = try p.parseProgram();
+    const varResolver = try ast.VarResolver.init(allocator);
+    try varResolver.resolve(program);
+    const typechecker = try semantic.Typechecker.init(allocator);
+    typechecker.check(program) catch {
+        std.log.warn("\x1b[33mError\x1b[0m: {s}\n", .{try typechecker.getErrString()});
+        std.debug.assert(false);
+    };
+    const tacRenderer = try ast.TACRenderer.init(allocator, typechecker.symbolTable);
+    const tacProgram = try tacRenderer.render(program);
+
+    for (tacProgram.topLevelDecls.items) |decl| {
+        if (std.meta.activeTag(decl.*) == .Function) {
+            std.debug.print("{s}:\n", .{decl.Function.name});
+            for (decl.Function.instructions.items) |inst| {
+                std.debug.print("\t{}\n", .{inst});
+            }
+        }
+    }
+
+    const asmRenderer = try tac.AsmRenderer.init(allocator, tacRenderer.asmSymbolTable);
+    const asmProgram = try asmRenderer.render(tacProgram);
+
     try asmProgram.stringify(sFileWriter, allocator, tacRenderer.asmSymbolTable);
     try cFileWriter.writeAll(programStr);
 }

@@ -137,18 +137,22 @@ pub const AsmRenderer = struct {
                     for (fnItem.args.items, 0..) |arg, i| {
                         const movInstructoin = try self.allocator.create(assembly.Instruction);
                         const resolvedArgSym = self.asmSymbolTable.get(arg).?;
-                        movInstructoin.* = assembly.Instruction{ .Mov = assembly.MovInst{
-                            .type = switch (resolvedArgSym.*) {
-                                .Obj => |obj| obj.type,
-                                else => unreachable,
+                        movInstructoin.* = assembly.Instruction{
+                            .Mov = assembly.MovInst{
+                                .type = switch (resolvedArgSym.*) {
+                                    .Obj => |obj| obj.type,
+                                    else => unreachable,
+                                },
+                                .src = switch (resolvedArgSym.Obj.type) {
+                                    .LongWord => .{ .Reg = registers32[i] },
+                                    .ByteArray, .QuadWord => .{ .Reg = registers64[i] },
+                                    .Float => .{ .Reg = registersFloat[i] },
+                                },
+                                .dest = assembly.Operand{
+                                    .Pseudo = arg,
+                                },
                             },
-                            .src = assembly.Operand{ .Reg = switch (resolvedArgSym.Obj.type) {
-                                .LongWord => registers32[i],
-                                .QuadWord => registers64[i],
-                                .Float => registersFloat[i],
-                            } },
-                            .dest = assembly.Operand{ .Pseudo = arg },
-                        } };
+                        };
                         try func.instructions.append(movInstructoin);
                     }
                     for (fnItem.instructions.items) |instruction| {
@@ -182,6 +186,8 @@ pub const InstructionType = enum {
     Return,
     Unary,
     Binary,
+    AddPtr,
+    CopyIntoOffset,
     Copy,
     Jump,
     JumpIfZero,
@@ -237,6 +243,21 @@ pub const Binary = struct {
     right: *Val,
     dest: *Val,
 };
+
+pub const AddPtr = struct {
+    dest: *Val,
+    src: *Val,
+    index: *Val,
+    scale: i64,
+};
+
+pub const CopyIntoOffset = struct {
+    src: *Val,
+    dest: []u8,
+    offset: i64,
+};
+
+pub fn tempVal() void {}
 
 fn tacOpToAssemblyOp(op: BinaryOp) assembly.BinaryOp {
     switch (op) {
@@ -336,6 +357,8 @@ pub const Instruction = union(InstructionType) {
     Return: Return,
     Unary: Unary,
     Binary: Binary,
+    AddPtr: AddPtr,
+    CopyIntoOffset: CopyIntoOffset,
     Copy: Copy,
     Jump: []u8,
     JumpIfZero: Jmp,
@@ -362,9 +385,9 @@ pub const Instruction = union(InstructionType) {
         _ = fmt;
         _ = options;
         switch (self) {
-            .Return => |ret| try writer.print("return {any}", .{ret.val.*}),
+            .Return => |ret| try writer.print("return {}", .{ret.val.*}),
 
-            .Unary => |unary| try writer.print("{any} = {any} {any}", .{
+            .Unary => |unary| try writer.print("{any} = {s}{any}", .{
                 unary.dest.*,
                 switch (unary.op) {
                     .NEGATE => "-",
@@ -393,6 +416,17 @@ pub const Instruction = union(InstructionType) {
                 },
                 binary.right.*,
             }),
+
+            .AddPtr => |addPtr| {
+                try writer.print("{any} = {any} + {any}*{d}", .{ addPtr.dest.*, addPtr.src.*, addPtr.index.*, addPtr.scale });
+            },
+            .CopyIntoOffset => |copyIntoOffset| {
+                try writer.print("{s}[{any}] = {any}", .{
+                    copyIntoOffset.dest,
+                    copyIntoOffset.offset,
+                    copyIntoOffset.src.*,
+                });
+            },
 
             .Copy => |cp| try writer.print("{any} = {any}", .{ cp.dest.*, cp.src.* }),
 
@@ -540,7 +574,7 @@ pub const Instruction = union(InstructionType) {
                     try assembly.createInst(.Mov, assembly.MovInst{
                         .type = .QuadWord,
                         .dest = .{ .Reg = .RDX },
-                        .src = .{ .Imm = 9223372036854775808 },
+                        .src = .{ .Imm = std.math.maxInt(i64) },
                     }, allocator),
                     try assembly.createInst(.Binary, assembly.BinaryInst{
                         .type = .QuadWord,
@@ -823,6 +857,66 @@ pub const Instruction = union(InstructionType) {
                     },
                 }
             },
+            .AddPtr => |addPtr| {
+                const src = try addPtr.src.codegen(symbolTable, allocator);
+                const dest = try addPtr.dest.codegen(symbolTable, allocator);
+                const index = try addPtr.index.codegen(symbolTable, allocator);
+                const indexType = addPtr.index.getAsmTypeFromSymTab(symbolTable).?;
+
+                const destType = addPtr.dest.getAsmTypeFromSymTab(symbolTable).?;
+                const r8 = try allocator.create(assembly.Operand);
+                r8.* = .{ .Reg = .R8_64 };
+                const r9 = try allocator.create(assembly.Operand);
+                r9.* = .{ .Reg = .R9_64 };
+
+                try instructions.appendSlice(&[_]*assembly.Instruction{ try assembly.createInst(.Mov, assembly.MovInst{
+                    .src = src,
+                    .dest = .{ .Reg = .R9_64 },
+                    .type = .QuadWord,
+                }, allocator), try assembly.createInst(.Mov, assembly.MovInst{
+                    .src = index,
+                    .dest = .{ .Reg = indexType.getR8Variety() },
+                    .type = indexType,
+                }, allocator), try assembly.createInst(.Lea, assembly.Lea{
+                    .src = .{ .Indexed = .{
+                        .base = .R9_64,
+                        .index = indexType.getR8Variety(),
+                        .scale = addPtr.scale,
+                    } },
+                    .dest = dest,
+                    .type = destType,
+                }, allocator) });
+            },
+            .CopyIntoOffset => |copyIntoOffset| {
+                const src = try copyIntoOffset.src.codegen(symbolTable, allocator);
+
+                std.log.warn("The destination is {s}\n", .{copyIntoOffset.dest});
+                const srcType = copyIntoOffset.src.getAsmTypeFromSymTab(symbolTable).?;
+                //const r8 = try allocator.create(assembly.Operand);
+                //r8.* = .{ .Reg = .R8_64 };
+                //const r9 = try allocator.create(assembly.Operand);
+                //r9.* = .{ .Reg = .R9_64 };
+                // INFO:
+                // 1. First move src to r8
+                // 2. Move the (dest, index, offset) to r9
+                // 3. Move r8 to &r9
+
+                std.log.warn("Copy into offset at index: {d}\n", .{copyIntoOffset.offset});
+                try instructions.append(
+                    try assembly.createInst(
+                        .Mov,
+                        assembly.MovInst{
+                            .src = src,
+                            .dest = .{ .PseudoMem = .{
+                                .name = copyIntoOffset.dest,
+                                .offset = copyIntoOffset.offset,
+                            } },
+                            .type = srcType,
+                        },
+                        allocator,
+                    ),
+                );
+            },
             .Copy => |cp| {
                 const src = try cp.src.codegen(symbolTable, allocator);
                 const dest = try cp.dest.codegen(symbolTable, allocator);
@@ -917,28 +1011,16 @@ pub const Instruction = union(InstructionType) {
                         std.log.warn("arg: {any}, assemblyArgType: {any}\n", .{ arg, assemblyArgType });
                         try instructions.append(try assembly.createInst(.Mov, assembly.MovInst{
                             .src = assemblyArg,
-                            .dest = assembly.Operand{ .Reg = switch (assemblyArgType) {
-                                .LongWord => registers32[i],
-                                .QuadWord => registers64[i],
+                            .dest = switch (assemblyArgType) {
+                                .LongWord => .{ .Reg = registers32[i] },
+                                .ByteArray, .QuadWord => .{ .Reg = registers64[i] },
                                 .Float => blk: {
                                     floatArgsCount += 1;
-                                    break :blk registersFloat[i];
+                                    break :blk .{ .Reg = registersFloat[i] };
                                 },
-                            } },
+                            },
                             .type = assemblyArgType,
                         }, allocator));
-                        std.log.warn("The unholy move: {any}", .{assembly.MovInst{
-                            .src = assemblyArg,
-                            .dest = assembly.Operand{ .Reg = switch (assemblyArgType) {
-                                .LongWord => registers32[i],
-                                .QuadWord => registers64[i],
-                                .Float => blk: {
-                                    floatArgsCount += 1;
-                                    break :blk registersFloat[i];
-                                },
-                            } },
-                            .type = assemblyArgType,
-                        }});
                     }
                     const asmDest = try fnCall.dest.codegen(symbolTable, allocator);
                     try instructions.append(try assembly.createInst(
@@ -1092,9 +1174,11 @@ pub const Val = union(ValType) {
                 .Integer, .UInt => assembly.AsmType.LongWord,
                 .Float => assembly.AsmType.Float,
             },
-            .Variable => |varName| if (symbolTable.get(varName)) |sym| sym.Obj.type else blk: {
-                std.log.warn("Not found: {s}\n", .{varName});
-                break :blk null;
+            .Variable => |varName| {
+                return if (symbolTable.get(varName)) |sym| sym.Obj.type else blk: {
+                    std.log.warn("Not found: {s}\n", .{varName});
+                    break :blk null;
+                };
             },
         };
     }
@@ -1122,7 +1206,9 @@ pub const Val = union(ValType) {
                                 operand.* = .{ .Data = variable };
                                 break :ifblk operand.*;
                             } else elseblk: {
-                                operand.* = .{ .Pseudo = variable };
+                                operand.* = .{
+                                    .Pseudo = variable,
+                                };
                                 break :elseblk operand.*;
                             });
                         },

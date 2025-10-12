@@ -80,7 +80,6 @@ Return(Unary(Negate,
 > [!IMPORTANT]
 > The todo has been moved to `TODO.md`
 
-
 ### Can we support garbage collection?
 
 - A two fold approach
@@ -311,7 +310,6 @@ int main(){
 
 - writing a pass to replace all longs in the AST with a temp variable,
 
-
 - To fix:
   - [x] Lexing doubles of the form `.\[0-9]*`
   - [x] Lexing doubles of the form `[0-9]*e[0-9]*`
@@ -319,78 +317,94 @@ int main(){
   - [x] UIntToFloat
   - [x] Test case with floats and integer arguments
 
-### Handling pointers 
+### Handling pointers
 
 #### Parser
 
-* Handling precedence
-* `int var;`
-* `int *var;` => can be written as `int *(var);`
-* `int **var;` => can be written as `int *(*(var))`
-* Pointer to Function declarators:
-  * `int (*foo)(int,int)`
-* Arrays:
-  * `int arr[3]`
-  * `int *arr[3]` => `int * (arr[3]);`
-  * The last is different from `int (*arr)[3];`
-  * `[]` has higher precedence compared to `*`
-*
-
+- Handling precedence
+- `int var;`
+- `int *var;` => can be written as `int *(var);`
+- `int **var;` => can be written as `int *(*(var))`
+- Pointer to Function declarators:
+  - `int (*foo)(int,int)`
+- Arrays:
+  - `int arr[3]`
+  - `int *arr[3]` => `int * (arr[3]);`
+  - The last is different from `int (*arr)[3];`
+  - `[]` has higher precedence compared to `*`
+-
 
 #### Semantic passes
 
 #### TAC generation
 
-
 #### Assembly generation
 
-
 ## Declarators messing up the parsing
+
 - Patched the AST Nodes to fix this
 - Added helper methods to unbox the function and identifier declarator
 - Currently functions and variable declarations are assigned types while
-parsing, declarators mess this up and hence all types should be resolved at the
-typechecking stage.
+  parsing, declarators mess this up and hence all types should be resolved at the
+  typechecking stage.
 - Or the types can be kept as tentative and during the typechecking stage can be
   rewritten to the actual type
+
 * Eventually would have to implement function pointers: and that will make me
-want to shoot myself, cause that would involve a good chunk of rewriting parser,
-AST and the semanalyzer.
+  want to shoot myself, cause that would involve a good chunk of rewriting parser,
+  AST and the semanalyzer.
 
-- During typechecking: 
+- During typechecking:
+
 * All functions and variable declaration types are resolved from their
-declarators.
+  declarators.
 * For var declaration:
-    * if an expression is found 
-    * if the declaration type is different from the expression type, a type
+  - if an expression is found
+  - if the declaration type is different from the expression type, a type
     interchange is discovered:
-        * Cast Instruction
-        * For global pointer declarations: check if what's inside is null, else
-          throw
-
+    _ Cast Instruction
+    _ For global pointer declarations: check if what's inside is null, else
+    throw
 
 ## TAC for address of:
-* These pointers need to be lvalue converted.
-* `*k = 4`
-* Lets try converting this to TAC:
-    * generate lhs and copy rhs to it
-        * LOAD tempForDerefK FROM k
-        * COPY 4 to tempForDerefK 
-    * This is obviously wrong, we are just overriding a stack variable, not the
-      actual location pointed by k. 
-    * Adding an indirection to generating tacky: 
-        * Dereferenced pointer:
-            * This is dereferenced, might have to operate on the pointer during
-              assignment
-        * Plain Value
 
+- These pointers need to be lvalue converted.
+- `*k = 4`
+- Lets try converting this to TAC:
+  - generate lhs and copy rhs to it
+    - LOAD tempForDerefK FROM k
+    - COPY 4 to tempForDerefK
+  - This is obviously wrong, we are just overriding a stack variable, not the
+    actual location pointed by k.
+  - Adding an indirection to generating tacky:
+    - Dereferenced pointer:
+      - This is dereferenced, might have to operate on the pointer during
+        assignment
+    - Plain Value
 
 ### Array literal
 
-- accomodating the array syntax within declarator?
+- accommodating the array syntax within declarator?
 - New grammar:
 
 ```ebnf
 
+```
+
+### An alternative llvm backend
+
+- currently we only support x86_64
+- benchmark the difference in speed between executables produced by either
+  backend
+- what can x86_64 do better?
+
+### Lvalues
+
+- difference between `genTACInstructions` and `genTACInstructionsAndCvt`
+- lvalue can be a dereferenced value, say something like `*k = 3`
+
+- TACKY variables of array type, to distinguish this from scalar values, convert the array into pseudomem operations
+```
+ GetAddress(Var("arr"), Var("dst")) -> Lea(PseudoMem("arr",0), Pseudo("dest"))
 ```
 

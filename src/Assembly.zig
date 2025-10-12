@@ -2,7 +2,7 @@ const std = @import("std");
 const ast = @import("./AST.zig");
 const tac = @import("./TAC.zig");
 
-inline fn abs(src: i32) u32 {
+inline fn abs(src: i64) u32 {
     return if (src < 0) @intCast(-src) else @intCast(src);
 }
 
@@ -65,12 +65,26 @@ pub inline fn createInst(comptime kind: InstructionType, contents: anytype, allo
     return inst;
 }
 
-pub const AsmType = enum {
-    LongWord,
-    QuadWord,
-    Float,
+const ByteArray = struct {
+    size: usize,
+    alignment: u32,
+};
+
+pub const AsmType = union(enum) {
+    LongWord: void,
+    QuadWord: void,
+    Float: void,
+    ByteArray: ByteArray,
 
     const Self = @This();
+    pub inline fn size(self: Self) i64 {
+        return switch (self) {
+            .LongWord => 4,
+            .QuadWord => 8,
+            .Float => 8,
+            .ByteArray => |byteArray| @intCast(byteArray.size),
+        };
+    }
     pub inline fn from(comptime T: type, val: T) Self {
         if (T == ast.Type) {
             const casted: ast.Type = val;
@@ -90,6 +104,7 @@ pub const AsmType = enum {
             .LongWord => "cmpl",
             .QuadWord => "cmpq",
             .Float => "comisd",
+            .ByteArray => unreachable,
         });
     }
     pub inline fn suffix(asmType: AsmType) []u8 {
@@ -97,6 +112,7 @@ pub const AsmType = enum {
             .LongWord => "l",
             .QuadWord => "q",
             .Float => "sd",
+            .ByteArray => unreachable,
         });
     }
     pub inline fn getAXVariety(asmType: AsmType) Reg {
@@ -104,6 +120,7 @@ pub const AsmType = enum {
             .LongWord => .EAX,
             .QuadWord => .RAX,
             .Float => .XMM0,
+            .ByteArray => unreachable,
         };
     }
     pub inline fn getDXVariety(asmType: AsmType) Reg {
@@ -111,6 +128,7 @@ pub const AsmType = enum {
             .LongWord => .EDX,
             .QuadWord => .RDX,
             .Float => unreachable,
+            .ByteArray => unreachable,
         };
     }
     pub inline fn getR10Variety(asmType: AsmType) Reg {
@@ -118,13 +136,33 @@ pub const AsmType = enum {
             .LongWord => .R10,
             .QuadWord => .R10_64,
             .Float => .XMM15,
+            .ByteArray => unreachable,
         };
     }
+
+    pub inline fn getR8Variety(asmType: AsmType) Reg {
+        return switch (asmType) {
+            .LongWord => .R8,
+            .QuadWord => .R8_64,
+            .Float => unreachable,
+            .ByteArray => unreachable,
+        };
+    }
+    pub inline fn getR9Variety(asmType: AsmType) Reg {
+        return switch (asmType) {
+            .LongWord => .R9,
+            .QuadWord => .R9_64,
+            .Float => .XMM12,
+            .ByteArray => unreachable,
+        };
+    }
+
     pub inline fn getR11Variety(asmType: AsmType) Reg {
         return switch (asmType) {
             .LongWord => .R11,
             .QuadWord => .R11_64,
             .Float => .XMM14,
+            .ByteArray => unreachable,
         };
     }
 };
@@ -359,7 +397,7 @@ pub const CondCode = enum {
         return switch (self) {
             .E => try std.fmt.allocPrint(allocator, "e", .{}),
             .NE => try std.fmt.allocPrint(allocator, "ne", .{}),
-            .G => try std.fmt.allocPrint(allocator, "ne", .{}),
+            .G => try std.fmt.allocPrint(allocator, "g", .{}),
             .GE => try std.fmt.allocPrint(allocator, "ge", .{}),
             .L => try std.fmt.allocPrint(allocator, "l", .{}),
             .LE => try std.fmt.allocPrint(allocator, "le", .{}),
@@ -393,12 +431,20 @@ pub const CondCode = enum {
     }
 };
 
-pub const OperandType = enum { Imm, Reg, Pseudo, Data, Memory };
+pub const OperandType = enum {
+    Imm,
+    Reg,
+    Pseudo,
+    PseudoMem,
+    Data,
+    Memory,
+    Indexed,
+};
 
 pub const Mem = struct {
     base: *Operand,
-    index: i32,
-    inline fn createStack(allocator: std.mem.Allocator, index: i32) !Operand {
+    index: i64,
+    inline fn createStack(allocator: std.mem.Allocator, index: i64) !Operand {
         var operand: Operand = undefined;
         const base = try allocator.create(Operand);
         base.* = Operand{ .Reg = Reg.BP };
@@ -410,12 +456,28 @@ pub const Mem = struct {
     }
 };
 
+pub const Indexed = struct {
+    base: Reg,
+    index: Reg,
+    scale: i64,
+};
+
+pub const PseudoMem = struct {
+    name: []u8,
+    offset: i64,
+};
+
 pub const Operand = union(OperandType) {
     Imm: u64,
     Reg: Reg,
     Pseudo: []u8,
+    PseudoMem: PseudoMem,
     Data: []u8,
     Memory: Mem,
+    Indexed: Indexed,
+    inline fn isPseudo(self: Operand) bool {
+        return (std.meta.activeTag(self) == .Pseudo) or (std.meta.activeTag(self) == .PseudoMem);
+    }
     inline fn isOfKind(self: Operand, comptime operandType: OperandType) bool {
         return std.meta.activeTag(self) == operandType;
     }
@@ -437,8 +499,15 @@ pub const Operand = union(OperandType) {
             .Data => |data| {
                 return (try std.fmt.allocPrint(allocator, "{s}(%rip)", .{data}));
             },
+            .Indexed => |indexed| {
+                return (try std.fmt.allocPrint(allocator, "({s},{s},{d})", .{
+                    try indexed.base.stringify(allocator),
+                    try indexed.index.stringify(allocator),
+                    indexed.scale,
+                }));
+            },
             else => |op| {
-                std.log.warn("Operand stringify: op={s}\n", .{op.Pseudo});
+                std.log.warn("Operand stringify: op={any}\n", .{op});
                 unreachable;
             },
         }
@@ -466,6 +535,7 @@ pub const BinaryOp = enum {
             .LongWord => "l",
             .QuadWord => "q",
             .Float => "sd",
+            .ByteArray => unreachable,
         };
         return if (self == .Xor) try std.fmt.allocPrint(allocator, "xorpd", .{}) else (try std.fmt.allocPrint(allocator, "{s}{s}", .{
             switch (self) {
@@ -968,8 +1038,9 @@ pub fn fixupInstructions(instructions: *std.ArrayList(*Instruction), allocator: 
             //     }
             // },
             .Lea => |lea| {
-                const isMem = (lea.src.isOfKind(.Memory) or lea.src.isOfKind(.Data)) and (lea.dest.isOfKind(.Memory) or lea.dest.isOfKind(.Data));
-                if (isMem) {
+                // NOTE: Lea destination should always be a general purpose register
+                const isDestMem = (lea.dest.isOfKind(.Memory) or lea.dest.isOfKind(.Data));
+                if (isDestMem) {
                     const movToR10D = try allocator.create(Instruction);
                     movToR10D.* = Instruction{ .Lea = Lea{
                         .src = lea.src,
@@ -1029,6 +1100,9 @@ inline fn fixupIdiv(
         .Pseudo => {
             unreachable;
         },
+        .PseudoMem => {
+            unreachable;
+        },
         .Imm => |imm| {
             const movIdivArgToR10 = try allocator.create(Instruction);
             movIdivArgToR10.* = Instruction{ .Mov = MovInst{
@@ -1086,6 +1160,25 @@ inline fn fixupIdiv(
             };
             try fixedInstructions.append(divInstruction);
         },
+        .Indexed => {
+            const movIdivArgToR10 = try allocator.create(Instruction);
+            movIdivArgToR10.* = Instruction{ .Mov = MovInst{
+                .src = instruction.Idiv.src,
+                .dest = Operand{ .Reg = Reg.R10 },
+                .type = AsmType.LongWord,
+            } };
+            try fixedInstructions.append(
+                movIdivArgToR10,
+            );
+            const divInstruction = try allocator.create(Instruction);
+            divInstruction.* = .{
+                .Idiv = .{
+                    .src = Operand{ .Reg = Reg.R10 },
+                    .type = instruction.Idiv.type,
+                },
+            };
+            try fixedInstructions.append(divInstruction);
+        },
     }
 }
 
@@ -1115,6 +1208,9 @@ inline fn fixupDiv(
             try fixedInstructions.append(divInstruction);
         },
         .Pseudo => {
+            unreachable;
+        },
+        .PseudoMem => {
             unreachable;
         },
         .Imm => |imm| {
@@ -1174,6 +1270,9 @@ inline fn fixupDiv(
             };
             try fixedInstructions.append(divInstruction);
         },
+        .Indexed => {
+            unreachable;
+        },
     }
 }
 
@@ -1181,12 +1280,12 @@ pub fn replacePseudoRegs(function: *Function, allocator: std.mem.Allocator, asmS
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     const hashAllocator = arena.allocator();
     defer arena.deinit();
-    var lookup = std.StringHashMap(i32).init(hashAllocator);
-    var topOfStack: i32 = 0;
+    var lookup = std.StringHashMap(i64).init(hashAllocator);
+    var topOfStack: i64 = 0;
     for (function.instructions.items) |inst| {
         switch (inst.*) {
             .Mov => |mov| {
-                if (mov.src.isOfKind(.Pseudo)) {
+                if (mov.src.isPseudo()) {
                     try replacePseudo(
                         &inst.Mov.src,
                         &lookup,
@@ -1195,7 +1294,7 @@ pub fn replacePseudoRegs(function: *Function, allocator: std.mem.Allocator, asmS
                         allocator,
                     );
                 }
-                if (mov.dest.isOfKind(.Pseudo)) {
+                if (mov.dest.isPseudo()) {
                     try replacePseudo(
                         &inst.Mov.dest,
                         &lookup,
@@ -1395,6 +1494,13 @@ pub fn replacePseudoRegs(function: *Function, allocator: std.mem.Allocator, asmS
             },
         }
     }
+    var lookupIter = lookup.iterator();
+    while (lookupIter.next()) |entry| {
+        const key = entry.key_ptr.*;
+        const value = entry.value_ptr.*;
+        std.log.warn("LOOKUP: {s} => {d}\n", .{ key, value });
+    }
+
     if (topOfStack != 0) {
         const allocateStackInst = try allocator.create(Instruction);
         allocateStackInst.* = Instruction{
@@ -1413,25 +1519,39 @@ inline fn alignNumUp(num: i32, comptime alignment: i32) i32 {
 
 inline fn replacePseudo(
     operand: *Operand,
-    lookup: *std.StringHashMap(i32),
+    lookup: *std.StringHashMap(i64),
     asmSymbolTable: *std.StringHashMap(*Symbol),
-    topOfStack: *i32,
+    topOfStack: *i64,
     allocator: std.mem.Allocator,
 ) ast.CodegenError!void {
-    if (lookup.contains(operand.Pseudo)) {
-        std.log.warn("Pseudo: {s} found in lookup\n", .{operand.Pseudo});
-        operand.* = try Mem.createStack(allocator, lookup.get(operand.Pseudo).?);
-    } else {
-        const offset: i32 = switch (asmSymbolTable.get(operand.Pseudo).?.Obj.type) {
-            .QuadWord => 8,
-            .LongWord => 4,
-            .Float => 8,
-        };
-        topOfStack.* = topOfStack.* - offset;
-        try lookup.put(
-            operand.Pseudo,
-            topOfStack.*,
-        );
-        operand.* = try Mem.createStack(allocator, topOfStack.*);
+    if (std.meta.activeTag(operand.*) == .Pseudo) {
+        if (lookup.contains(operand.Pseudo)) {
+            std.log.warn("Pseudo: {s} found in lookup\n", .{operand.Pseudo});
+            operand.* = try Mem.createStack(allocator, lookup.get(operand.Pseudo).?);
+        } else {
+            const offset: i64 = asmSymbolTable.get(operand.Pseudo).?.Obj.type.size();
+            topOfStack.* = topOfStack.* - offset;
+            try lookup.put(
+                operand.Pseudo,
+                topOfStack.*,
+            );
+            operand.* = try Mem.createStack(allocator, topOfStack.*);
+        }
+    }
+
+    if (std.meta.activeTag(operand.*) == .PseudoMem) {
+        if (lookup.contains(operand.PseudoMem.name)) {
+            std.log.warn("Pseudo: {s} found in lookup\n", .{operand.PseudoMem.name});
+            topOfStack.* = topOfStack.* - operand.PseudoMem.offset;
+            operand.* = try Mem.createStack(allocator, lookup.get(operand.PseudoMem.name).? + operand.PseudoMem.offset);
+        } else {
+            const offset: i64 = asmSymbolTable.get(operand.PseudoMem.name).?.Obj.type.size();
+            topOfStack.* = topOfStack.* - offset;
+            try lookup.put(
+                operand.PseudoMem.name,
+                topOfStack.*,
+            );
+            operand.* = try Mem.createStack(allocator, topOfStack.*);
+        }
     }
 }

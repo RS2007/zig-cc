@@ -195,6 +195,7 @@ pub const Parser = struct {
                         return ParserError.InvalidArgument;
                     }
                     try exprList.append(@intCast(expression.Constant.value.Integer));
+                    std.log.warn("Done?: {}, next: {}\n", .{ self.l.currentToken.?, (try self.l.peekToken(self.allocator)).? });
                 }
                 declaratorSuffix.* = .{ .ArraySuffix = exprList };
                 return declaratorSuffix;
@@ -338,13 +339,9 @@ pub const Parser = struct {
             .varInitValue = switch ((try self.l.nextToken(self.allocator)).type) {
                 .SEMICOLON => null,
                 .ASSIGN => blk: {
-                    const expression = try self.parseExpression(0);
+                    const varInitVal = try self.parseInitializer();
                     const semicolon = try self.l.nextToken(self.allocator);
                     std.debug.assert(semicolon.type == lexer.TokenType.SEMICOLON);
-                    const varInitVal = try self.allocator.create(AST.Initializer);
-                    varInitVal.* = .{
-                        .Expression = expression,
-                    };
                     break :blk varInitVal;
                 },
                 else => |tok| {
@@ -419,8 +416,6 @@ pub const Parser = struct {
                 },
                 .ASSIGN => blk: {
                     _ = try self.l.nextToken(self.allocator);
-                    const peeked = try self.l.peekToken(self.allocator);
-                    std.debug.assert(peeked.?.type == .LBRACE);
                     const initializer = try self.parseInitializer();
                     const semicolon = try self.l.nextToken(self.allocator);
                     std.debug.assert(semicolon.type == lexer.TokenType.SEMICOLON);
@@ -927,13 +922,12 @@ pub const Parser = struct {
                     const rsquare = try self.l.nextToken(self.allocator);
                     std.debug.assert(rsquare.type == .RSQUARE);
                     const expr = try self.allocator.create(AST.Expression);
-                    expr.* = AST.Expression{.ArrSubscript = .{
+                    expr.* = AST.Expression{ .ArrSubscript = .{
                         .type = null,
                         .arr = lhs,
                         .index = index,
-                    }};
+                    } };
                     return expr;
-
                 },
                 else => {
                     return lhs;
@@ -948,8 +942,12 @@ pub const Parser = struct {
             .LBRACE => {
                 _ = try self.l.nextToken(self.allocator);
                 const firstElem = try self.parseInitializer();
-                var initializers = std.ArrayList(*AST.Initializer).init(self.allocator);
-                try initializers.append(firstElem);
+                var arrayInitializer = try self.allocator.create(AST.ArrayInitializer);
+                arrayInitializer.* = .{
+                    .type = null,
+                    .initializers = std.ArrayList(*AST.Initializer).init(self.allocator),
+                };
+                try arrayInitializer.initializers.append(firstElem);
                 while (true) {
                     const commaOrRBrace = try self.l.peekToken(self.allocator);
                     std.debug.assert(commaOrRBrace.?.type == .COMMA or commaOrRBrace.?.type == .RBRACE);
@@ -960,18 +958,18 @@ pub const Parser = struct {
                                 _ = try self.l.nextToken(self.allocator);
                                 const initializer = try self.allocator.create(AST.Initializer);
                                 initializer.* = .{
-                                    .ArrayExpr = initializers,
+                                    .ArrayExpr = arrayInitializer,
                                 };
                                 return initializer;
                             } else {
                                 const initializer = try self.parseInitializer();
-                                try initializers.append(initializer);
+                                try arrayInitializer.initializers.append(initializer);
                             }
                         },
                         .RBRACE => {
                             const initializer = try self.allocator.create(AST.Initializer);
                             initializer.* = .{
-                                .ArrayExpr = initializers,
+                                .ArrayExpr = arrayInitializer,
                             };
                             return initializer;
                         },
