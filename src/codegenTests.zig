@@ -1811,6 +1811,7 @@ test "gcd" {
         std.debug.assert(false);
     };
 
+    try ast.loopLabelPass(program, allocator);
     const tacRenderer = try ast.TACRenderer.init(allocator, typechecker.symbolTable);
     const tacProgram = try tacRenderer.render(program);
     for (tacProgram.topLevelDecls.items) |decl| {
@@ -1856,6 +1857,7 @@ test "arrays - linear search" {
         std.log.warn("\x1b[33mError\x1b[0m: {s}\n", .{try typechecker.getErrString()});
         std.debug.assert(false);
     };
+    try ast.loopLabelPass(program, allocator);
     const tacRenderer = try ast.TACRenderer.init(allocator, typechecker.symbolTable);
     const tacProgram = try tacRenderer.render(program);
 
@@ -1910,6 +1912,67 @@ test "arrays - binary search" {
         std.log.warn("\x1b[33mError\x1b[0m: {s}\n", .{try typechecker.getErrString()});
         std.debug.assert(false);
     };
+    try ast.loopLabelPass(program, allocator);
+    const tacRenderer = try ast.TACRenderer.init(allocator, typechecker.symbolTable);
+    const tacProgram = try tacRenderer.render(program);
+
+    for (tacProgram.topLevelDecls.items) |decl| {
+        if (std.meta.activeTag(decl.*) == .Function) {
+            std.debug.print("{s}:\n", .{decl.Function.name});
+            for (decl.Function.instructions.items) |inst| {
+                std.debug.print("\t{}\n", .{inst});
+            }
+        }
+    }
+
+    const asmRenderer = try tac.AsmRenderer.init(allocator, tacRenderer.asmSymbolTable);
+    const asmProgram = try asmRenderer.render(tacProgram);
+
+    try asmProgram.stringify(sFileWriter, allocator, tacRenderer.asmSymbolTable);
+    try cFileWriter.writeAll(programStr);
+}
+
+test "arrays - bubble sort" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    const cFileWriter = (try std.fs.cwd().createFile("./cFiles/C/bubblesort.c", .{})).writer();
+    const sFileWriter = (try std.fs.cwd().createFile("./cFiles/S/bubblesort.s", .{})).writer();
+    const programStr =
+        \\ int bubblesort(int *arr, int arrLen) {
+        \\     for (int i = 0; i < arrLen - 1; i = i + 1) {
+        \\         for (int j = 0; j < arrLen - i - 1; j = j + 1) {
+        \\             if (arr[j] > arr[j+1]) {
+        \\                 int tmp = arr[j];
+        \\                 arr[j] = arr[j+1];
+        \\                 arr[j+1] = tmp;
+        \\             }
+        \\         }
+        \\     }
+        \\     return 0;
+        \\ }
+        \\ int main() {
+        \\     int arr[5] = {5,1,4,2,8};
+        \\     bubblesort(arr, 5);
+        \\     if (arr[0] != 1) return -1;
+        \\     if (arr[1] != 2) return -1;
+        \\     if (arr[2] != 4) return -1;
+        \\     if (arr[3] != 5) return -1;
+        \\     if (arr[4] != 8) return -1;
+        \\     return 0;
+        \\ }
+    ;
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    const program = try p.parseProgram();
+    const varResolver = try ast.VarResolver.init(allocator);
+    try varResolver.resolve(program);
+    const typechecker = try semantic.Typechecker.init(allocator);
+    typechecker.check(program) catch {
+        std.log.warn("\x1b[33mError\x1b[0m: {s}\n", .{try typechecker.getErrString()});
+        std.debug.assert(false);
+    };
+    try ast.loopLabelPass(program, allocator);
     const tacRenderer = try ast.TACRenderer.init(allocator, typechecker.symbolTable);
     const tacProgram = try tacRenderer.render(program);
 
