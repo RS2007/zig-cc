@@ -751,17 +751,19 @@ fn typecheckBlkItem(self: *Typechecker, blkItem: *AST.BlockItem) TypeCheckerErro
                                 return TypeError.GlobalDeclarationNotInteger;
                             }
                             const sym = try self.allocator.create(Symbol);
+                            const attributes = try self.allocator.alloc(Constant, 1);
+                            attributes[0] = switch (decl.type) {
+                                .Integer => Constant{ .type = .Integer, .value = .{ .Integer = expr.Constant.value.Integer } },
+                                .Long => Constant{ .type = .Long, .value = .{ .Long = expr.Constant.value.Long } },
+                                .ULong => Constant{ .type = .ULong, .value = .{ .ULong = expr.Constant.value.ULong } },
+                                .UInteger => Constant{ .type = .UInteger, .value = .{ .UInteger = expr.Constant.value.UInteger } },
+                                .Float => Constant{ .type = .Float, .value = .{ .Float = expr.Constant.value.Float } },
+                                else => unreachable,
+                            };
                             // TODO: accomodate longs
                             sym.* = .{ .typeInfo = .Integer, .attributes = .{
                                 .StaticAttr = .{
-                                    .init = .{ .Initial = &[_]Constant{switch (decl.type) {
-                                        .Integer => Constant{ .type = .Integer, .value = .{ .Integer = expr.Constant.value.Integer } },
-                                        .Long => Constant{ .type = .Long, .value = .{ .Long = expr.Constant.value.Long } },
-                                        .ULong => Constant{ .type = .ULong, .value = .{ .ULong = expr.Constant.value.ULong } },
-                                        .UInteger => Constant{ .type = .UInteger, .value = .{ .UInteger = expr.Constant.value.UInteger } },
-                                        .Float => Constant{ .type = .Float, .value = .{ .Float = expr.Constant.value.Float } },
-                                        else => unreachable,
-                                    }} },
+                                    .init = .{ .Initial = attributes },
                                     .global = true,
                                 },
                             } };
@@ -873,6 +875,19 @@ fn typecheckForInit(self: *Typechecker, forInit: *AST.ForInit) TypeCheckerError!
 // TODO: A design change can make this easier
 // Or I can use some metaprogramming to generate this
 inline fn convert(allocator: std.mem.Allocator, expr: *AST.Expression, toType: AST.Type) !*AST.Expression {
+    // Centralize array-to-pointer decay: whenever a conversion target is a Pointer
+    // and the source expression currently has an Array type, rewrite the
+    // expression as an AddrOf to model C's array-to-pointer decay semantics.
+    // This ensures consistent behavior across assignment, binary arithmetic,
+    // function arguments, ternary expressions, and returns, without sprinkling
+    // decay logic in each caller.
+    const expr_ty = expr.getType();
+    if (std.meta.activeTag(expr_ty) == .Array and std.meta.activeTag(toType) == .Pointer) {
+        const inner = try allocator.create(AST.Expression);
+        inner.* = expr.*;
+        expr.* = .{ .AddrOf = .{ .exp = inner, .type = toType } };
+        return expr;
+    }
     switch (expr.*) {
         .Cast => {
             return expr;
@@ -1061,8 +1076,15 @@ pub fn getArrSubscriptType(self: *Typechecker, arrSubscript: *AST.ArrSubscript) 
     const arr_choice = arrOrPtr(arr_ty);
     const idx_choice = arrOrPtr(idx_ty);
 
-    // At least one side must be array/pointer
-    std.debug.assert(arr_choice != null or idx_choice != null);
+    // At least one side must be array/pointer; otherwise this is invalid.
+    if (arr_choice == null and idx_choice == null) {
+        try self.errors.append(try std.fmt.allocPrint(
+            self.allocator,
+            "Invalid array subscript: expected pointer or array, got a {any}, {any} pair",
+            .{ arr_ty, idx_ty },
+        ));
+        return TypeError.InvalidOperand;
+    }
 
     const chosen = (arr_choice orelse idx_choice orelse unreachable);
 
