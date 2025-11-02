@@ -20,11 +20,10 @@ test "test multiple functions" {
     const varResolver = try ast.VarResolver.init(allocator);
     try varResolver.resolve(program);
     const typechecker = try semantic.Typechecker.init(allocator);
-    const hasTypeErr = try typechecker.check(program);
-    if (hasTypeErr) |typeErr| {
-        std.log.warn("Type error: {s}\n", .{typeErr});
+    typechecker.check(program) catch {
+        std.log.warn("Type error: {s}\n", .{try typechecker.getErrString()});
         std.debug.assert(false);
-    }
+    };
     const tacRenderer = try ast.TACRenderer.init(allocator, typechecker.symbolTable);
     _ = try tacRenderer.render(program);
 }
@@ -46,11 +45,10 @@ test "test while and do while" {
     const varResolver = try ast.VarResolver.init(allocator);
     try varResolver.resolve(program);
     const typechecker = try semantic.Typechecker.init(allocator);
-    const hasTypeErr = try typechecker.check(program);
-    if (hasTypeErr) |typeErr| {
-        std.log.warn("Type error: {s}\n", .{typeErr});
+    typechecker.check(program) catch {
+        std.log.warn("Type error: {s}\n", .{try typechecker.getErrString()});
         std.debug.assert(false);
-    }
+    };
     const tacRenderer = try ast.TACRenderer.init(allocator, typechecker.symbolTable);
     _ = try tacRenderer.render(program);
     //for (instructions.items, 0..) |inst, i| {
@@ -69,11 +67,10 @@ test "test tac generation for ternary" {
     const varResolver = try ast.VarResolver.init(allocator);
     try varResolver.resolve(program);
     const typechecker = try semantic.Typechecker.init(allocator);
-    const hasTypeErr = try typechecker.check(program);
-    if (hasTypeErr) |typeErr| {
-        std.log.warn("Type error: {any}\n", .{typeErr});
+    typechecker.check(program) catch {
+        std.log.warn("Type error: {any}\n", .{try typechecker.getErrString()});
         std.debug.assert(false);
-    }
+    };
     const tacRenderer = try ast.TACRenderer.init(allocator, typechecker.symbolTable);
     _ = try tacRenderer.render(program);
 }

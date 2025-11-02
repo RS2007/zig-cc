@@ -22,7 +22,7 @@ test "static storage codegenaration" {
         \\         }
         \\         return accum;
         \\ }
-        \\ 
+        \\
         \\ int main(){
         \\     return recurse(10);
         \\ }
@@ -33,11 +33,10 @@ test "static storage codegenaration" {
     const varResolver = try ast.VarResolver.init(allocator);
     try varResolver.resolve(program);
     const typechecker = try semantic.Typechecker.init(allocator);
-    const hasTypeErr = try typechecker.check(program);
-    if (hasTypeErr) |typeError| {
-        std.log.warn("\x1b[33mError\x1b[0m: {s}\n", .{typeError});
+    typechecker.check(program) catch {
+        std.log.warn("\x1b[33mError\x1b[0m: {s}\n", .{try typechecker.getErrString()});
         std.debug.assert(false);
-    }
+    };
     try ast.loopLabelPass(program, allocator);
     const tacRenderer = try ast.TACRenderer.init(allocator, typechecker.symbolTable);
     const tacProgram = try tacRenderer.render(program);

@@ -16,6 +16,64 @@ test "testing variable rename pass" {
     try ast.statementScopeVariableResolve(varResolver, stmt, 0);
 }
 
+test "parse globals" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const programStr =
+        \\ int k = 3;
+        \\ int main(){
+        \\     int b = 0; 
+        \\     return b+k;
+        \\ }
+    ;
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    const program = try p.parseProgram();
+    const varResolver = try ast.VarResolver.init(allocator);
+    try varResolver.resolve(program);
+    const typeChecker = try semantic.Typechecker.init(allocator);
+    typeChecker.check(program) catch {
+        for (typeChecker.errors.items) |typeErrorString| {
+            std.log.warn("Type error: {any}\n", .{typeErrorString});
+        }
+    };
+    std.log.warn("Globals not renamed: {s}\n", .{program.externalDecls.items[0].VarDeclaration.name});
+    std.log.warn("Globals1: {s}\n", .{program.externalDecls.items[1].FunctionDecl.declarator.FunDeclarator.declarator.Ident});
+    std.log.warn("Locals renamed: {s}\n", .{
+        program.externalDecls.items[1].FunctionDecl.blockItems.items[0].Declaration.name,
+    });
+}
+
+test "parse with storage classes" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const programStr =
+        \\ extern int k;
+        \\ static int main(){
+        \\     int b = 0; 
+        \\     return b+k;
+        \\ }
+    ;
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    const program = try p.parseProgram();
+    const varResolver = try ast.VarResolver.init(allocator);
+    try varResolver.resolve(program);
+    const typeChecker = try semantic.Typechecker.init(allocator);
+    typeChecker.check(program) catch {
+        std.log.warn("Type error: {any}\n", .{try typeChecker.getErrString()});
+    };
+    std.log.warn("Globals not renamed: {s}\n", .{program.externalDecls.items[0].VarDeclaration.name});
+    std.log.warn("Globals storageClass: {any}\n", .{program.externalDecls.items[0].VarDeclaration.storageClass});
+    std.log.warn("Globals1: {s}\n", .{program.externalDecls.items[1].FunctionDecl.declarator.FunDeclarator.declarator.Ident});
+    std.log.warn("Globals1 storageClass: {any}\n", .{program.externalDecls.items[1].FunctionDecl.storageClass});
+    std.log.warn("Locals renamed: {s}\n", .{
+        program.externalDecls.items[1].FunctionDecl.blockItems.items[0].Declaration.name,
+    });
+}
+
 test "testing variable rename pass error" {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     const allocator = arena.allocator();
@@ -96,10 +154,9 @@ test "typechecker-error-fnCall-1" {
     const varResolver = try ast.VarResolver.init(allocator);
     try varResolver.resolve(program);
     const typechecker = try semantic.Typechecker.init(allocator);
-    const hasTypeError = try typechecker.check(program);
-    if (hasTypeError) |typeError| {
-        std.log.warn("\x1b[31mError\x1b[0m: {s}\n", .{typeError});
-    }
+    typechecker.check(program) catch {
+        std.log.warn("\x1b[31mError\x1b[0m: {s}", .{try typechecker.getErrString()});
+    };
     try ast.loopLabelPass(program, allocator);
 }
 
@@ -120,10 +177,9 @@ test "typechecker-error-fn-not found" {
     const varResolver = try ast.VarResolver.init(allocator);
     try varResolver.resolve(program);
     const typechecker = try semantic.Typechecker.init(allocator);
-    const hasTypeError = try typechecker.check(program);
-    if (hasTypeError) |typeError| {
-        std.log.warn("\x1b[31mError\x1b[0m: {s}\n", .{typeError});
-    }
+    typechecker.check(program) catch {
+        std.log.warn("\x1b[31mError\x1b[0m: {s}", .{try typechecker.getErrString()});
+    };
     try ast.loopLabelPass(program, allocator);
 }
 
@@ -146,12 +202,11 @@ test "function if declared as static should not be redeclared as non static" {
     const varResolver = try ast.VarResolver.init(allocator);
     try varResolver.resolve(program);
     const typechecker = try semantic.Typechecker.init(allocator);
-    const hasTypeError = try typechecker.check(program);
     var hasErr = false;
-    if (hasTypeError) |typeError| {
-        std.log.warn("\x1b[31mError\x1b[0m: {s}\n", .{typeError});
+    typechecker.check(program) catch {
+        std.log.warn("\x1b[31mError\x1b[0m: {s}", .{try typechecker.getErrString()});
         hasErr = true;
-    }
+    };
     std.debug.assert(hasErr);
 }
 
@@ -173,12 +228,12 @@ test "function redefinition" {
     const varResolver = try ast.VarResolver.init(allocator);
     try varResolver.resolve(program);
     const typechecker = try semantic.Typechecker.init(allocator);
-    const hasTypeError = try typechecker.check(program);
+
     var hasErr = false;
-    if (hasTypeError) |typeError| {
-        std.log.warn("\x1b[31mError\x1b[0m: {s}\n", .{typeError});
+    typechecker.check(program) catch {
+        std.log.warn("\x1b[31mError\x1b[0m: {s}", .{try typechecker.getErrString()});
         hasErr = true;
-    }
+    };
     std.debug.assert(hasErr);
 }
 
@@ -200,12 +255,12 @@ test "global var having same name as func" {
     const varResolver = try ast.VarResolver.init(allocator);
     try varResolver.resolve(program);
     const typechecker = try semantic.Typechecker.init(allocator);
-    const hasTypeError = try typechecker.check(program);
     var hasErr = false;
-    if (hasTypeError) |typeError| {
-        std.log.warn("\x1b[31mError\x1b[0m: {s}\n", .{typeError});
+
+    typechecker.check(program) catch {
+        std.log.warn("\x1b[31mError\x1b[0m: {s}", .{try typechecker.getErrString()});
         hasErr = true;
-    }
+    };
     std.debug.assert(hasErr);
 }
 
@@ -227,12 +282,11 @@ test "global var declaration and definition having different argument numbers" {
     const varResolver = try ast.VarResolver.init(allocator);
     try varResolver.resolve(program);
     const typechecker = try semantic.Typechecker.init(allocator);
-    const hasTypeError = try typechecker.check(program);
     var hasErr = false;
-    if (hasTypeError) |typeError| {
-        std.log.warn("\x1b[31mError\x1b[0m: {s}\n", .{typeError});
+    typechecker.check(program) catch {
+        std.log.warn("\x1b[31mError\x1b[0m: {s}", .{try typechecker.getErrString()});
         hasErr = true;
-    }
+    };
     std.debug.assert(hasErr);
 }
 
@@ -254,12 +308,11 @@ test "global var declaration having non integer expression" {
     const varResolver = try ast.VarResolver.init(allocator);
     try varResolver.resolve(program);
     const typechecker = try semantic.Typechecker.init(allocator);
-    const hasTypeError = try typechecker.check(program);
     var hasErr = false;
-    if (hasTypeError) |typeError| {
-        std.log.warn("\x1b[31mError\x1b[0m: {s}\n", .{typeError});
+    typechecker.check(program) catch {
+        std.log.warn("\x1b[31mError\x1b[0m: {s}\n", .{try typechecker.getErrString()});
         hasErr = true;
-    }
+    };
     std.debug.assert(hasErr);
 }
 
@@ -279,12 +332,11 @@ test "extern shouldnt have an init value" {
     const varResolver = try ast.VarResolver.init(allocator);
     try varResolver.resolve(program);
     const typechecker = try semantic.Typechecker.init(allocator);
-    const hasTypeError = try typechecker.check(program);
     var hasErr = false;
-    if (hasTypeError) |typeError| {
-        std.log.warn("\x1b[31mError\x1b[0m: {s}\n", .{typeError});
+    typechecker.check(program) catch {
+        std.log.warn("\x1b[31mError\x1b[0m: {s}\n", .{try typechecker.getErrString()});
         hasErr = true;
-    }
+    };
     std.debug.assert(hasErr);
 }
 
@@ -305,13 +357,9 @@ test "extern declarations after static" {
     const varResolver = try ast.VarResolver.init(allocator);
     try varResolver.resolve(program);
     const typechecker = try semantic.Typechecker.init(allocator);
-    const hasTypeError = try typechecker.check(program);
-    var hasErr = false;
-    if (hasTypeError) |typeError| {
-        std.log.warn("\x1b[31mError\x1b[0m: {s}\n", .{typeError});
-        hasErr = true;
-    }
-    std.debug.assert(!hasErr);
+    typechecker.check(program) catch {
+        std.debug.assert(false);
+    };
 }
 test "static declarations after extern" {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
@@ -330,12 +378,11 @@ test "static declarations after extern" {
     const varResolver = try ast.VarResolver.init(allocator);
     try varResolver.resolve(program);
     const typechecker = try semantic.Typechecker.init(allocator);
-    const hasTypeError = try typechecker.check(program);
     var hasErr = false;
-    if (hasTypeError) |typeError| {
-        std.log.warn("\x1b[31mError\x1b[0m: {s}\n", .{typeError});
+    typechecker.check(program) catch {
+        std.log.warn("\x1b[31mError\x1b[0m: {s}\n", .{try typechecker.getErrString()});
         hasErr = true;
-    }
+    };
     std.debug.assert(hasErr);
 }
 test "just extern" {
@@ -354,14 +401,12 @@ test "just extern" {
     const varResolver = try ast.VarResolver.init(allocator);
     try varResolver.resolve(program);
     const typechecker = try semantic.Typechecker.init(allocator);
-    const hasTypeError = try typechecker.check(program);
-    const externVarAttrs = typechecker.symbolTable.get("k").?.attributes;
-    if (hasTypeError) |typeError| {
-        std.log.warn("\x1b[31mError\x1b[0m: {s}\n", .{typeError});
+    typechecker.check(program) catch {
         std.debug.assert(false);
-    }
+    };
+    const externVarAttrs = typechecker.symbolTable.get("k").?.attributes;
     std.debug.assert(externVarAttrs.StaticAttr.global);
-    std.debug.assert(std.mem.eql(u8, @tagName(externVarAttrs.StaticAttr.init), "NoInit"));
+    std.debug.assert(std.meta.activeTag(externVarAttrs.StaticAttr.init) == .NoInit);
 }
 test "static and global declarations" {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
@@ -380,12 +425,11 @@ test "static and global declarations" {
     const varResolver = try ast.VarResolver.init(allocator);
     try varResolver.resolve(program);
     const typechecker = try semantic.Typechecker.init(allocator);
-    const hasTypeError = try typechecker.check(program);
     var hasErr = false;
-    if (hasTypeError) |typeError| {
-        std.log.warn("\x1b[31mError\x1b[0m: {s}\n", .{typeError});
+    typechecker.check(program) catch {
+        std.log.warn("\x1b[31mError\x1b[0m: {s}\n", .{try typechecker.getErrString()});
         hasErr = true;
-    }
+    };
     std.debug.assert(hasErr);
 }
 
@@ -406,14 +450,12 @@ test "extern inheriting init value from older linkage" {
     const varResolver = try ast.VarResolver.init(allocator);
     try varResolver.resolve(program);
     const typechecker = try semantic.Typechecker.init(allocator);
-    const hasTypeError = try typechecker.check(program);
-    const externVarAttrs = typechecker.symbolTable.get("k").?.attributes;
-    if (hasTypeError) |typeError| {
-        std.log.warn("\x1b[31mError\x1b[0m: {s}\n", .{typeError});
+    typechecker.check(program) catch {
         std.debug.assert(false);
-    }
+    };
+    const externVarAttrs = typechecker.symbolTable.get("k").?.attributes;
     std.debug.assert(externVarAttrs.StaticAttr.global);
-    std.debug.assert(externVarAttrs.StaticAttr.init.Initial.value.Integer == 4);
+    std.debug.assert(externVarAttrs.StaticAttr.init.Initial[0].value.Integer == 4);
 }
 
 test "multiple global inheriting init value from older linkage" {
@@ -433,14 +475,13 @@ test "multiple global inheriting init value from older linkage" {
     const varResolver = try ast.VarResolver.init(allocator);
     try varResolver.resolve(program);
     const typechecker = try semantic.Typechecker.init(allocator);
-    const hasTypeError = try typechecker.check(program);
-    const externVarAttrs = typechecker.symbolTable.get("k").?.attributes;
-    if (hasTypeError) |typeError| {
-        std.log.warn("\x1b[31mError\x1b[0m: {s}\n", .{typeError});
+    typechecker.check(program) catch {
+        std.log.warn("\x1b[31mError\x1b[0m: {s}\n", .{try typechecker.getErrString()});
         std.debug.assert(false);
-    }
+    };
+    const externVarAttrs = typechecker.symbolTable.get("k").?.attributes;
     std.debug.assert(externVarAttrs.StaticAttr.global);
-    std.debug.assert(externVarAttrs.StaticAttr.init.Initial.value.Integer == 4);
+    std.debug.assert(externVarAttrs.StaticAttr.init.Initial[0].value.Integer == 4);
 }
 
 test "tentative init values" {
@@ -459,14 +500,13 @@ test "tentative init values" {
     const varResolver = try ast.VarResolver.init(allocator);
     try varResolver.resolve(program);
     const typechecker = try semantic.Typechecker.init(allocator);
-    const hasTypeError = try typechecker.check(program);
-    const externVarAttrs = typechecker.symbolTable.get("k").?.attributes;
-    if (hasTypeError) |typeError| {
-        std.log.warn("\x1b[31mError\x1b[0m: {s}\n", .{typeError});
+    typechecker.check(program) catch {
+        std.log.warn("\x1b[31mError\x1b[0m: {s}\n", .{try typechecker.getErrString()});
         std.debug.assert(false);
-    }
+    };
+    const externVarAttrs = typechecker.symbolTable.get("k").?.attributes;
     std.debug.assert(externVarAttrs.StaticAttr.global);
-    std.debug.assert(std.mem.eql(u8, @tagName(externVarAttrs.StaticAttr.init), "Tentative"));
+    std.debug.assert(std.meta.activeTag(externVarAttrs.StaticAttr.init) == .Tentative);
 }
 
 test "typed ast check" {
@@ -486,12 +526,11 @@ test "typed ast check" {
     const varResolver = try ast.VarResolver.init(allocator);
     try varResolver.resolve(program);
     const typechecker = try semantic.Typechecker.init(allocator);
-    const hasTypeErr = try typechecker.check(program);
     var hasErr = false;
-    if (hasTypeErr) |typeErr| {
-        std.log.warn("Type error: {s}\n", .{typeErr});
+    typechecker.check(program) catch {
+        std.log.warn("Type error: {s}\n", .{try typechecker.getErrString()});
         hasErr = true;
-    }
+    };
     _ = try std.testing.expect(!hasErr);
     std.log.warn("type of expr: {any}", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[1].Statement.Expression.Assignment.type});
 }
@@ -512,15 +551,14 @@ test "conversion logic" {
     const varResolver = try ast.VarResolver.init(allocator);
     try varResolver.resolve(program);
     const typechecker = try semantic.Typechecker.init(allocator);
-    const hasTypeErr = try typechecker.check(program);
     var hasErr = false;
-    if (hasTypeErr) |typeErr| {
-        std.log.warn("Type error: {s}\n", .{typeErr});
+    typechecker.check(program) catch {
+        std.log.warn("Type error: {s}\n", .{try typechecker.getErrString()});
         hasErr = true;
-    }
+    };
     _ = try std.testing.expect(!hasErr);
     // Checking if casting has happened to the rhs of declaration
-    _ = try std.testing.expectEqual(program.externalDecls.items[0].FunctionDecl.blockItems.items[0].Declaration.expression.?.getType(), ast.Type.Integer);
+    _ = try std.testing.expectEqual(program.externalDecls.items[0].FunctionDecl.blockItems.items[0].Declaration.varInitValue.?.Expression.getType(), ast.Type.Integer);
 }
 
 test "global variable with conflicting types" {
@@ -541,12 +579,11 @@ test "global variable with conflicting types" {
     const varResolver = try ast.VarResolver.init(allocator);
     try varResolver.resolve(program);
     const typechecker = try semantic.Typechecker.init(allocator);
-    const hasTypeErr = try typechecker.check(program);
     var hasErr = false;
-    if (hasTypeErr) |typeErr| {
-        std.log.warn("Type error: {s}\n", .{typeErr});
+    typechecker.check(program) catch {
+        std.log.warn("Type error: {s}\n", .{try typechecker.getErrString()});
         hasErr = true;
-    }
+    };
     _ = try std.testing.expect(hasErr);
 }
 
@@ -567,12 +604,11 @@ test "extern conflict int and longs" {
     const varResolver = try ast.VarResolver.init(allocator);
     try varResolver.resolve(program);
     const typechecker = try semantic.Typechecker.init(allocator);
-    const hasTypeErr = try typechecker.check(program);
     var hasErr = false;
-    if (hasTypeErr) |typeErr| {
-        std.log.warn("Type error: {s}\n", .{typeErr});
+    typechecker.check(program) catch {
+        std.log.warn("Type error: {s}\n", .{try typechecker.getErrString()});
         hasErr = true;
-    }
+    };
     _ = try std.testing.expect(hasErr);
 }
 
@@ -594,12 +630,11 @@ test "function definition with different types" {
     const varResolver = try ast.VarResolver.init(allocator);
     try varResolver.resolve(program);
     const typechecker = try semantic.Typechecker.init(allocator);
-    const hasTypeErr = try typechecker.check(program);
     var hasErr = false;
-    if (hasTypeErr) |typeErr| {
-        std.log.warn("Type error: {s}\n", .{typeErr});
+    typechecker.check(program) catch {
+        std.log.warn("Type error: {s}\n", .{try typechecker.getErrString()});
         hasErr = true;
-    }
+    };
     _ = try std.testing.expect(hasErr);
 }
 
@@ -620,12 +655,11 @@ test "unsigned type conflicts" {
     const varResolver = try ast.VarResolver.init(allocator);
     try varResolver.resolve(program);
     const typechecker = try semantic.Typechecker.init(allocator);
-    const hasTypeErr = try typechecker.check(program);
     var hasErr = false;
-    if (hasTypeErr) |typeErr| {
-        std.log.warn("Type error: {s}\n", .{typeErr});
+    typechecker.check(program) catch {
+        std.log.warn("Type error: {s}\n", .{try typechecker.getErrString()});
         hasErr = true;
-    }
+    };
     _ = try std.testing.expect(hasErr);
 }
 
@@ -647,12 +681,11 @@ test "function definition with different types(float)" {
     const varResolver = try ast.VarResolver.init(allocator);
     try varResolver.resolve(program);
     const typechecker = try semantic.Typechecker.init(allocator);
-    const hasTypeErr = try typechecker.check(program);
     var hasErr = false;
-    if (hasTypeErr) |typeErr| {
-        std.log.warn("Type error: {s}\n", .{typeErr});
+    typechecker.check(program) catch {
+        std.log.warn("Type error: {s}\n", .{try typechecker.getErrString()});
         hasErr = true;
-    }
+    };
     _ = try std.testing.expect(hasErr);
 }
 
@@ -673,12 +706,11 @@ test "extern global type conflict" {
     const varResolver = try ast.VarResolver.init(allocator);
     try varResolver.resolve(program);
     const typechecker = try semantic.Typechecker.init(allocator);
-    const hasTypeErr = try typechecker.check(program);
     var hasErr = false;
-    if (hasTypeErr) |typeErr| {
-        std.log.warn("Type error: {s}\n", .{typeErr});
+    typechecker.check(program) catch {
+        std.log.warn("Type error: {s}\n", .{try typechecker.getErrString()});
         hasErr = true;
-    }
+    };
     _ = try std.testing.expect(hasErr);
 }
 
@@ -699,12 +731,11 @@ test "invalid operation on float(complement)" {
     const varResolver = try ast.VarResolver.init(allocator);
     try varResolver.resolve(program);
     const typechecker = try semantic.Typechecker.init(allocator);
-    const hasTypeErr = try typechecker.check(program);
     var hasErr = false;
-    if (hasTypeErr) |typeErr| {
-        std.log.warn("Type error: {s}\n", .{typeErr});
+    typechecker.check(program) catch {
+        std.log.warn("Type error: {s}\n", .{try typechecker.getErrString()});
         hasErr = true;
-    }
+    };
     _ = try std.testing.expect(hasErr);
 }
 
@@ -725,12 +756,11 @@ test "invalid operation on float(remainder)" {
     const varResolver = try ast.VarResolver.init(allocator);
     try varResolver.resolve(program);
     const typechecker = try semantic.Typechecker.init(allocator);
-    const hasTypeErr = try typechecker.check(program);
     var hasErr = false;
-    if (hasTypeErr) |typeErr| {
-        std.log.warn("Type error: {s}\n", .{typeErr});
+    typechecker.check(program) catch {
+        std.log.warn("Type error: {s}\n", .{try typechecker.getErrString()});
         hasErr = true;
-    }
+    };
     _ = try std.testing.expect(hasErr);
 }
 
@@ -755,11 +785,10 @@ test "basic semanalyze" {
     try varResolver.resolve(program);
 
     const typechecker = try semantic.Typechecker.init(allocator);
-    const hasTypeError = typechecker.check(program) catch |typeError| {
+    typechecker.check(program) catch |typeError| {
         std.log.warn("Type error: {any}\n", .{typeError});
         unreachable;
     };
-    _ = try std.testing.expect(hasTypeError == null);
 
     const returnType = program.externalDecls.items[1].FunctionDecl.returnType;
     const intType: *const ast.Type = &(.Integer);
@@ -796,16 +825,15 @@ test "deref and addrof parsing" {
     try varResolver.resolve(program);
 
     const typechecker = try semantic.Typechecker.init(allocator);
-    const hasTypeError = typechecker.check(program) catch |typeError| {
+    typechecker.check(program) catch |typeError| {
         std.log.warn("Type error: {any}\n", .{typeError});
         unreachable;
     };
     _ = try std.testing.expectEqualStrings("**int", try std.fmt.allocPrint(
         allocator,
         "{any}",
-        .{program.externalDecls.items[1].FunctionDecl.blockItems.items[1].Declaration.expression.?.getType()},
+        .{program.externalDecls.items[1].FunctionDecl.blockItems.items[1].Declaration.varInitValue.?.Expression.getType()},
     ));
-    std.debug.assert(hasTypeError == null);
 }
 
 test "semantic error: multiplying and dividing pointers" {
@@ -826,8 +854,11 @@ test "semantic error: multiplying and dividing pointers" {
     try varResolver.resolve(program);
 
     const typechecker = try semantic.Typechecker.init(allocator);
-    const hasTypeErr = try typechecker.check(program);
-    _ = try std.testing.expect(hasTypeErr != null);
+
+    typechecker.check(program) catch {
+        return;
+    };
+    unreachable;
 }
 
 test "semantic error: dereferencing a number(non pointer)" {
@@ -847,8 +878,10 @@ test "semantic error: dereferencing a number(non pointer)" {
     try varResolver.resolve(program);
 
     const typechecker = try semantic.Typechecker.init(allocator);
-    const hasTypeErr = try typechecker.check(program);
-    _ = try std.testing.expect(hasTypeErr != null);
+    typechecker.check(program) catch {
+        return;
+    };
+    unreachable;
 }
 
 test "semantic error: pointer to integer comparisions" {
@@ -869,8 +902,10 @@ test "semantic error: pointer to integer comparisions" {
     try varResolver.resolve(program);
 
     const typechecker = try semantic.Typechecker.init(allocator);
-    const hasTypeErr = try typechecker.check(program);
-    _ = try std.testing.expect(hasTypeErr != null);
+    typechecker.check(program) catch {
+        return;
+    };
+    unreachable;
 }
 
 test "non lvalue rejection: assignment" {
@@ -917,6 +952,30 @@ test "non lvalue rejection: addrOf" {
     _ = try std.testing.expect(hasErr);
 }
 
+test "non lvalue rejection: addrOf as lhs" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const programStr =
+        \\ int main(){
+        \\     int* a;
+        \\     int k = 5;
+        \\     &k = a;
+        \\     return 0;
+        \\ }
+    ;
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    const program = try p.parseProgram();
+    const varResolver = try ast.VarResolver.init(allocator);
+    var hasErr = false;
+    varResolver.resolve(program) catch |err| {
+        _ = try std.testing.expectEqual(err, error.NonLvalue);
+        hasErr = true;
+    };
+    _ = try std.testing.expect(hasErr);
+}
+
 test "type conversion of 0 to pointer" {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     const allocator = arena.allocator();
@@ -934,12 +993,11 @@ test "type conversion of 0 to pointer" {
     try varResolver.resolve(program);
 
     const typechecker = try semantic.Typechecker.init(allocator);
-    const hasTypeErr = try typechecker.check(program);
-    _ = try std.testing.expect(hasTypeErr == null);
+    typechecker.check(program) catch unreachable;
     _ = try std.testing.expectEqualStrings("*int", try std.fmt.allocPrint(
         allocator,
         "{any}",
-        .{program.externalDecls.items[0].FunctionDecl.blockItems.items[0].Declaration.expression.?.getType()},
+        .{program.externalDecls.items[0].FunctionDecl.blockItems.items[0].Declaration.varInitValue.?.Expression.getType()},
     ));
 }
 
@@ -960,8 +1018,10 @@ test "type error comparing integer(non-zero) to pointer" {
     try varResolver.resolve(program);
 
     const typechecker = try semantic.Typechecker.init(allocator);
-    const hasTypeErr = try typechecker.check(program);
-    _ = try std.testing.expect(hasTypeErr != null);
+    typechecker.check(program) catch {
+        return;
+    };
+    unreachable;
 }
 
 test "bad pointer in function return" {
@@ -984,9 +1044,12 @@ test "bad pointer in function return" {
     try varResolver.resolve(program);
 
     const typechecker = try semantic.Typechecker.init(allocator);
-    const hasTypeErr = try typechecker.check(program);
-    _ = try std.testing.expect(hasTypeErr != null);
-    std.log.warn("\x1b[31mError\x1b[0m: {s}", .{hasTypeErr.?});
+    var hasErr = false;
+    typechecker.check(program) catch {
+        std.log.warn("\x1b[31mError\x1b[0m: {s}", .{try typechecker.getErrString()});
+        hasErr = true;
+    };
+    _ = try std.testing.expect(hasErr);
 }
 
 test "Type error: pointer to double conversion" {
@@ -1007,9 +1070,12 @@ test "Type error: pointer to double conversion" {
     try varResolver.resolve(program);
 
     const typechecker = try semantic.Typechecker.init(allocator);
-    const hasTypeErr = try typechecker.check(program);
-    _ = try std.testing.expect(hasTypeErr != null);
-    std.log.warn("\x1b[31mError\x1b[0m: {s}", .{hasTypeErr.?});
+    var hasErr = false;
+    typechecker.check(program) catch {
+        std.log.warn("\x1b[31mError\x1b[0m: {s}", .{try typechecker.getErrString()});
+        hasErr = true;
+    };
+    _ = try std.testing.expect(hasErr);
 }
 
 test "static pointer global" {
@@ -1035,12 +1101,11 @@ test "static pointer global" {
     try varResolver.resolve(program);
 
     const typechecker = try semantic.Typechecker.init(allocator);
-    const hasTypeErr = try typechecker.check(program);
-    _ = try std.testing.expect(hasTypeErr == null);
+    try typechecker.check(program);
     _ = try std.testing.expectEqualStrings("*int", try std.fmt.allocPrint(
         allocator,
         "{any}",
-        .{program.externalDecls.items[2].VarDeclaration.expression.?.getType()},
+        .{program.externalDecls.items[2].VarDeclaration.varInitValue.?.Expression.getType()},
     ));
 }
 
@@ -1061,8 +1126,7 @@ test "undeclared pointer" {
     try varResolver.resolve(program);
 
     const typechecker = try semantic.Typechecker.init(allocator);
-    const hasTypeErr = try typechecker.check(program);
-    _ = try std.testing.expect(hasTypeErr == null);
+    typechecker.check(program) catch unreachable;
 }
 
 test "weird pointer cast cases" {
@@ -1083,9 +1147,11 @@ test "weird pointer cast cases" {
     try varResolver.resolve(program);
 
     const typechecker = try semantic.Typechecker.init(allocator);
-    const hasTypeErr = try typechecker.check(program);
-    _ = try std.testing.expect(hasTypeErr != null);
-    std.log.warn("\x1b[31mError:\x1b[0m {s}\n", .{hasTypeErr.?});
+    typechecker.check(program) catch {
+        std.log.warn("\x1b[31mError:\x1b[0m {s}\n", .{try typechecker.getErrString()});
+        return;
+    };
+    unreachable;
 }
 
 test "ternary pointer conversions" {
@@ -1104,11 +1170,317 @@ test "ternary pointer conversions" {
     var p = try parser.Parser.init(allocator, l);
     const program = try p.parseProgram();
     const varResolver = try ast.VarResolver.init(allocator);
+
     try varResolver.resolve(program);
 
     const typechecker = try semantic.Typechecker.init(allocator);
-    const hasTypeErr = try typechecker.check(program);
-    std.log.warn("type of ternary rhs:  {any}\n", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[2].Declaration.expression.?.Ternary.rhs.getType()});
-    _ = try std.testing.expect(hasTypeErr == null);
+    try typechecker.check(program);
+    std.log.warn(
+        "type of ternary rhs:  {any}\n",
+        .{program.externalDecls.items[0].FunctionDecl.blockItems.items[2].Declaration.varInitValue.?.Expression.Ternary.rhs.getType()},
+    );
     //std.log.warn("\x1b[31mError:\x1b[0m {s}\n", .{hasTypeErr.?});
+}
+
+test "assigning to an array" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const programStr =
+        \\ int main(){
+        \\     int k[3] = {1,2,3};
+        \\     k[0] = k[0]+k[1]+k[2];
+        \\     0[k] = 0[k]+1[k]+2[k];
+        \\     return k[0];
+        \\ }
+    ;
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    const program = try p.parseProgram();
+    const varResolver = try ast.VarResolver.init(allocator);
+    try varResolver.resolve(program);
+    const typechecker = try semantic.Typechecker.init(allocator);
+    try typechecker.check(program);
+}
+
+test "typechecking compound initializer" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const programStr =
+        \\ int main(){
+        \\     int k[3] = {1,2,{1,4}};
+        \\     k[0] = k[0]+k[1]+k[2];
+        \\     0[k] = 0[k]+1[k]+2[k];
+        \\     return k[0];
+        \\ }
+    ;
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    const program = try p.parseProgram();
+    const varResolver = try ast.VarResolver.init(allocator);
+    try varResolver.resolve(program);
+    const typechecker = try semantic.Typechecker.init(allocator);
+    typechecker.check(program) catch {
+        std.log.warn("{s}", .{try typechecker.getErrString()});
+        return;
+    };
+    unreachable;
+}
+
+test "array subscript error" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const programStr =
+        \\ int anotherfunc(int* a, int b){
+        \\     return a[0] + b[0];
+        \\ }
+        \\ int main(){
+        \\     int k[3] = {1,2,3};
+        \\     k[0] = k[0]+k[1]+k[2];
+        \\     0[k] = 0[k]+1[k]+2[k];
+        \\     return k[0];
+        \\ }
+    ;
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    const program = try p.parseProgram();
+    const varResolver = try ast.VarResolver.init(allocator);
+    try varResolver.resolve(program);
+    const typechecker = try semantic.Typechecker.init(allocator);
+    typechecker.check(program) catch {
+        std.log.warn("\x1b[31mError\x1b[0m: {s}", .{try typechecker.getErrString()});
+        return;
+    };
+    unreachable;
+}
+
+test "pointer arithmetic - one" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const programStr =
+        \\ int anotherfunc(){
+        \\     int b[2] = {1,2};
+        \\     int* a = b;
+        \\     return *(b+1);
+        \\ }
+        \\ int yetanotherfunc(){
+        \\     int b[2] = {1,2};
+        \\     int *a = b+1;
+        \\     return *(b-1);
+        \\ }
+        \\ long yetanotherlongfunc(){
+        \\     long b[2] = {1,2};
+        \\     long indx = 2;
+        \\     long *a = b+indx;
+        \\     return *(b-indx);
+        \\ }
+        \\ int main(){
+        \\     return anotherfunc();
+        \\ }
+    ;
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    const program = try p.parseProgram();
+    const varResolver = try ast.VarResolver.init(allocator);
+    try varResolver.resolve(program);
+    const typechecker = try semantic.Typechecker.init(allocator);
+    typechecker.check(program) catch {
+        std.log.warn("\x1b[31mError\x1b[0m: {s}", .{try typechecker.getErrString()});
+        unreachable;
+    };
+    // INFO: These asserts are to check if the typechecker handles arithmetic well
+    _ = try std.testing.expectEqualStrings("*int", try std.fmt.allocPrint(allocator, "{}", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[2].Statement.Return.expression.Deref.exp.Binary.type.?}));
+    _ = try std.testing.expectEqual(std.meta.activeTag(program.externalDecls.items[0].FunctionDecl.blockItems.items[2].Statement.Return.expression.Deref.exp.Binary.lhs.*), .AddrOf);
+    _ = try std.testing.expectEqual(std.meta.activeTag(program.externalDecls.items[0].FunctionDecl.blockItems.items[2].Statement.Return.expression.Deref.exp.Binary.rhs.*), .Cast);
+    _ = try std.testing.expectEqual(std.meta.activeTag(program.externalDecls.items[0].FunctionDecl.blockItems.items[2].Statement.Return.expression.Deref.exp.Binary.rhs.Cast.type), .Long);
+    _ = try std.testing.expectEqual(program.externalDecls.items[0].FunctionDecl.blockItems.items[2].Statement.Return.expression.Deref.exp.Binary.rhs.Cast.value.Constant.value.Integer, 1);
+}
+
+test "static arrays typecheck" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const programStr =
+        \\ static int arr[4] = {1,2,3,4};
+        \\ int main() {
+        \\     *arr = 3;
+        \\     *(arr + 1) = 4;
+        \\     if (arr[0] != 3) {
+        \\         return 1;
+        \\     }
+        \\
+        \\     if (arr[1] != 4) {
+        \\         return 2;
+        \\     }
+        \\     return 0;
+        \\ }
+    ;
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    const program = try p.parseProgram();
+    const varResolver = try ast.VarResolver.init(allocator);
+    try varResolver.resolve(program);
+    const typechecker = try semantic.Typechecker.init(allocator);
+    typechecker.check(program) catch {
+        unreachable;
+    };
+}
+
+test "pointer arithmetic - two" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const programStr =
+        \\ int main() {
+        \\     int arr[2] = {1, 2};
+        \\     *arr = 3;
+        \\     *(arr + 1) = 4;
+        \\     if (arr[0] != 3) {
+        \\         return 1;
+        \\     }
+        \\ 
+        \\     if (arr[1] != 4) {
+        \\         return 2;
+        \\     }
+        \\     return 0;
+        \\ }
+    ;
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    const program = try p.parseProgram();
+    const varResolver = try ast.VarResolver.init(allocator);
+    try varResolver.resolve(program);
+    const typechecker = try semantic.Typechecker.init(allocator);
+    typechecker.check(program) catch {
+        unreachable;
+    };
+}
+
+test "pointer arithmetic - three" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const programStr =
+        \\ unsigned long gt(unsigned long *a, unsigned long *b) {
+        \\     return a > b;
+        \\ }
+        \\
+        \\
+        \\ unsigned long lt(unsigned long *a, unsigned long *b) {
+        \\     return a < b;
+        \\ }
+        \\
+        \\ unsigned long ge(unsigned long *a, unsigned long *b) {
+        \\     return a >= b;
+        \\ }
+        \\
+        \\ unsigned long le(unsigned long *a, unsigned long *b) {
+        \\     return a <= b;
+        \\ }
+        \\
+        \\
+        \\ unsigned long gtnested(unsigned long (*a)[5], unsigned long (*b)[5]) {
+        \\     return a > b;
+        \\ }
+        \\
+        \\ unsigned long genested(unsigned long (*a)[5], unsigned long (*b)[5]) {
+        \\     return a >= b;
+        \\ }
+        \\
+        \\
+        \\ int main()
+        \\ {
+        \\     unsigned long arr[5];
+        \\     unsigned long *elemOne = arr + 1;
+        \\     unsigned long *elemFour = arr + 4;
+        \\     if (gt(elemOne, elemFour)) {
+        \\         return 1;
+        \\     }
+        \\     if ((lt(elemOne, elemFour))) {
+        \\     } else {
+        \\         return 2;
+        \\             }
+        \\     if (ge(elemOne, elemOne)) {
+        \\     } else {
+        \\         return 3;
+        \\     }
+        \\     if (le(elemFour, elemOne)) {
+        \\         return 4;
+        \\     }
+        \\
+        \\     unsigned long *onepasttheend = arr + 5;
+        \\     if ((gt(onepasttheend, elemFour))) {
+        \\     } else {
+        \\         return 5;
+        \\     }
+        \\     if (onepasttheend != elemFour + 1) {
+        \\         return 6;
+        \\     }
+        \\
+        \\     unsigned long nestedarr[4][5];
+        \\
+        \\     unsigned long *elemThreeTwo = *(nestedarr + 3) + 2;
+        \\     unsigned long *elemThreeThree = *(nestedarr + 3) + 3;
+        \\
+        \\     if (lt(elemThreeThree, elemThreeTwo)) {
+        \\         return 7;
+        \\     }
+        \\
+        \\     if (ge(elemThreeThree, elemThreeTwo)) {
+        \\
+        \\     } else return 8;
+        \\
+        \\     unsigned long (*subarrayZero)[5] = nestedarr;
+        \\     unsigned long (*subarrayThree)[5] = nestedarr + 3;
+        \\     unsigned long (*subarrayonepasttheend)[5] = nestedarr + 4;
+        \\
+        \\     if (genested(subarrayZero, subarrayThree)){
+        \\         return 9;
+        \\     }
+        \\
+        \\     if ((gtnested(subarrayonepasttheend, subarrayThree))) {
+        \\
+        \\     } else return 10;
+        \\
+        \\     if (subarrayThree != subarrayonepasttheend - 1) {
+        \\         return 11;
+        \\     }
+        \\
+        \\     return 0;
+        \\ }
+    ;
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    const program = try p.parseProgram();
+    const varResolver = try ast.VarResolver.init(allocator);
+    try varResolver.resolve(program);
+    const typechecker = try semantic.Typechecker.init(allocator);
+    typechecker.check(program) catch {
+        unreachable;
+    };
+}
+test "non const element in a global array initializer" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const programStr =
+        \\ int arr[3] = {1,2,3};
+        \\ int main()
+        \\ {
+        \\     return 0;
+        \\ }
+    ;
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    const program = try p.parseProgram();
+    const varResolver = try ast.VarResolver.init(allocator);
+    try varResolver.resolve(program);
+    const typechecker = try semantic.Typechecker.init(allocator);
+    typechecker.check(program) catch {
+        std.log.warn("\x1b[31mError\x1b[0m: {s}", .{try typechecker.getErrString()});
+        return;
+    };
 }

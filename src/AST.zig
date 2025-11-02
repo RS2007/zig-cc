@@ -4,6 +4,10 @@ const parser = @import("./parser.zig");
 const tac = @import("./TAC.zig");
 const semantic = @import("./semantic.zig");
 
+// A different naming convention here to denote globals
+var tac_ONE: tac.Val = .{ .Constant = .{ .Integer = 1 } };
+var tac_ZERO: tac.Val = .{ .Constant = .{ .Integer = 0 } };
+
 pub const MemoryError = error{
     OutOfMemory,
 };
@@ -78,7 +82,7 @@ pub const ExternalDecl = union(ExternalDeclType) {
     //        },
     //    }
     //}
-    pub fn genTAC(externalDecl: *Self, renderer: *TACRenderer, symbolTable: std.StringHashMap(*semantic.Symbol)) CodegenError!?*tac.FunctionDef {
+    pub fn genTAC(externalDecl: *Self, renderer: *TACRenderer, symbolTable: std.StringHashMap(*semantic.Symbol)) !?*tac.FunctionDef {
         switch (externalDecl.*) {
             .FunctionDecl => |functionDecl| {
                 if (!functionDecl.isDefined()) return null;
@@ -141,7 +145,7 @@ pub const BlockItem = union(BlockItemType) {
     //    }
     //}
 
-    pub fn genTAC(self: Self, renderer: *TACRenderer, instructions: *std.ArrayList(*tac.Instruction), symbolTable: *std.StringHashMap(*semantic.Symbol)) CodegenError!void {
+    pub fn genTAC(self: Self, renderer: *TACRenderer, instructions: *std.ArrayList(*tac.Instruction), symbolTable: *std.StringHashMap(*semantic.Symbol)) !void {
         switch (self) {
             .Statement => |stmt| {
                 try stmt.genTACInstructions(renderer, instructions, symbolTable);
@@ -154,9 +158,9 @@ pub const BlockItem = union(BlockItemType) {
 };
 
 pub const Declaration = struct {
-    declarator: *Declarator,
+    name: []u8,
     type: Type,
-    expression: ?*Expression,
+    varInitValue: ?*Initializer,
     storageClass: ?Qualifier = null,
 
     //pub fn format(
@@ -175,42 +179,51 @@ pub const Declaration = struct {
     //}
 
     const Self = @This();
-    pub fn genTACInstructions(self: Self, renderer: *TACRenderer, instructions: *std.ArrayList(*tac.Instruction), symbolTable: *std.StringHashMap(*semantic.Symbol)) CodegenError!void {
-        const hasExpr = self.expression;
-        if (hasExpr) |expression| {
-            const symbolIdentifier = (try self.declarator.unwrapIdentDecl()).Ident;
+    pub fn genTACInstructions(
+        self: Self,
+        renderer: *TACRenderer,
+        instructions: *std.ArrayList(*tac.Instruction),
+        symbolTable: *std.StringHashMap(*semantic.Symbol),
+    ) !void {
+        const hasExpr = self.varInitValue;
+        if (hasExpr) |varInitValue| {
+            const symbolIdentifier = self.name;
             if (symbolTable.get(symbolIdentifier)) |sym| {
                 if (sym.attributes == .StaticAttr) {
                     return;
                 }
             }
-            const rhs = try expression.genTACInstructionsAndCvt(renderer, instructions);
-            const instr = try renderer.allocator.create(tac.Instruction);
-            const lhs = try renderer.allocator.create(tac.Val);
+            const name = self.name;
+            // arrayTmp should store the array and the pointer to it must be stored as the name, since that's how the semantics of array assignment works in C
+            const rhsSymbol = try renderer.allocator.create(assembly.Symbol);
 
-            lhs.* = tac.Val{ .Variable = (try self.declarator.unwrapIdentDecl()).Ident };
-            instr.* = tac.Instruction{ .Copy = tac.Copy{ .src = rhs, .dest = lhs } };
-            try instructions.append(instr);
-        }
-    }
-    pub fn fixReturnType(self: *Self, allocator: std.mem.Allocator) !void {
-        const tentativeType = self.type;
-        switch (self.declarator.*) {
-            .PointerDeclarator => |ptr| {
-                var depth: usize = 1;
-                var runningPtr = ptr;
-                while (true) {
-                    if (std.meta.activeTag(runningPtr.*) == .Ident) break;
-                    if (std.meta.activeTag(runningPtr.*) == .FunDeclarator) unreachable;
-                    depth += 1;
-                    runningPtr = runningPtr.PointerDeclarator;
-                }
-                self.type = try astPointerTypeFromDepth(tentativeType, depth, allocator);
-            },
-            .Ident => {},
-            .FunDeclarator => {
-                std.log.warn("Implement function pointers\n", .{});
-            },
+            switch (varInitValue.*) {
+                .Expression => |expr| {
+                    try varInitValue.genTACInstructionsAndCvt(renderer, instructions, name, null);
+                    rhsSymbol.* = .{
+                        .Obj = .{
+                            .signed = expr.getType().signed(),
+                            .static = false,
+                            .type = assembly.AsmType.from(Type, expr.getType()),
+                        },
+                    };
+                    try renderer.asmSymbolTable.put(name, rhsSymbol);
+                },
+                .ArrayExpr => |arrayExpr| {
+                    rhsSymbol.* = .{ .Obj = .{
+                        .type = .{ .ByteArray = .{
+                            .size = arrayExpr.type.?.Array.size * arrayExpr.initializers.items.len,
+                            .alignment = arrayExpr.type.?.Array.getScalarType().alignment(),
+                        } },
+                        .static = false,
+                        .signed = (try arrayExpr.type.?.decrementDepth()).signed(),
+                    } };
+                    const rhsTemp = try renderer.allocator.create(tac.Val);
+                    rhsTemp.* = .{ .Variable = self.name };
+                    try varInitValue.genTACInstructionsAndCvt(renderer, instructions, rhsTemp.Variable, 0);
+                    try renderer.asmSymbolTable.put(rhsTemp.Variable, rhsSymbol);
+                },
+            }
         }
     }
 };
@@ -249,6 +262,7 @@ pub const ExpressionType = enum {
     // If later it's found that these ops do share them, then they can be moved to unary
     AddrOf,
     Deref,
+    ArrSubscript,
 };
 
 fn convertSymToTAC(tacProgram: *tac.Program, symbolTable: std.StringHashMap(*semantic.Symbol)) MemoryError!void {
@@ -257,26 +271,47 @@ fn convertSymToTAC(tacProgram: *tac.Program, symbolTable: std.StringHashMap(*sem
         const key = iterator.key_ptr.*;
         const value = iterator.value_ptr.*;
         const tacTopLevelDecl = try symbolTable.allocator.create(tac.TopLevel);
+        const staticVar = try symbolTable.allocator.create(tac.StaticVar);
+        if (std.meta.activeTag(value.typeInfo) == .Function) continue;
         switch (value.*.attributes) {
             .StaticAttr => |staticAttr| {
                 switch (staticAttr.init) {
                     .Initial => |initial| {
-                        const staticVar = try symbolTable.allocator.create(tac.StaticVar);
+                        var staticVarConstants = try std.ArrayList(tac.StaticVarInit).initCapacity(symbolTable.allocator, initial.len);
+                        var staticVarTypes = try std.ArrayList(tac.ConstantType).initCapacity(symbolTable.allocator, initial.len);
+                        std.log.warn("Processing constant array: {any}\n", .{initial});
+                        for (initial) |constant| {
+                            staticVarConstants.appendAssumeCapacity(switch (constant.type) {
+                                .Integer => .{ .Integer = constant.value.Integer },
+                                .Void => unreachable,
+                                .Long => .{ .Long = constant.value.Long },
+                                .UInteger => .{ .UInt = constant.value.UInteger },
+                                .ULong => .{ .ULong = constant.value.ULong },
+                                .Float => .{ .Float = constant.value.Float },
+                                .Pointer => unreachable,
+                                .Array => unreachable,
+                                .Function => {
+                                    std.log.warn("Found a function initializer for a static variable: {s}, value: {any}\n", .{ key, value });
+                                    unreachable;
+                                },
+                            });
+                            staticVarTypes.appendAssumeCapacity(switch (constant.type) {
+                                .Integer => tac.ConstantType.Integer,
+                                .Void => unreachable,
+                                .Long => tac.ConstantType.Long,
+                                .UInteger => tac.ConstantType.UInt,
+                                .ULong => tac.ConstantType.ULong,
+                                .Float => tac.ConstantType.Float,
+                                .Pointer => unreachable,
+                                .Array => unreachable,
+                                .Function => unreachable,
+                            });
+                        }
                         staticVar.* = .{
                             .name = @constCast(key),
                             .global = staticAttr.global,
-                            .init = switch (value.typeInfo) {
-                                .Integer => .{ .Integer = initial.value.Integer },
-                                .Long => .{ .Long = initial.value.Long },
-                                .Float => .{ .Float = initial.value.Float },
-                                else => unreachable,
-                            },
-                            .type = switch (value.typeInfo) {
-                                .Integer => tac.ConstantType.Integer,
-                                .Long => tac.ConstantType.Long,
-                                .Float => tac.ConstantType.Float,
-                                else => unreachable,
-                            },
+                            .init = try staticVarConstants.toOwnedSlice(),
+                            .type = try staticVarTypes.toOwnedSlice(),
                         };
                         tacTopLevelDecl.* = .{
                             .StaticVar = staticVar,
@@ -285,27 +320,64 @@ fn convertSymToTAC(tacProgram: *tac.Program, symbolTable: std.StringHashMap(*sem
                     },
                     .NoInit => {},
                     .Tentative => {
-                        const staticVar = try symbolTable.allocator.create(tac.StaticVar);
-                        staticVar.* = .{
-                            .name = @constCast(key),
-                            .global = staticAttr.global,
-                            .init = switch (value.typeInfo) {
-                                .Integer => .{ .Integer = 0 },
-                                .Long => .{ .Long = 0 },
-                                .ULong => .{ .ULong = 0 },
-                                .UInteger => .{ .UInt = 0 },
-                                .Pointer => .{ .ULong = 0 },
-                                else => unreachable,
+                        switch (value.typeInfo) {
+                            .Function => unreachable,
+                            .Array => |arrayTy| {
+                                const nestedSize = arrayTy.getNestedSize();
+                                const scalarType = arrayTy.getScalarType();
+                                var constantsArray = try std.ArrayList(tac.StaticVarInit).initCapacity(symbolTable.allocator, nestedSize);
+                                var constantTypesArray = try std.ArrayList(tac.ConstantType).initCapacity(symbolTable.allocator, nestedSize);
+                                for (0..nestedSize) |_| {
+                                    constantsArray.appendAssumeCapacity(scalarType.zeroedTACStaticVar());
+                                    constantTypesArray.appendAssumeCapacity(try scalarType.to(tac.ConstantType));
+                                }
+                                staticVar.* = .{
+                                    .name = @constCast(key),
+                                    .global = staticAttr.global,
+                                    .init = try constantsArray.toOwnedSlice(),
+                                    .type = try constantTypesArray.toOwnedSlice(),
+                                };
                             },
-                            .type = switch (value.typeInfo) {
-                                .Integer => .Integer,
-                                .Long => .Long,
-                                .ULong => .ULong,
-                                .UInteger => .UInt,
-                                .Pointer => .ULong,
-                                else => unreachable,
+                            .Pointer => {
+                                staticVar.* = .{
+                                    .name = @constCast(key),
+                                    .global = staticAttr.global,
+                                    .init = &[_]tac.StaticVarInit{.{ .ULong = 0 }},
+                                    .type = &[_]tac.ConstantType{.ULong},
+                                };
                             },
-                        };
+                            .Void => unreachable,
+                            .Float, .Integer, .Long, .ULong, .UInteger => {
+                                staticVar.* = .{
+                                    .name = @constCast(key),
+                                    .global = staticAttr.global,
+                                    .init = blk: {
+                                        var staticVarInitArray = try std.ArrayList(tac.StaticVarInit).initCapacity(symbolTable.allocator, 1);
+                                        staticVarInitArray.appendAssumeCapacity(switch (value.typeInfo) {
+                                            .Float => .{ .Float = 0.0 },
+                                            .Integer => .{ .Integer = 0 },
+                                            .Long => .{ .Long = 0 },
+                                            .ULong => .{ .ULong = 0 },
+                                            .UInteger => .{ .UInt = 0 },
+                                            else => unreachable,
+                                        });
+                                        break :blk try staticVarInitArray.toOwnedSlice();
+                                    },
+                                    .type = blk: {
+                                        var staticVarInitArray = try std.ArrayList(tac.ConstantType).initCapacity(symbolTable.allocator, 1);
+                                        staticVarInitArray.appendAssumeCapacity(switch (value.typeInfo) {
+                                            .Float => .Float,
+                                            .Integer => .Integer,
+                                            .Long => .Long,
+                                            .ULong => .ULong,
+                                            .UInteger => .UInt,
+                                            else => unreachable,
+                                        });
+                                        break :blk try staticVarInitArray.toOwnedSlice();
+                                    },
+                                };
+                            },
+                        }
                         tacTopLevelDecl.* = .{
                             .StaticVar = staticVar,
                         };
@@ -325,6 +397,41 @@ pub const Return = struct {
     expression: *Expression,
 };
 
+pub const ArrayTy = struct {
+    ty: *Type,
+    size: usize,
+    pub fn getNestedSize(self: *const ArrayTy) usize {
+        var initSize: usize = 1;
+        var runner = &Type{ .Array = self.* };
+        while (std.meta.activeTag(runner.*) == .Array) {
+            initSize *= runner.Array.size;
+            runner = runner.Array.ty;
+        }
+        return initSize;
+    }
+    pub fn getScalarType(self: *const ArrayTy) Type {
+        var runner = &Type{ .Array = self.* };
+        while (std.meta.activeTag(runner.*) == .Array) {
+            runner = runner.Array.ty;
+        }
+        return runner.*;
+    }
+    pub fn toPointer(self: *const ArrayTy, allocator: std.mem.Allocator) !Type {
+        var runner = &Type{ .Array = self.* };
+        var pointerDepth: usize = 0;
+        while (std.meta.activeTag(runner.*) == .Array) {
+            pointerDepth += 1;
+            runner = runner.Array.ty;
+        }
+        return try astPointerTypeFromDepth(self.getScalarType(), pointerDepth, allocator);
+    }
+};
+
+pub const FunctionTy = struct {
+    args: std.ArrayList(*Type),
+    returnType: *Type,
+};
+
 pub const Type = union(enum) {
     Integer,
     Void,
@@ -332,9 +439,31 @@ pub const Type = union(enum) {
     UInteger,
     ULong,
     Float,
+    Array: ArrayTy,
     Pointer: *Type,
+    Function: FunctionTy,
 
     const Self = @This();
+
+    pub fn eq(self: *Type, other: *Type) bool {
+        if (std.meta.activeTag(self.*) != std.meta.activeTag(other.*)) return false;
+        return switch (self.*) {
+            .Pointer => |ptr| ptr.eq(other.Pointer),
+            .Array => |arr| arr.ty.eq(other.Array.ty) and arr.len == other.Array.len,
+            else => true,
+        };
+    }
+
+    pub fn zeroedTACStaticVar(self: Self) tac.StaticVarInit {
+        return switch (self) {
+            .Integer => .{ .Integer = 0 },
+            .Long => .{ .Long = 0 },
+            .UInteger => .{ .UInt = 0 },
+            .ULong => .{ .ULong = 0 },
+            .Float => .{ .Float = 0.0 },
+            .Array, .Pointer, .Void, .Function => unreachable,
+        };
+    }
 
     pub fn from(tokenType: lexer.TokenType) Self {
         return switch (tokenType) {
@@ -348,20 +477,13 @@ pub const Type = union(enum) {
         };
     }
 
-    pub fn fromSemType(semanticType: *semantic.TypeInfo, allocator: std.mem.Allocator) error{OutOfMemory}!Self {
-        return switch (semanticType.*) {
-            .Integer => .Integer,
-            .Void => .Void,
-            .Long => .Long,
-            .ULong => .ULong,
-            .UInteger => .UInteger,
-            .Function => unreachable,
-            .Float => .Float,
-            .Pointer => |ptr| {
-                const inner = try allocator.create(Type);
-                inner.* = try fromSemType(ptr, allocator);
-                return .{ .Pointer = inner };
-            },
+    pub inline fn alignment(self: Self) u32 {
+        return switch (self) {
+            .Integer, .UInteger => 4,
+            .Long, .ULong, .Pointer => 8,
+            .Float => 8,
+            .Array => unreachable,
+            else => unreachable,
         };
     }
 
@@ -385,7 +507,25 @@ pub const Type = union(enum) {
             else => unreachable,
         };
     }
-    pub fn toSemPointerTy(self: Type, allocator: std.mem.Allocator) error{OutOfMemory}!semantic.TypeInfo {
+    pub fn to(self: Self, typ: type) error{OutOfMemory}!typ {
+        return switch (typ) {
+            tac.ConstantType => try self.toTACConstantType(),
+            else => @compileError("Incorrect usage"),
+        };
+    }
+
+    fn toTACConstantType(self: Type) error{OutOfMemory}!tac.ConstantType {
+        return switch (self) {
+            .Integer => .Integer,
+            .Long => .Long,
+            .ULong => .ULong,
+            .UInteger => .UInt,
+            .Float => .Float,
+            .Pointer, .Array, .Void, .Function => unreachable,
+        };
+    }
+
+    fn toSemPointerTy(self: Type, allocator: std.mem.Allocator) error{OutOfMemory}!semantic.TypeInfo {
         return switch (self) {
             .Integer => .Integer,
             .Long => .Long,
@@ -396,6 +536,11 @@ pub const Type = union(enum) {
                 const inner = try allocator.create(semantic.TypeInfo);
                 inner.* = try ptr.toSemPointerTy(allocator);
                 return .{ .Pointer = inner };
+            },
+            .Array => |arr| {
+                const inner = try allocator.create(semantic.TypeInfo);
+                inner.* = try arr.ty.toSemPointerTy(allocator);
+                return .{ .Array = .{ .size = arr.size, .ty = inner } };
             },
             else => unreachable,
         };
@@ -428,10 +573,46 @@ pub const Type = union(enum) {
             .UInteger => try writer.print("unsigned int", .{}),
             .ULong => try writer.print("unsigned long", .{}),
             .Float => try writer.print("float", .{}),
+            .Array => |arr| {
+                try writer.print("{any}[{any}]", .{ arr.ty, arr.size });
+            },
             .Pointer => |ptr| {
                 try writer.print("*{any}", .{ptr});
             },
+            .Function => |func| {
+                try writer.print("fn: {any}", .{func});
+            },
         }
+    }
+    pub inline fn decrementDepth(self: *const Self) semantic.TypeCheckerError!Type {
+        if (std.meta.activeTag(self.*) != .Pointer and std.meta.activeTag(self.*) != .Array)
+            return semantic.TypeCheckerError.InvalidOperand;
+
+        return if (std.meta.activeTag(self.*) == .Array) self.Array.ty.* else self.*.Pointer.*;
+    }
+
+    // Converts all Array layers anywhere within the nested type to Pointers.
+    // Examples:
+    //  - int[5]            => int*
+    //  - int[5][5]         => int**
+    //  - *unsigned long[5] => **unsigned long
+    // Note: This operates in-place on nested allocated Type nodes where needed
+    // and returns a top-level Type value reflecting the transformation.
+    pub fn changeArrtoPointer(self: Self) Self {
+        return switch (self) {
+            .Array => |arr| blk: {
+                // Recursively convert inner to resolve any nested arrays
+                arr.ty.* = arr.ty.*.changeArrtoPointer();
+                // Replace this array with a pointer to the (now converted) inner type
+                break :blk .{ .Pointer = arr.ty };
+            },
+            .Pointer => |ptr| blk: {
+                // Propagate conversion through the pointee
+                ptr.* = ptr.*.changeArrtoPointer();
+                break :blk .{ .Pointer = ptr };
+            },
+            else => self,
+        };
     }
 };
 
@@ -454,6 +635,20 @@ pub const NonVoidArg = struct {
                     runningPtr = runningPtr.PointerDeclarator;
                 }
                 self.type = try astPointerTypeFromDepth(self.type, depth, allocator);
+            },
+            .ArrayDeclarator => |arrDecl| {
+                // First get the type from array and then get the internal decl and get the pointer depth
+                // The sum of these two will give the actual depth
+                var depth: usize = 0;
+                var runningPtr = arrDecl.declarator;
+                while (true) {
+                    if (std.meta.activeTag(runningPtr.*) == .Ident) break;
+                    if (std.meta.activeTag(runningPtr.*) == .FunDeclarator) unreachable;
+                    if (std.meta.activeTag(runningPtr.*) == .ArrayDeclarator) unreachable;
+                    depth += 1;
+                    runningPtr = runningPtr.PointerDeclarator;
+                }
+                self.type = try astPointerTypeFromDepth(self.type, depth + arrDecl.size.items.len, allocator);
             },
         }
     }
@@ -509,7 +704,7 @@ pub const FunctionDef = struct {
         return self.blockItems.items.len != 0;
     }
 
-    pub fn genTAC(functionDef: FunctionDef, renderer: *TACRenderer, instructions: *std.ArrayList(*tac.Instruction), symbolTable: std.StringHashMap(*semantic.Symbol)) CodegenError!void {
+    pub fn genTAC(functionDef: FunctionDef, renderer: *TACRenderer, instructions: *std.ArrayList(*tac.Instruction), symbolTable: std.StringHashMap(*semantic.Symbol)) !void {
         for (functionDef.blockItems.items) |blockItem| {
             try blockItem.genTAC(renderer, instructions, @constCast(&symbolTable));
         }
@@ -532,6 +727,7 @@ pub const FunctionDef = struct {
             },
             .Ident => unreachable,
             .FunDeclarator => {},
+            .ArrayDeclarator => unreachable,
         }
     }
 };
@@ -544,7 +740,7 @@ pub const While = struct {
 pub const ForInit = union(ForInitType) {
     Declaration: *Declaration,
     Expression: *Expression,
-    pub fn genTACInstructions(forInit: *ForInit, renderer: *TACRenderer, instructions: *std.ArrayList(*tac.Instruction), symbolTable: *std.StringHashMap(*semantic.Symbol)) CodegenError!void {
+    pub fn genTACInstructions(forInit: *ForInit, renderer: *TACRenderer, instructions: *std.ArrayList(*tac.Instruction), symbolTable: *std.StringHashMap(*semantic.Symbol)) !void {
         switch (forInit.*) {
             .Declaration => |decl| {
                 try decl.genTACInstructions(renderer, instructions, symbolTable);
@@ -629,7 +825,7 @@ pub const Statement = union(StatementType) {
     While: While,
     For: For,
 
-    pub fn genTACInstructions(statement: *Statement, renderer: *TACRenderer, instructions: *std.ArrayList(*tac.Instruction), symbolTable: *std.StringHashMap(*semantic.Symbol)) CodegenError!void {
+    pub fn genTACInstructions(statement: *Statement, renderer: *TACRenderer, instructions: *std.ArrayList(*tac.Instruction), symbolTable: *std.StringHashMap(*semantic.Symbol)) semantic.TypeCheckerError!void {
         switch (statement.*) {
             .Return => |retStmt| {
                 const returnSymbol = try retStmt.expression.genTACInstructionsAndCvt(renderer, instructions);
@@ -1004,15 +1200,75 @@ pub const FunDeclarator = struct {
     declarator: *Declarator,
 };
 
+pub const ArrDeclarator = struct {
+    declarator: *Declarator,
+    size: std.ArrayList(usize),
+};
+
+pub const DeclaratorSuffix = union(enum) {
+    ArgList: std.ArrayList(*Arg),
+    ArraySuffix: std.ArrayList(usize),
+};
+
+pub const ArrayInitializer = struct {
+    type: ?Type,
+    initializers: std.ArrayList(*Initializer),
+
+    pub fn genTACInstructions(
+        arrayInit: *ArrayInitializer,
+        renderer: *TACRenderer,
+        instructions: *std.ArrayList(*tac.Instruction),
+        name: []u8,
+        offset: i64,
+    ) semantic.TypeCheckerError!void {
+        const arrType = arrayInit.type.?;
+        const arrMemType = try arrType.decrementDepth();
+        const stepSize = arrMemType.size();
+        for (arrayInit.initializers.items, 0..) |initializer, index| {
+            try initializer.genTACInstructionsAndCvt(renderer, instructions, name, offset + @as(i64, @intCast(index * stepSize)));
+        }
+    }
+};
+
+pub const Initializer = union(enum) {
+    Expression: *Expression,
+    ArrayExpr: *ArrayInitializer,
+
+    pub fn genTACInstructionsAndCvt(initializer: *Initializer, renderer: *TACRenderer, instructions: *std.ArrayList(*tac.Instruction), name: []u8, offset: ?i64) !void {
+        return switch (initializer.*) {
+            .Expression => |expr| {
+                const rhs = try expr.genTACInstructionsAndCvt(renderer, instructions);
+                const instr = try renderer.allocator.create(tac.Instruction);
+
+                if (offset) |off| {
+                    instr.* = tac.Instruction{ .CopyIntoOffset = tac.CopyIntoOffset{ .src = rhs, .dest = name, .offset = off } };
+                } else {
+                    const destOperand = try renderer.allocator.create(tac.Val);
+                    destOperand.* = .{ .Variable = name };
+                    instr.* = tac.Instruction{ .Copy = tac.Copy{
+                        .src = rhs,
+                        .dest = destOperand,
+                    } };
+                }
+                try instructions.append(instr);
+            },
+            .ArrayExpr => |arrayExpr| {
+                std.debug.assert(offset != null);
+                try arrayExpr.genTACInstructions(renderer, instructions, name, offset.?);
+            },
+        };
+    }
+};
+
 pub const DeclaratorError = error{
     NoInnerFuncDeclarator,
     FunctionDeclCantUnwrapIdent,
 };
-
 pub const Declarator = union(enum) {
     Ident: []u8,
     PointerDeclarator: *Declarator,
     FunDeclarator: *FunDeclarator,
+    ArrayDeclarator: *ArrDeclarator,
 
     const Self = @This();
     pub fn unwrapFuncDeclarator(self: *Self) DeclaratorError!*FunDeclarator {
@@ -1020,6 +1276,7 @@ pub const Declarator = union(enum) {
             .FunDeclarator => |funDeclarator| return funDeclarator,
             .PointerDeclarator => |pointerDeclarator| return pointerDeclarator.unwrapFuncDeclarator(),
             .Ident => return error.NoInnerFuncDeclarator,
+            else => unreachable,
         }
     }
     pub fn unwrapIdentDecl(self: *Self) DeclaratorError!*Declarator {
@@ -1027,6 +1284,7 @@ pub const Declarator = union(enum) {
             .Ident => @constCast(self),
             .PointerDeclarator => |pointerDeclarator| pointerDeclarator.unwrapIdentDecl(),
             .FunDeclarator => DeclaratorError.FunctionDeclCantUnwrapIdent,
+            .ArrayDeclarator => |arrDeclarator| arrDeclarator.declarator.unwrapIdentDecl(),
         };
     }
     pub fn containsFuncDeclarator(self: *Self) bool {
@@ -1034,6 +1292,7 @@ pub const Declarator = union(enum) {
             .FunDeclarator => true,
             .Ident => false,
             .PointerDeclarator => |pointerDeclarator| pointerDeclarator.containsFuncDeclarator(),
+            else => false,
         };
     }
     pub fn format(
@@ -1058,6 +1317,9 @@ pub const Declarator = union(enum) {
                     try writer.print("\t{}\n", .{param});
                 }
                 try writer.print("]\n", .{});
+            },
+            .ArrayDeclarator => |arrDecl| {
+                try writer.print("[ Depth: {},  ArrDeclarator: {} ]", .{ arrDecl.size.items.len, arrDecl.declarator });
             },
         }
     }
@@ -1097,6 +1359,12 @@ pub const TACRenderer = struct {
     }
 };
 
+pub const ArrSubscript = struct {
+    type: ?Type,
+    arr: *Expression,
+    index: *Expression,
+};
+
 pub const Expression = union(ExpressionType) {
     Constant: Constant,
     Unary: Unary,
@@ -1108,6 +1376,7 @@ pub const Expression = union(ExpressionType) {
     Cast: Cast,
     AddrOf: AddrOf,
     Deref: Deref,
+    ArrSubscript: ArrSubscript,
     const Self = @This();
 
     pub fn getType(self: *Self) Type {
@@ -1122,19 +1391,21 @@ pub const Expression = union(ExpressionType) {
             .Ternary => |ternary| ternary.type.?,
             .Deref => |deref| deref.type.?,
             .AddrOf => |addrOf| addrOf.type.?,
+            .ArrSubscript => |arrSubscript| arrSubscript.type.?,
         };
     }
 
-    pub inline fn isNullPtr(self: *Self) bool {
+    pub fn isNullPtr(self: *Self) bool {
         return switch (self.*) {
+            .Cast => |cast| cast.value.isNullPtr(),
             .Constant => |constant| @constCast(&constant).isNullPtr(),
             else => false,
         };
     }
 
-    pub fn isLvalue(self: *Self) bool {
+    pub inline fn isLvalue(self: *Self) bool {
         return switch (self.*) {
-            .Identifier, .Deref, .AddrOf, .Assignment => true,
+            .Identifier, .Deref, .Assignment, .ArrSubscript => true,
             else => false,
         };
     }
@@ -1210,7 +1481,10 @@ pub const Expression = union(ExpressionType) {
                     .Integer, .UInteger => assembly.AsmType.LongWord,
                     .Long, .ULong, .Pointer => assembly.AsmType.QuadWord,
                     .Float => if (!options.disableFloat) assembly.AsmType.Float else unreachable,
-                    else => unreachable,
+                    else => {
+                        std.log.warn("Unreachable ast type: {any}\n", .{astType});
+                        unreachable;
+                    },
                 },
                 .signed = switch (astType) {
                     .Integer, .Long => true,
@@ -1228,7 +1502,7 @@ pub const Expression = union(ExpressionType) {
         expression: *Expression,
         renderer: *TACRenderer,
         instructions: *std.ArrayList(*tac.Instruction),
-    ) CodegenError!*tac.BoxedVal {
+    ) semantic.TypeCheckerError!*tac.BoxedVal {
         switch (expression.*) {
             .Cast => |cast| {
                 const inner = try cast.value.genTACInstructionsAndCvt(renderer, instructions);
@@ -1390,10 +1664,8 @@ pub const Expression = union(ExpressionType) {
                 return boxed;
             },
             .Binary => |binary| {
-                const one = try renderer.allocator.create(tac.Val);
-                one.* = tac.Val{ .Constant = .{ .Integer = 1 } };
-                const zero = try renderer.allocator.create(tac.Val);
-                zero.* = tac.Val{ .Constant = .{ .Integer = 0 } };
+                const one = &tac_ONE;
+                const zero = &tac_ZERO;
                 const storeTemp = try renderer.allocator.create(tac.Val);
                 storeTemp.* = tac.Val{ .Variable = try tempGen.genTemp(renderer.allocator) };
                 const storeTempName = storeTemp.Variable;
@@ -1475,6 +1747,7 @@ pub const Expression = union(ExpressionType) {
                 return boxed;
             },
             .Identifier => |iden| {
+                std.log.warn("iden: {s}\n", .{iden.name});
                 const tacVal = try renderer.allocator.create(tac.Val);
                 const boxed = try renderer.allocator.create(tac.BoxedVal);
                 tacVal.* = tac.Val{ .Variable = iden.name };
@@ -1568,6 +1841,46 @@ pub const Expression = union(ExpressionType) {
                 boxed.* = tac.BoxedVal{ .PlainVal = storeTemp };
                 return boxed;
             },
+            .ArrSubscript => |arrSubscript| {
+                std.log.warn("Converting to tac, arr = {any}, index = {any}\n", .{ arrSubscript.arr, arrSubscript.index });
+                const arr = try arrSubscript.arr.genTACInstructionsAndCvt(renderer, instructions);
+                const index = try arrSubscript.index.genTACInstructionsAndCvt(renderer, instructions);
+                const arrAtIndexPtr = try renderer.allocator.create(tac.Val);
+                arrAtIndexPtr.* = tac.Val{
+                    .Variable = try tempGen.genTemp(renderer.allocator),
+                };
+
+                const asmSymbolForArrAtIndexPtr = try getASMSymFromType(
+                    arrSubscript.arr.getType(),
+                    renderer.allocator,
+                    .{ .disableFloat = false },
+                );
+                try renderer.asmSymbolTable.put(arrAtIndexPtr.Variable, asmSymbolForArrAtIndexPtr);
+
+                const storeTemp = try renderer.allocator.create(tac.Val);
+                storeTemp.* = tac.Val{
+                    .Variable = try tempGen.genTemp(renderer.allocator),
+                };
+                const storeType = arrSubscript.type.?;
+                const asmSymbol = try getASMSymFromType(
+                    storeType,
+                    renderer.allocator,
+                    .{ .disableFloat = false },
+                );
+                try renderer.asmSymbolTable.put(storeTemp.Variable, asmSymbol);
+
+                try instructions.appendSlice(&[_]*tac.Instruction{
+                    try tac.createInst(.AddPtr, tac.AddPtr{
+                        .dest = arrAtIndexPtr,
+                        .index = index,
+                        .src = arr,
+                        .scale = @intCast(storeType.size()),
+                    }, renderer.allocator),
+                });
+                const boxed = try renderer.allocator.create(tac.BoxedVal);
+                boxed.* = .{ .DerefedVal = arrAtIndexPtr };
+                return boxed;
+            },
         }
     }
 };
@@ -1619,6 +1932,10 @@ pub fn expressionScopeVariableResolve(self: *VarResolver, expression: *Expressio
         .Deref => |deref| {
             try expressionScopeVariableResolve(self, deref.exp, currentScope);
         },
+        .ArrSubscript => |arrSubscript| {
+            try expressionScopeVariableResolve(self, arrSubscript.arr, currentScope);
+            try expressionScopeVariableResolve(self, arrSubscript.index, currentScope);
+        },
     }
 }
 
@@ -1637,8 +1954,8 @@ pub fn blockStatementScopeVariableResolve(self: *VarResolver, blockItem: *BlockI
             // INFO: the pointer only affects the type and not the name of the
             // symbol
 
-            const identDecl = try decl.declarator.unwrapIdentDecl();
-            if (self.lookup(identDecl.Ident)) |varResolved| {
+            const identDecl = decl.name;
+            if (self.lookup(identDecl)) |varResolved| {
                 // INFO: if there is no linkage for the resolved variable
                 // If it is global and the storage class is extern, that would
                 // give an error
@@ -1685,27 +2002,41 @@ pub fn blockStatementScopeVariableResolve(self: *VarResolver, blockItem: *BlockI
                 sym.* = .{
                     .level = @intCast(self.varMap.items.len - 1),
                     .hasLinkage = true,
-                    .newName = identDecl.Ident,
+                    .newName = identDecl,
                 };
-                try self.varMap.getLast().put(identDecl.Ident, sym);
+                try self.varMap.getLast().put(identDecl, sym);
                 return;
             }
             const sym = try self.allocator.create(VarResolveSymInfo);
             sym.* = .{
                 .level = @intCast(self.varMap.items.len - 1),
                 .hasLinkage = false,
-                .newName = (try std.fmt.allocPrint(self.allocator, "{s}{d}", .{ identDecl.Ident, currentScope })),
+                .newName = (try std.fmt.allocPrint(self.allocator, "{s}{d}", .{ identDecl, currentScope })),
             };
 
-            std.log.warn("Pushing in {s} = {any}\n", .{ identDecl.Ident, sym });
-            try self.varMap.getLast().put(identDecl.Ident, sym);
-            identDecl.Ident = sym.newName;
-            if (decl.expression) |expression| {
-                try expressionScopeVariableResolve(self, expression, currentScope);
+            std.log.warn("Pushing in {s} = {any}\n", .{ identDecl, sym });
+            try self.varMap.getLast().put(identDecl, sym);
+            decl.name = sym.newName;
+            if (decl.varInitValue) |varInitValue| {
+                try varInitValueScopeVariableResolve(self, varInitValue, currentScope);
             }
         },
     }
 }
+
+pub fn varInitValueScopeVariableResolve(self: *VarResolver, varInitValue: *Initializer, currentScope: u32) VarResolveError!void {
+    switch (varInitValue.*) {
+        .ArrayExpr => |arrayExpr| {
+            for (arrayExpr.initializers.items) |initValue| {
+                try varInitValueScopeVariableResolve(self, initValue, currentScope);
+            }
+        },
+        .Expression => |expression| {
+            try expressionScopeVariableResolve(self, expression, currentScope);
+        },
+    }
+}
+
 pub fn statementScopeVariableResolve(self: *VarResolver, statement: *Statement, currentScope: u32) VarResolveError!void {
     switch (statement.*) {
         .Compound => |compound| {
@@ -1739,7 +2070,7 @@ pub fn statementScopeVariableResolve(self: *VarResolver, statement: *Statement, 
             try statementScopeVariableResolve(self, whileStmt.body, currentScope);
         },
         .For => |forStmt| {
-            if (std.mem.eql(u8, @tagName(forStmt.init.*), "Expression")) {
+            if (std.meta.activeTag(forStmt.init.*) == .Expression) {
                 try expressionScopeVariableResolve(self, forStmt.init.Expression, currentScope);
             }
             if (forStmt.condition) |condition|
@@ -1804,6 +2135,9 @@ pub const VarResolver = struct {
             .FunDeclarator => |funcDeclarator| {
                 try self.resolveDeclarator(funcDeclarator.declarator, currentScope);
             },
+            .ArrayDeclarator => |arrDeclarator| {
+                try self.resolveDeclarator(arrDeclarator.declarator, currentScope);
+            },
         }
     }
 
@@ -1832,13 +2166,13 @@ pub const VarResolver = struct {
                 },
                 .VarDeclaration => |decl| {
                     const varSymInfo = try self.allocator.create(VarResolveSymInfo);
-                    const identDecl = try decl.declarator.unwrapIdentDecl();
+                    const identDecl = decl.name;
                     varSymInfo.* = VarResolveSymInfo{
                         .level = @intCast(self.varMap.items.len - 1),
-                        .newName = identDecl.Ident,
+                        .newName = decl.name,
                         .hasLinkage = true,
                     };
-                    try self.varMap.getLast().put(identDecl.Ident, varSymInfo);
+                    try self.varMap.getLast().put(identDecl, varSymInfo);
                 },
             }
         }
@@ -1912,3 +2246,55 @@ pub const Node = union(enum) {
     Statement: *Statement,
     Expression: *Expression,
 };
+
+test "Type.changeArrtoPointer: int[5] -> int*" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    const int_node = try allocator.create(Type);
+    int_node.* = .Integer;
+
+    var t: Type = .{ .Array = .{ .size = 5, .ty = int_node } };
+    const converted = t.changeArrtoPointer();
+
+    try std.testing.expect(std.meta.activeTag(converted) == .Pointer);
+    try std.testing.expect(std.meta.activeTag(converted.Pointer.*) == .Integer);
+}
+
+test "Type.changeArrtoPointer: int[5][5] -> int**" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    const base = try allocator.create(Type);
+    base.* = .Integer;
+
+    const inner_arr = try allocator.create(Type);
+    inner_arr.* = .{ .Array = .{ .size = 5, .ty = base } };
+
+    var t: Type = .{ .Array = .{ .size = 5, .ty = inner_arr } };
+    const converted = t.changeArrtoPointer();
+
+    try std.testing.expect(std.meta.activeTag(converted) == .Pointer);
+    const first = converted.Pointer.*;
+    try std.testing.expect(std.meta.activeTag(first) == .Pointer);
+    try std.testing.expect(std.meta.activeTag(first.Pointer.*) == .Integer);
+}
+
+test "Type.changeArrtoPointer: *unsigned long[5] -> **unsigned long" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    const base = try allocator.create(Type);
+    base.* = .ULong;
+
+    const arr = try allocator.create(Type);
+    arr.* = .{ .Array = .{ .size = 5, .ty = base } };
+
+    var t: Type = .{ .Pointer = arr };
+    const converted = t.changeArrtoPointer();
+
+    try std.testing.expect(std.meta.activeTag(converted) == .Pointer);
+    const first = converted.Pointer.*;
+    try std.testing.expect(std.meta.activeTag(first) == .Pointer);
+    try std.testing.expect(std.meta.activeTag(first.Pointer.*) == .ULong);
+}

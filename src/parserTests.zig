@@ -259,6 +259,27 @@ test "lexing doubles" {
     _ = try std.testing.expectEqual(lexer.TokenType.BITWISE_AND, ampersand.type);
 }
 
+test "array literal" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const programStr = "int a[3] = {1,2,3}";
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    _ = try std.testing.expectEqual((try l.nextToken(allocator)).type, lexer.TokenType.INT_TYPE);
+    _ = try std.testing.expectEqual((try l.nextToken(allocator)).type, lexer.TokenType.IDENTIFIER);
+    _ = try std.testing.expectEqual((try l.nextToken(allocator)).type, lexer.TokenType.LSQUARE);
+    _ = try std.testing.expectEqual((try l.nextToken(allocator)).type, lexer.TokenType.INTEGER);
+    _ = try std.testing.expectEqual((try l.nextToken(allocator)).type, lexer.TokenType.RSQUARE);
+    _ = try std.testing.expectEqual((try l.nextToken(allocator)).type, lexer.TokenType.ASSIGN);
+    _ = try std.testing.expectEqual((try l.nextToken(allocator)).type, lexer.TokenType.LBRACE);
+    _ = try std.testing.expectEqual((try l.nextToken(allocator)).type, lexer.TokenType.INTEGER);
+    _ = try std.testing.expectEqual((try l.nextToken(allocator)).type, lexer.TokenType.COMMA);
+    _ = try std.testing.expectEqual((try l.nextToken(allocator)).type, lexer.TokenType.INTEGER);
+    _ = try std.testing.expectEqual((try l.nextToken(allocator)).type, lexer.TokenType.COMMA);
+    _ = try std.testing.expectEqual((try l.nextToken(allocator)).type, lexer.TokenType.INTEGER);
+    _ = try std.testing.expectEqual((try l.nextToken(allocator)).type, lexer.TokenType.RBRACE);
+}
+
 test "testing basic parser" {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     const allocator = arena.allocator();
@@ -351,7 +372,7 @@ test "parsing declarations and statements" {
     var p = try parser.Parser.init(allocator, l);
     const program = try p.parseProgram();
     std.log.warn("\x1b[34m{any}\x1b[0m", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[0]});
-    std.log.warn("\x1b[34m{s}\x1b[0m", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[0].Declaration.declarator.Ident});
+    std.log.warn("\x1b[34m{s}\x1b[0m", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[0].Declaration.name});
 }
 
 test "parsing declarations right associativity" {
@@ -363,12 +384,12 @@ test "parsing declarations right associativity" {
     var p = try parser.Parser.init(allocator, l);
     const program = try p.parseProgram();
     std.log.warn("\x1b[34m{any}\x1b[0m", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[0]});
-    std.log.warn("\x1b[34m{s}\x1b[0m", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[0].Declaration.declarator.Ident});
+    std.log.warn("\x1b[34m{s}\x1b[0m", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[0].Declaration.name});
     std.log.warn("\x1b[34m{any}\x1b[0m", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[1]});
-    std.log.warn("\x1b[34m{s}\x1b[0m", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[1].Declaration.declarator.Ident});
-    std.log.warn("\x1b[34m{any}\x1b[0m", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[1].Declaration.expression});
-    std.log.warn("\x1b[34m{any}\x1b[0m", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[1].Declaration.expression.?.Assignment.lhs.Identifier});
-    std.log.warn("\x1b[34m{any}\x1b[0m", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[1].Declaration.expression.?.Assignment.rhs});
+    std.log.warn("\x1b[34m{s}\x1b[0m", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[1].Declaration.name});
+    std.log.warn("\x1b[34m{any}\x1b[0m", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[1].Declaration.varInitValue});
+    std.log.warn("\x1b[34m{any}\x1b[0m", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[1].Declaration.varInitValue.?.Expression.Assignment.lhs.Identifier});
+    std.log.warn("\x1b[34m{any}\x1b[0m", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[1].Declaration.varInitValue.?.Expression.Assignment.rhs});
 }
 
 test "test if statements" {
@@ -420,8 +441,8 @@ test "test compound statement parsing" {
     const varResolver = try ast.VarResolver.init(allocator);
     try varResolver.resolve(program);
     std.log.warn("Compound statement: first statement: {any}\n", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[2].Statement.Compound.items[0]});
-    std.log.warn("Declaration: of x: {s}\n", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[1].Declaration.declarator.Ident});
-    std.log.warn("Compound statement: first statement decl varName: {s}\n", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[2].Statement.Compound.items[0].Declaration.declarator.Ident});
+    std.log.warn("Declaration: of x: {s}\n", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[1].Declaration.name});
+    std.log.warn("Compound statement: first statement decl varName: {s}\n", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[2].Statement.Compound.items[0].Declaration.name});
 }
 
 test "test while and dowhile" {
@@ -496,64 +517,6 @@ test "parse multiple functions" {
     }
 }
 
-test "parse globals" {
-    const semantic = @import("semantic.zig");
-    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    const allocator = arena.allocator();
-    defer arena.deinit();
-    const programStr =
-        \\ int k = 3;
-        \\ int main(){
-        \\     int b = 0; 
-        \\     return b+k;
-        \\ }
-    ;
-    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
-    var p = try parser.Parser.init(allocator, l);
-    const program = try p.parseProgram();
-    const varResolver = try ast.VarResolver.init(allocator);
-    try varResolver.resolve(program);
-    const typeChecker = try semantic.Typechecker.init(allocator);
-    if ((try typeChecker.check(program))) |typeError| {
-        std.log.warn("Type error: {any}\n", .{typeError});
-    }
-    std.log.warn("Globals not renamed: {s}\n", .{program.externalDecls.items[0].VarDeclaration.declarator.Ident});
-    std.log.warn("Globals1: {s}\n", .{program.externalDecls.items[1].FunctionDecl.declarator.FunDeclarator.declarator.Ident});
-    std.log.warn("Locals renamed: {s}\n", .{
-        program.externalDecls.items[1].FunctionDecl.blockItems.items[0].Declaration.declarator.Ident,
-    });
-}
-
-test "parse with storage classes" {
-    const semantic = @import("semantic.zig");
-    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    const allocator = arena.allocator();
-    defer arena.deinit();
-    const programStr =
-        \\ extern int k;
-        \\ static int main(){
-        \\     int b = 0; 
-        \\     return b+k;
-        \\ }
-    ;
-    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
-    var p = try parser.Parser.init(allocator, l);
-    const program = try p.parseProgram();
-    const varResolver = try ast.VarResolver.init(allocator);
-    try varResolver.resolve(program);
-    const typeChecker = try semantic.Typechecker.init(allocator);
-    if ((try typeChecker.check(program))) |typeError| {
-        std.log.warn("Type error: {any}\n", .{typeError});
-    }
-    std.log.warn("Globals not renamed: {s}\n", .{program.externalDecls.items[0].VarDeclaration.declarator.Ident});
-    std.log.warn("Globals storageClass: {any}\n", .{program.externalDecls.items[0].VarDeclaration.storageClass});
-    std.log.warn("Globals1: {s}\n", .{program.externalDecls.items[1].FunctionDecl.declarator.FunDeclarator.declarator.Ident});
-    std.log.warn("Globals1 storageClass: {any}\n", .{program.externalDecls.items[1].FunctionDecl.storageClass});
-    std.log.warn("Locals renamed: {s}\n", .{
-        program.externalDecls.items[1].FunctionDecl.blockItems.items[0].Declaration.declarator.Ident,
-    });
-}
-
 test "Negation and bitwise complement codegeneration" {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     const allocator = arena.allocator();
@@ -574,8 +537,8 @@ test "parsing long declarations" {
     const p = try parser.Parser.init(allocator, l);
     const declaration = try p.parseDeclaration();
     _ = try std.testing.expectEqual(declaration.type, ast.Type.Long);
-    _ = try std.testing.expectEqualStrings(declaration.declarator.Ident, "k");
-    _ = try std.testing.expectEqual(declaration.expression.?.Constant.value.Long, 32);
+    _ = try std.testing.expectEqualStrings(declaration.name, "k");
+    _ = try std.testing.expectEqual(declaration.varInitValue.?.Expression.Constant.value.Long, 32);
 }
 
 test "parse function args as long" {
@@ -683,4 +646,85 @@ test "deref and addrof parsing" {
     const program = try p.parseProgram();
     const varResolver = try ast.VarResolver.init(allocator);
     try varResolver.resolve(program);
+}
+
+test "parse initializer" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const programStrings = [_][]u8{
+        @constCast("{1}"),
+        @constCast("{1,2}"),
+        @constCast("{1,2,3,}"),
+    };
+    for (programStrings) |programStr| {
+        const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+        var p = try parser.Parser.init(allocator, l);
+        const initializer = try p.parseInitializer();
+        std.log.warn("\n{}", .{initializer});
+    }
+}
+
+test "parse array literal" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const programStrings = [_][]u8{
+        @constCast("double array[4] = {1.0,2.0,3.0,4.};"),
+        @constCast("long array[4] = {1};"),
+    };
+    const lengths = [_]usize{ 4, 1 };
+    for (programStrings, lengths) |programStr, length| {
+        const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+        var p = try parser.Parser.init(allocator, l);
+        const declaration = try p.parseDeclaration();
+        _ = try std.testing.expectEqual(declaration.varInitValue.?.ArrayExpr.initializers.items.len, length);
+    }
+}
+
+test "indexing an array" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const programStrings = [_][]u8{
+        @constCast("array[4]"),
+        @constCast("array[4][8]"),
+    };
+
+    for (programStrings) |programStr| {
+        const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+        var p = try parser.Parser.init(allocator, l);
+        const expression = try p.parseExpression(0);
+        std.log.warn("Expression: {any}\n", .{expression.ArrSubscript.index});
+        if (std.meta.activeTag(expression.ArrSubscript.arr.*) == .ArrSubscript) {
+            std.log.warn("Inner dimension: {any}\n", .{expression.ArrSubscript.arr.ArrSubscript.index});
+        }
+    }
+}
+
+test "multidim array declaration" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const programStr = "int k[2][2] = {{1,2},{2,3}};";
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    const externalDecl = try p.parseDeclaration();
+    std.log.warn("externalDecl: {any}\n", .{externalDecl});
+}
+
+test "multidim arrays with fancy expressions" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const programStr = "long nestedArray[3][2] = {{a, a + 1}, {3L, -4}, {foo(), 6}};";
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    const externalDecl = try p.parseDeclaration();
+    std.log.warn("externalDecl: {any}\n", .{externalDecl});
+    for (externalDecl.varInitValue.?.ArrayExpr.initializers.items) |arrayItem| {
+        for (arrayItem.ArrayExpr.initializers.items) |innerItem| {
+            std.log.warn("innerItem: {any}\n", .{innerItem});
+        }
+    }
 }
