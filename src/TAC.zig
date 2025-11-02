@@ -17,17 +17,26 @@ pub const FunctionDef = struct {
     instructions: std.ArrayList(*Instruction),
 };
 
+pub const StaticVarInit = union(ConstantType) {
+    Integer: i32,
+    Long: i64,
+    UInt: u32,
+    ULong: u64,
+    Float: f64,
+};
+
 pub const StaticVar = struct {
     name: []u8,
     global: bool,
-    init: union(ConstantType) {
-        Integer: i32,
-        Long: i64,
-        UInt: u32,
-        ULong: u64,
-        Float: f64,
-    },
-    type: ConstantType,
+    init: []const StaticVarInit,
+    type: []const ConstantType,
+
+    pub fn alignment(self: StaticVar) u8 {
+        return switch (self.type[0]) {
+            .Integer, .UInt => 4,
+            .Long, .ULong, .Float => 8,
+        };
+    }
 };
 
 pub fn astSymTabToTacSymTab(allocator: std.mem.Allocator, astSymTab: std.StringHashMap(*semantic.Symbol)) ast.CodegenError!std.StringHashMap(*assembly.Symbol) {
@@ -71,6 +80,14 @@ pub fn astSymTabToTacSymTab(allocator: std.mem.Allocator, astSymTab: std.StringH
                 .static = std.meta.activeTag(sym.attributes) == .StaticAttr,
                 .signed = false,
             } },
+            .Array => |arrayTy| .{ .Obj = .{
+                .type = .{ .ByteArray = .{
+                    .size = arrayTy.getNestedSize(),
+                    .alignment = arrayTy.getScalarType().alignment(),
+                } },
+                .static = std.meta.activeTag(sym.attributes) == .StaticAttr,
+                .signed = arrayTy.getScalarType().signed(),
+            } },
             .Void => unreachable,
         };
         std.log.warn("symName: {s} and asmSymbol: {any}\n", .{ symName, asmSymbol });
@@ -103,21 +120,23 @@ pub const AsmRenderer = struct {
             const asmTopLevelDecl = try self.allocator.create(assembly.TopLevelDecl);
             switch (topLevelDecl.*) {
                 .StaticVar => |statItem| {
+                    std.log.warn("generating tac static var: {s}\n", .{statItem.name});
+                    var staticInitArray = try std.ArrayList(assembly.StaticInit).initCapacity(self.allocator, statItem.init.len);
+                    for (statItem.init) |staticVarInit| {
+                        staticInitArray.appendAssumeCapacity(switch (staticVarInit) {
+                            .Integer => .{ .Integer = staticVarInit.Integer },
+                            .Long => .{ .Long = staticVarInit.Long },
+                            .UInt => .{ .Integer = @intCast(staticVarInit.UInt) },
+                            .ULong => .{ .Long = @intCast(staticVarInit.ULong) },
+                            .Float => .{ .Float = staticVarInit.Float },
+                        });
+                    }
                     const staticVar = try self.allocator.create(assembly.StaticVar);
                     staticVar.* = .{
                         .name = statItem.name,
                         .global = statItem.global,
-                        .init = (switch (statItem.type) {
-                            .Integer => .{ .Integer = statItem.init.Integer },
-                            .Long => .{ .Long = statItem.init.Long },
-                            .UInt => .{ .Integer = @intCast(statItem.init.UInt) },
-                            .ULong => .{ .Long = @intCast(statItem.init.ULong) },
-                            .Float => .{ .Float = statItem.init.Float },
-                        }),
-                        .alignment = switch (statItem.type) {
-                            .Integer, .UInt => 4,
-                            .Long, .ULong, .Float => 8,
-                        },
+                        .init = try staticInitArray.toOwnedSlice(),
+                        .alignment = statItem.alignment(),
                     };
                     asmTopLevelDecl.* = .{
                         .StaticVar = staticVar,
@@ -137,6 +156,7 @@ pub const AsmRenderer = struct {
                     for (fnItem.args.items, 0..) |arg, i| {
                         const movInstructoin = try self.allocator.create(assembly.Instruction);
                         const resolvedArgSym = self.asmSymbolTable.get(arg).?;
+                        std.log.warn("resolvedArgSym for arg {s}: {any}\n", .{ arg, resolvedArgSym.* });
                         movInstructoin.* = assembly.Instruction{
                             .Mov = assembly.MovInst{
                                 .type = switch (resolvedArgSym.*) {
@@ -145,7 +165,7 @@ pub const AsmRenderer = struct {
                                 },
                                 .src = switch (resolvedArgSym.Obj.type) {
                                     .LongWord => .{ .Reg = registers32[i] },
-                                    .ByteArray, .QuadWord => .{ .Reg = registers64[i] },
+                                    .QuadWord, .ByteArray => .{ .Reg = registers64[i] },
                                     .Float => .{ .Reg = registersFloat[i] },
                                 },
                                 .dest = assembly.Operand{
@@ -1013,11 +1033,12 @@ pub const Instruction = union(InstructionType) {
                             .src = assemblyArg,
                             .dest = switch (assemblyArgType) {
                                 .LongWord => .{ .Reg = registers32[i] },
-                                .ByteArray, .QuadWord => .{ .Reg = registers64[i] },
+                                .QuadWord => .{ .Reg = registers64[i] },
                                 .Float => blk: {
                                     floatArgsCount += 1;
                                     break :blk .{ .Reg = registersFloat[i] };
                                 },
+                                .ByteArray => unreachable,
                             },
                             .type = assemblyArgType,
                         }, allocator));

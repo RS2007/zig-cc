@@ -404,7 +404,9 @@ int main(){
 - lvalue can be a dereferenced value, say something like `*k = 3`
 
 - TACKY variables of array type, to distinguish this from scalar values, convert the array into pseudomem operations
+
 ```
  GetAddress(Var("arr"), Var("dst")) -> Lea(PseudoMem("arr",0), Pseudo("dest"))
 ```
 
+- For a static array, we keep a list of consecutive array members in the .data section

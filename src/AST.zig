@@ -158,7 +158,7 @@ pub const BlockItem = union(BlockItemType) {
 };
 
 pub const Declaration = struct {
-    declarator: *Declarator,
+    name: []u8,
     type: Type,
     varInitValue: ?*Initializer,
     storageClass: ?Qualifier = null,
@@ -187,13 +187,13 @@ pub const Declaration = struct {
     ) !void {
         const hasExpr = self.varInitValue;
         if (hasExpr) |varInitValue| {
-            const symbolIdentifier = (try self.declarator.unwrapIdentDecl()).Ident;
+            const symbolIdentifier = self.name;
             if (symbolTable.get(symbolIdentifier)) |sym| {
                 if (sym.attributes == .StaticAttr) {
                     return;
                 }
             }
-            const name = (try self.declarator.unwrapIdentDecl()).Ident;
+            const name = self.name;
             // arrayTmp should store the array and the pointer to it must be stored as the name, since that's how the semantics of array assignment works in C
             const rhsSymbol = try renderer.allocator.create(assembly.Symbol);
 
@@ -212,65 +212,18 @@ pub const Declaration = struct {
                 .ArrayExpr => |arrayExpr| {
                     rhsSymbol.* = .{ .Obj = .{
                         .type = .{ .ByteArray = .{
-                            .size = arrayExpr.type.?.size() * arrayExpr.initializers.items.len,
-                            .alignment = arrayExpr.type.?.alignment(),
+                            .size = arrayExpr.type.?.Array.size * arrayExpr.initializers.items.len,
+                            .alignment = arrayExpr.type.?.Array.getScalarType().alignment(),
                         } },
                         .static = false,
                         .signed = (try arrayExpr.type.?.decrementDepth()).signed(),
                     } };
                     const rhsTemp = try renderer.allocator.create(tac.Val);
-                    rhsTemp.* = .{ .Variable = try tempGen.genTemp(renderer.allocator) };
+                    rhsTemp.* = .{ .Variable = self.name };
                     try varInitValue.genTACInstructionsAndCvt(renderer, instructions, rhsTemp.Variable, 0);
-                    const leaInst = try renderer.allocator.create(tac.Instruction);
-                    const lhsSymbol = try renderer.allocator.create(assembly.Symbol);
-                    const lhsTACVal = try renderer.allocator.create(tac.Val);
-                    lhsTACVal.* = .{ .Variable = name };
-                    lhsSymbol.* = .{ .Obj = .{
-                        .type = .QuadWord,
-                        .static = false,
-                        .signed = false,
-                    } };
                     try renderer.asmSymbolTable.put(rhsTemp.Variable, rhsSymbol);
-                    leaInst.* = .{ .GetAddress = .{
-                        .src = rhsTemp,
-                        .dest = lhsTACVal,
-                    } };
-                    try instructions.append(leaInst);
                 },
             }
-        }
-    }
-    pub fn fixReturnType(self: *Self, allocator: std.mem.Allocator) !void {
-        const tentativeType = self.type;
-        std.log.warn("Declarator: {}", .{self});
-        switch (self.declarator.*) {
-            .PointerDeclarator => |ptr| {
-                var depth: usize = 1;
-                var runningPtr = ptr;
-                while (true) {
-                    if (std.meta.activeTag(runningPtr.*) == .Ident) break;
-                    if (std.meta.activeTag(runningPtr.*) == .FunDeclarator) unreachable;
-                    depth += 1;
-                    runningPtr = runningPtr.PointerDeclarator;
-                }
-                self.type = try astPointerTypeFromDepth(tentativeType, depth, allocator);
-            },
-            .Ident => {},
-            .FunDeclarator => {
-                std.log.warn("Implement function pointers\n", .{});
-            },
-            .ArrayDeclarator => |arrDecl| {
-                var depth: usize = 0;
-                var runningPtr = arrDecl.declarator;
-                while (true) {
-                    if (std.meta.activeTag(runningPtr.*) == .Ident) break;
-                    if (std.meta.activeTag(runningPtr.*) == .FunDeclarator) unreachable;
-                    if (std.meta.activeTag(runningPtr.*) == .ArrayDeclarator) unreachable;
-                    depth += 1;
-                    runningPtr = runningPtr.PointerDeclarator;
-                }
-                self.type = try astPointerTypeFromDepth(self.type, depth + arrDecl.size.items.len, allocator);
-            },
         }
     }
 };
@@ -318,26 +271,47 @@ fn convertSymToTAC(tacProgram: *tac.Program, symbolTable: std.StringHashMap(*sem
         const key = iterator.key_ptr.*;
         const value = iterator.value_ptr.*;
         const tacTopLevelDecl = try symbolTable.allocator.create(tac.TopLevel);
+        const staticVar = try symbolTable.allocator.create(tac.StaticVar);
+        if (std.meta.activeTag(value.typeInfo) == .Function) continue;
         switch (value.*.attributes) {
             .StaticAttr => |staticAttr| {
                 switch (staticAttr.init) {
                     .Initial => |initial| {
-                        const staticVar = try symbolTable.allocator.create(tac.StaticVar);
+                        var staticVarConstants = try std.ArrayList(tac.StaticVarInit).initCapacity(symbolTable.allocator, initial.len);
+                        var staticVarTypes = try std.ArrayList(tac.ConstantType).initCapacity(symbolTable.allocator, initial.len);
+                        std.log.warn("Processing constant array: {any}\n", .{initial});
+                        for (initial) |constant| {
+                            staticVarConstants.appendAssumeCapacity(switch (constant.type) {
+                                .Integer => .{ .Integer = constant.value.Integer },
+                                .Void => unreachable,
+                                .Long => .{ .Long = constant.value.Long },
+                                .UInteger => .{ .UInt = constant.value.UInteger },
+                                .ULong => .{ .ULong = constant.value.ULong },
+                                .Float => .{ .Float = constant.value.Float },
+                                .Pointer => unreachable,
+                                .Array => unreachable,
+                                .Function => {
+                                    std.log.warn("Found a function initializer for a static variable: {s}, value: {any}\n", .{ key, value });
+                                    unreachable;
+                                },
+                            });
+                            staticVarTypes.appendAssumeCapacity(switch (constant.type) {
+                                .Integer => tac.ConstantType.Integer,
+                                .Void => unreachable,
+                                .Long => tac.ConstantType.Long,
+                                .UInteger => tac.ConstantType.UInt,
+                                .ULong => tac.ConstantType.ULong,
+                                .Float => tac.ConstantType.Float,
+                                .Pointer => unreachable,
+                                .Array => unreachable,
+                                .Function => unreachable,
+                            });
+                        }
                         staticVar.* = .{
                             .name = @constCast(key),
                             .global = staticAttr.global,
-                            .init = switch (value.typeInfo) {
-                                .Integer => .{ .Integer = initial.value.Integer },
-                                .Long => .{ .Long = initial.value.Long },
-                                .Float => .{ .Float = initial.value.Float },
-                                else => unreachable,
-                            },
-                            .type = switch (value.typeInfo) {
-                                .Integer => tac.ConstantType.Integer,
-                                .Long => tac.ConstantType.Long,
-                                .Float => tac.ConstantType.Float,
-                                else => unreachable,
-                            },
+                            .init = try staticVarConstants.toOwnedSlice(),
+                            .type = try staticVarTypes.toOwnedSlice(),
                         };
                         tacTopLevelDecl.* = .{
                             .StaticVar = staticVar,
@@ -346,27 +320,64 @@ fn convertSymToTAC(tacProgram: *tac.Program, symbolTable: std.StringHashMap(*sem
                     },
                     .NoInit => {},
                     .Tentative => {
-                        const staticVar = try symbolTable.allocator.create(tac.StaticVar);
-                        staticVar.* = .{
-                            .name = @constCast(key),
-                            .global = staticAttr.global,
-                            .init = switch (value.typeInfo) {
-                                .Integer => .{ .Integer = 0 },
-                                .Long => .{ .Long = 0 },
-                                .ULong => .{ .ULong = 0 },
-                                .UInteger => .{ .UInt = 0 },
-                                .Pointer => .{ .ULong = 0 },
-                                else => unreachable,
+                        switch (value.typeInfo) {
+                            .Function => unreachable,
+                            .Array => |arrayTy| {
+                                const nestedSize = arrayTy.getNestedSize();
+                                const scalarType = arrayTy.getScalarType();
+                                var constantsArray = try std.ArrayList(tac.StaticVarInit).initCapacity(symbolTable.allocator, nestedSize);
+                                var constantTypesArray = try std.ArrayList(tac.ConstantType).initCapacity(symbolTable.allocator, nestedSize);
+                                for (0..nestedSize) |_| {
+                                    constantsArray.appendAssumeCapacity(scalarType.zeroedTACStaticVar());
+                                    constantTypesArray.appendAssumeCapacity(try scalarType.to(tac.ConstantType));
+                                }
+                                staticVar.* = .{
+                                    .name = @constCast(key),
+                                    .global = staticAttr.global,
+                                    .init = try constantsArray.toOwnedSlice(),
+                                    .type = try constantTypesArray.toOwnedSlice(),
+                                };
                             },
-                            .type = switch (value.typeInfo) {
-                                .Integer => .Integer,
-                                .Long => .Long,
-                                .ULong => .ULong,
-                                .UInteger => .UInt,
-                                .Pointer => .ULong,
-                                else => unreachable,
+                            .Pointer => {
+                                staticVar.* = .{
+                                    .name = @constCast(key),
+                                    .global = staticAttr.global,
+                                    .init = &[_]tac.StaticVarInit{.{ .ULong = 0 }},
+                                    .type = &[_]tac.ConstantType{.ULong},
+                                };
                             },
-                        };
+                            .Void => unreachable,
+                            .Float, .Integer, .Long, .ULong, .UInteger => {
+                                staticVar.* = .{
+                                    .name = @constCast(key),
+                                    .global = staticAttr.global,
+                                    .init = blk: {
+                                        var staticVarInitArray = try std.ArrayList(tac.StaticVarInit).initCapacity(symbolTable.allocator, 1);
+                                        staticVarInitArray.appendAssumeCapacity(switch (value.typeInfo) {
+                                            .Float => .{ .Float = 0.0 },
+                                            .Integer => .{ .Integer = 0 },
+                                            .Long => .{ .Long = 0 },
+                                            .ULong => .{ .ULong = 0 },
+                                            .UInteger => .{ .UInt = 0 },
+                                            else => unreachable,
+                                        });
+                                        break :blk try staticVarInitArray.toOwnedSlice();
+                                    },
+                                    .type = blk: {
+                                        var staticVarInitArray = try std.ArrayList(tac.ConstantType).initCapacity(symbolTable.allocator, 1);
+                                        staticVarInitArray.appendAssumeCapacity(switch (value.typeInfo) {
+                                            .Float => .Float,
+                                            .Integer => .Integer,
+                                            .Long => .Long,
+                                            .ULong => .ULong,
+                                            .UInteger => .UInt,
+                                            else => unreachable,
+                                        });
+                                        break :blk try staticVarInitArray.toOwnedSlice();
+                                    },
+                                };
+                            },
+                        }
                         tacTopLevelDecl.* = .{
                             .StaticVar = staticVar,
                         };
@@ -389,6 +400,36 @@ pub const Return = struct {
 pub const ArrayTy = struct {
     ty: *Type,
     size: usize,
+    pub fn getNestedSize(self: *const ArrayTy) usize {
+        var initSize: usize = 1;
+        var runner = &Type{ .Array = self.* };
+        while (std.meta.activeTag(runner.*) == .Array) {
+            initSize *= runner.Array.size;
+            runner = runner.Array.ty;
+        }
+        return initSize;
+    }
+    pub fn getScalarType(self: *const ArrayTy) Type {
+        var runner = &Type{ .Array = self.* };
+        while (std.meta.activeTag(runner.*) == .Array) {
+            runner = runner.Array.ty;
+        }
+        return runner.*;
+    }
+    pub fn toPointer(self: *const ArrayTy, allocator: std.mem.Allocator) !Type {
+        var runner = &Type{ .Array = self.* };
+        var pointerDepth: usize = 0;
+        while (std.meta.activeTag(runner.*) == .Array) {
+            pointerDepth += 1;
+            runner = runner.Array.ty;
+        }
+        return try astPointerTypeFromDepth(self.getScalarType(), pointerDepth, allocator);
+    }
+};
+
+pub const FunctionTy = struct {
+    args: std.ArrayList(*Type),
+    returnType: *Type,
 };
 
 pub const Type = union(enum) {
@@ -400,8 +441,29 @@ pub const Type = union(enum) {
     Float,
     Array: ArrayTy,
     Pointer: *Type,
+    Function: FunctionTy,
 
     const Self = @This();
+
+    pub fn eq(self: *Type, other: *Type) bool {
+        if (std.meta.activeTag(self.*) != std.meta.activeTag(other.*)) return false;
+        return switch (self.*) {
+            .Pointer => |ptr| ptr.eq(other.Pointer),
+            .Array => |arr| arr.ty.eq(other.Array.ty) and arr.len == other.Array.len,
+            else => true,
+        };
+    }
+
+    pub fn zeroedTACStaticVar(self: Self) tac.StaticVarInit {
+        return switch (self) {
+            .Integer => .{ .Integer = 0 },
+            .Long => .{ .Long = 0 },
+            .UInteger => .{ .UInt = 0 },
+            .ULong => .{ .ULong = 0 },
+            .Float => .{ .Float = 0.0 },
+            .Array, .Pointer, .Void, .Function => unreachable,
+        };
+    }
 
     pub fn from(tokenType: lexer.TokenType) Self {
         return switch (tokenType) {
@@ -412,23 +474,6 @@ pub const Type = union(enum) {
             .UNSIGNED_INTEGER => .UInteger,
             .FLOAT_TYPE => .Float,
             else => unreachable,
-        };
-    }
-
-    pub fn fromSemType(semanticType: *semantic.TypeInfo, allocator: std.mem.Allocator) error{OutOfMemory}!Self {
-        return switch (semanticType.*) {
-            .Integer => .Integer,
-            .Void => .Void,
-            .Long => .Long,
-            .ULong => .ULong,
-            .UInteger => .UInteger,
-            .Function => unreachable,
-            .Float => .Float,
-            .Pointer => |ptr| {
-                const inner = try allocator.create(Type);
-                inner.* = try fromSemType(ptr, allocator);
-                return .{ .Pointer = inner };
-            },
         };
     }
 
@@ -462,7 +507,25 @@ pub const Type = union(enum) {
             else => unreachable,
         };
     }
-    pub fn toSemPointerTy(self: Type, allocator: std.mem.Allocator) error{OutOfMemory}!semantic.TypeInfo {
+    pub fn to(self: Self, typ: type) error{OutOfMemory}!typ {
+        return switch (typ) {
+            tac.ConstantType => try self.toTACConstantType(),
+            else => @compileError("Incorrect usage"),
+        };
+    }
+
+    fn toTACConstantType(self: Type) error{OutOfMemory}!tac.ConstantType {
+        return switch (self) {
+            .Integer => .Integer,
+            .Long => .Long,
+            .ULong => .ULong,
+            .UInteger => .UInt,
+            .Float => .Float,
+            .Pointer, .Array, .Void, .Function => unreachable,
+        };
+    }
+
+    fn toSemPointerTy(self: Type, allocator: std.mem.Allocator) error{OutOfMemory}!semantic.TypeInfo {
         return switch (self) {
             .Integer => .Integer,
             .Long => .Long,
@@ -473,6 +536,11 @@ pub const Type = union(enum) {
                 const inner = try allocator.create(semantic.TypeInfo);
                 inner.* = try ptr.toSemPointerTy(allocator);
                 return .{ .Pointer = inner };
+            },
+            .Array => |arr| {
+                const inner = try allocator.create(semantic.TypeInfo);
+                inner.* = try arr.ty.toSemPointerTy(allocator);
+                return .{ .Array = .{ .size = arr.size, .ty = inner } };
             },
             else => unreachable,
         };
@@ -511,13 +579,40 @@ pub const Type = union(enum) {
             .Pointer => |ptr| {
                 try writer.print("*{any}", .{ptr});
             },
+            .Function => |func| {
+                try writer.print("fn: {any}", .{func});
+            },
         }
     }
     pub inline fn decrementDepth(self: *const Self) semantic.TypeCheckerError!Type {
-        if (std.meta.activeTag(self.*) != .Pointer)
+        if (std.meta.activeTag(self.*) != .Pointer and std.meta.activeTag(self.*) != .Array)
             return semantic.TypeCheckerError.InvalidOperand;
 
-        return self.*.Pointer.*;
+        return if (std.meta.activeTag(self.*) == .Array) self.Array.ty.* else self.*.Pointer.*;
+    }
+
+    // Converts all Array layers anywhere within the nested type to Pointers.
+    // Examples:
+    //  - int[5]            => int*
+    //  - int[5][5]         => int**
+    //  - *unsigned long[5] => **unsigned long
+    // Note: This operates in-place on nested allocated Type nodes where needed
+    // and returns a top-level Type value reflecting the transformation.
+    pub fn changeArrtoPointer(self: Self) Self {
+        return switch (self) {
+            .Array => |arr| blk: {
+                // Recursively convert inner to resolve any nested arrays
+                arr.ty.* = arr.ty.*.changeArrtoPointer();
+                // Replace this array with a pointer to the (now converted) inner type
+                break :blk .{ .Pointer = arr.ty };
+            },
+            .Pointer => |ptr| blk: {
+                // Propagate conversion through the pointee
+                ptr.* = ptr.*.changeArrtoPointer();
+                break :blk .{ .Pointer = ptr };
+            },
+            else => self,
+        };
     }
 };
 
@@ -1105,11 +1200,6 @@ pub const FunDeclarator = struct {
     declarator: *Declarator,
 };
 
-pub const DeclaratorError = error{
-    NoInnerFuncDeclarator,
-    FunctionDeclCantUnwrapIdent,
-};
-
 pub const ArrDeclarator = struct {
     declarator: *Declarator,
     size: std.ArrayList(usize),
@@ -1170,6 +1260,10 @@ pub const Initializer = union(enum) {
     }
 };
 
+pub const DeclaratorError = error{
+    NoInnerFuncDeclarator,
+    FunctionDeclCantUnwrapIdent,
+};
 pub const Declarator = union(enum) {
     Ident: []u8,
     PointerDeclarator: *Declarator,
@@ -1387,7 +1481,10 @@ pub const Expression = union(ExpressionType) {
                     .Integer, .UInteger => assembly.AsmType.LongWord,
                     .Long, .ULong, .Pointer => assembly.AsmType.QuadWord,
                     .Float => if (!options.disableFloat) assembly.AsmType.Float else unreachable,
-                    else => unreachable,
+                    else => {
+                        std.log.warn("Unreachable ast type: {any}\n", .{astType});
+                        unreachable;
+                    },
                 },
                 .signed = switch (astType) {
                     .Integer, .Long => true,
@@ -1650,6 +1747,7 @@ pub const Expression = union(ExpressionType) {
                 return boxed;
             },
             .Identifier => |iden| {
+                std.log.warn("iden: {s}\n", .{iden.name});
                 const tacVal = try renderer.allocator.create(tac.Val);
                 const boxed = try renderer.allocator.create(tac.BoxedVal);
                 tacVal.* = tac.Val{ .Variable = iden.name };
@@ -1751,9 +1849,9 @@ pub const Expression = union(ExpressionType) {
                 arrAtIndexPtr.* = tac.Val{
                     .Variable = try tempGen.genTemp(renderer.allocator),
                 };
-                const arrAtIndexPtrType = arrSubscript.arr.getType();
+
                 const asmSymbolForArrAtIndexPtr = try getASMSymFromType(
-                    arrAtIndexPtrType,
+                    arrSubscript.arr.getType(),
                     renderer.allocator,
                     .{ .disableFloat = false },
                 );
@@ -1856,8 +1954,8 @@ pub fn blockStatementScopeVariableResolve(self: *VarResolver, blockItem: *BlockI
             // INFO: the pointer only affects the type and not the name of the
             // symbol
 
-            const identDecl = try decl.declarator.unwrapIdentDecl();
-            if (self.lookup(identDecl.Ident)) |varResolved| {
+            const identDecl = decl.name;
+            if (self.lookup(identDecl)) |varResolved| {
                 // INFO: if there is no linkage for the resolved variable
                 // If it is global and the storage class is extern, that would
                 // give an error
@@ -1904,21 +2002,21 @@ pub fn blockStatementScopeVariableResolve(self: *VarResolver, blockItem: *BlockI
                 sym.* = .{
                     .level = @intCast(self.varMap.items.len - 1),
                     .hasLinkage = true,
-                    .newName = identDecl.Ident,
+                    .newName = identDecl,
                 };
-                try self.varMap.getLast().put(identDecl.Ident, sym);
+                try self.varMap.getLast().put(identDecl, sym);
                 return;
             }
             const sym = try self.allocator.create(VarResolveSymInfo);
             sym.* = .{
                 .level = @intCast(self.varMap.items.len - 1),
                 .hasLinkage = false,
-                .newName = (try std.fmt.allocPrint(self.allocator, "{s}{d}", .{ identDecl.Ident, currentScope })),
+                .newName = (try std.fmt.allocPrint(self.allocator, "{s}{d}", .{ identDecl, currentScope })),
             };
 
-            std.log.warn("Pushing in {s} = {any}\n", .{ identDecl.Ident, sym });
-            try self.varMap.getLast().put(identDecl.Ident, sym);
-            identDecl.Ident = sym.newName;
+            std.log.warn("Pushing in {s} = {any}\n", .{ identDecl, sym });
+            try self.varMap.getLast().put(identDecl, sym);
+            decl.name = sym.newName;
             if (decl.varInitValue) |varInitValue| {
                 try varInitValueScopeVariableResolve(self, varInitValue, currentScope);
             }
@@ -2068,13 +2166,13 @@ pub const VarResolver = struct {
                 },
                 .VarDeclaration => |decl| {
                     const varSymInfo = try self.allocator.create(VarResolveSymInfo);
-                    const identDecl = try decl.declarator.unwrapIdentDecl();
+                    const identDecl = decl.name;
                     varSymInfo.* = VarResolveSymInfo{
                         .level = @intCast(self.varMap.items.len - 1),
-                        .newName = identDecl.Ident,
+                        .newName = decl.name,
                         .hasLinkage = true,
                     };
-                    try self.varMap.getLast().put(identDecl.Ident, varSymInfo);
+                    try self.varMap.getLast().put(identDecl, varSymInfo);
                 },
             }
         }
@@ -2148,3 +2246,55 @@ pub const Node = union(enum) {
     Statement: *Statement,
     Expression: *Expression,
 };
+
+test "Type.changeArrtoPointer: int[5] -> int*" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    const int_node = try allocator.create(Type);
+    int_node.* = .Integer;
+
+    var t: Type = .{ .Array = .{ .size = 5, .ty = int_node } };
+    const converted = t.changeArrtoPointer();
+
+    try std.testing.expect(std.meta.activeTag(converted) == .Pointer);
+    try std.testing.expect(std.meta.activeTag(converted.Pointer.*) == .Integer);
+}
+
+test "Type.changeArrtoPointer: int[5][5] -> int**" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    const base = try allocator.create(Type);
+    base.* = .Integer;
+
+    const inner_arr = try allocator.create(Type);
+    inner_arr.* = .{ .Array = .{ .size = 5, .ty = base } };
+
+    var t: Type = .{ .Array = .{ .size = 5, .ty = inner_arr } };
+    const converted = t.changeArrtoPointer();
+
+    try std.testing.expect(std.meta.activeTag(converted) == .Pointer);
+    const first = converted.Pointer.*;
+    try std.testing.expect(std.meta.activeTag(first) == .Pointer);
+    try std.testing.expect(std.meta.activeTag(first.Pointer.*) == .Integer);
+}
+
+test "Type.changeArrtoPointer: *unsigned long[5] -> **unsigned long" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    const base = try allocator.create(Type);
+    base.* = .ULong;
+
+    const arr = try allocator.create(Type);
+    arr.* = .{ .Array = .{ .size = 5, .ty = base } };
+
+    var t: Type = .{ .Pointer = arr };
+    const converted = t.changeArrtoPointer();
+
+    try std.testing.expect(std.meta.activeTag(converted) == .Pointer);
+    const first = converted.Pointer.*;
+    try std.testing.expect(std.meta.activeTag(first) == .Pointer);
+    try std.testing.expect(std.meta.activeTag(first.Pointer.*) == .ULong);
+}

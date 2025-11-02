@@ -110,9 +110,8 @@ pub const AsmType = union(enum) {
     pub inline fn suffix(asmType: AsmType) []u8 {
         return @constCast(switch (asmType) {
             .LongWord => "l",
-            .QuadWord => "q",
+            .QuadWord, .ByteArray => "q",
             .Float => "sd",
-            .ByteArray => unreachable,
         });
     }
     pub inline fn getAXVariety(asmType: AsmType) Reg {
@@ -239,9 +238,33 @@ pub const StaticInit = union(enum) {
 pub const StaticVar = struct {
     name: []u8,
     global: bool,
-    init: StaticInit,
+    init: []const StaticInit,
     alignment: u32,
     const Self = @This();
+    pub fn isZero(self: *Self) bool {
+        var allZero = true;
+        for (self.init) |init| {
+            if (init.isZero()) continue;
+            allZero = false;
+            break;
+        }
+        return allZero;
+    }
+
+    pub fn renderInits(self: *Self, allocator: std.mem.Allocator) ![]u8 {
+        var buf = std.ArrayList(u8).init(allocator);
+        for (self.init) |init| {
+            try buf.appendSlice(try std.fmt.allocPrint(
+                allocator,
+                "{s} {s}\n",
+                .{
+                    if (init.isZero()) ".zero" else (try init.asmTypeString(allocator)),
+                    if (init.isZero()) (try std.fmt.allocPrint(allocator, "{}", .{self.alignment})) else try init.render(allocator),
+                },
+            ));
+        }
+        return buf.toOwnedSlice();
+    }
     pub fn stringify(self: *Self, allocator: std.mem.Allocator) ast.CodegenError![]u8 {
         // TODO: Hack for now, whenever a glob is encountered, emit the data
         // section directive
@@ -252,15 +275,15 @@ pub const StaticVar = struct {
             \\ {s}
             \\ .align {d}
             \\ {s}:
-            \\ {s} {s}
+            \\ {s}
+            \\
         , .{
             if (self.global) ".globl" else ".local",
             self.name,
-            if (self.init.isZero()) ".bss" else ".data",
+            if (self.isZero()) ".bss" else ".data",
             self.alignment,
             self.name,
-            if (self.init.isZero()) ".zero" else (try self.init.asmTypeString(allocator)),
-            if (self.init.isZero()) (try std.fmt.allocPrint(allocator, "{}", .{self.alignment})) else try self.init.render(allocator),
+            try self.renderInits(allocator),
         });
         try buf.appendSlice(code);
 
@@ -676,7 +699,7 @@ pub const Instruction = union(InstructionType) {
                         return (try std.fmt.allocPrint(allocator, "neg{s} {s}", .{ unary.type.suffix(), try @constCast(&unary.rhs).stringify(allocator) }));
                     },
                     .Not => {
-                        return (try std.fmt.allocPrint(allocator, "notl {s}", .{try @constCast(&unary.rhs).stringify(allocator)}));
+                        return (try std.fmt.allocPrint(allocator, "not{s} {s}", .{ unary.type.suffix(), try @constCast(&unary.rhs).stringify(allocator) }));
                     },
                     .Shr => {
                         return (try std.fmt.allocPrint(allocator, "shr{s} {s}", .{ unary.type.suffix(), try @constCast(&unary.rhs).stringify(allocator) }));
@@ -695,8 +718,10 @@ pub const Instruction = union(InstructionType) {
                 const instrString = try binary.op.stringify(binary.type, allocator);
                 return (try std.fmt.allocPrint(allocator, "{s} {s},{s}", .{ instrString, rhsOperand, lhsOperand }));
             },
-            .Cdq => {
-                return (try std.fmt.allocPrint(allocator, "cdq", .{}));
+            .Cdq => |cdq| {
+                return (try std.fmt.allocPrint(allocator, "{s}", .{
+                    if (cdq == .QuadWord) "cqto" else "cdq",
+                }));
             },
             .Idiv => |idiv| {
                 const operandStringified = try @constCast(&idiv.src).stringify(allocator);
@@ -1107,8 +1132,8 @@ inline fn fixupIdiv(
             const movIdivArgToR10 = try allocator.create(Instruction);
             movIdivArgToR10.* = Instruction{ .Mov = MovInst{
                 .src = Operand{ .Imm = imm },
-                .dest = Operand{ .Reg = Reg.R10 },
-                .type = AsmType.LongWord,
+                .dest = Operand{ .Reg = instruction.Idiv.type.getR10Variety() },
+                .type = instruction.Idiv.type,
             } };
             try fixedInstructions.append(
                 movIdivArgToR10,
@@ -1116,7 +1141,7 @@ inline fn fixupIdiv(
             const divInstruction = try allocator.create(Instruction);
             divInstruction.* = .{
                 .Idiv = .{
-                    .src = Operand{ .Reg = Reg.R10 },
+                    .src = Operand{ .Reg = instruction.Idiv.type.getR10Variety() },
                     .type = instruction.Idiv.type,
                 },
             };

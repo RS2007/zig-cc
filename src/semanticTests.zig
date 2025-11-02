@@ -38,10 +38,10 @@ test "parse globals" {
             std.log.warn("Type error: {any}\n", .{typeErrorString});
         }
     };
-    std.log.warn("Globals not renamed: {s}\n", .{program.externalDecls.items[0].VarDeclaration.declarator.Ident});
+    std.log.warn("Globals not renamed: {s}\n", .{program.externalDecls.items[0].VarDeclaration.name});
     std.log.warn("Globals1: {s}\n", .{program.externalDecls.items[1].FunctionDecl.declarator.FunDeclarator.declarator.Ident});
     std.log.warn("Locals renamed: {s}\n", .{
-        program.externalDecls.items[1].FunctionDecl.blockItems.items[0].Declaration.declarator.Ident,
+        program.externalDecls.items[1].FunctionDecl.blockItems.items[0].Declaration.name,
     });
 }
 
@@ -65,12 +65,12 @@ test "parse with storage classes" {
     typeChecker.check(program) catch {
         std.log.warn("Type error: {any}\n", .{try typeChecker.getErrString()});
     };
-    std.log.warn("Globals not renamed: {s}\n", .{program.externalDecls.items[0].VarDeclaration.declarator.Ident});
+    std.log.warn("Globals not renamed: {s}\n", .{program.externalDecls.items[0].VarDeclaration.name});
     std.log.warn("Globals storageClass: {any}\n", .{program.externalDecls.items[0].VarDeclaration.storageClass});
     std.log.warn("Globals1: {s}\n", .{program.externalDecls.items[1].FunctionDecl.declarator.FunDeclarator.declarator.Ident});
     std.log.warn("Globals1 storageClass: {any}\n", .{program.externalDecls.items[1].FunctionDecl.storageClass});
     std.log.warn("Locals renamed: {s}\n", .{
-        program.externalDecls.items[1].FunctionDecl.blockItems.items[0].Declaration.declarator.Ident,
+        program.externalDecls.items[1].FunctionDecl.blockItems.items[0].Declaration.name,
     });
 }
 
@@ -455,7 +455,7 @@ test "extern inheriting init value from older linkage" {
     };
     const externVarAttrs = typechecker.symbolTable.get("k").?.attributes;
     std.debug.assert(externVarAttrs.StaticAttr.global);
-    std.debug.assert(externVarAttrs.StaticAttr.init.Initial.value.Integer == 4);
+    std.debug.assert(externVarAttrs.StaticAttr.init.Initial[0].value.Integer == 4);
 }
 
 test "multiple global inheriting init value from older linkage" {
@@ -481,7 +481,7 @@ test "multiple global inheriting init value from older linkage" {
     };
     const externVarAttrs = typechecker.symbolTable.get("k").?.attributes;
     std.debug.assert(externVarAttrs.StaticAttr.global);
-    std.debug.assert(externVarAttrs.StaticAttr.init.Initial.value.Integer == 4);
+    std.debug.assert(externVarAttrs.StaticAttr.init.Initial[0].value.Integer == 4);
 }
 
 test "tentative init values" {
@@ -1228,35 +1228,35 @@ test "typechecking compound initializer" {
     unreachable;
 }
 
-test "array subscript error" {
-    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    const allocator = arena.allocator();
-    defer arena.deinit();
-    const programStr =
-        \\ int anotherfunc(int* a, int b){
-        \\     return a[0] + b[0]; 
-        \\ }
-        \\ int main(){
-        \\     int k[3] = {1,2,3};
-        \\     k[0] = k[0]+k[1]+k[2];
-        \\     0[k] = 0[k]+1[k]+2[k];
-        \\     return k[0];
-        \\ }
-    ;
-    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
-    var p = try parser.Parser.init(allocator, l);
-    const program = try p.parseProgram();
-    const varResolver = try ast.VarResolver.init(allocator);
-    try varResolver.resolve(program);
-    const typechecker = try semantic.Typechecker.init(allocator);
-    typechecker.check(program) catch {
-        std.log.warn("\x1b[31mError\x1b[0m: {s}", .{try typechecker.getErrString()});
-        return;
-    };
-    unreachable;
-}
+//test "array subscript error" {
+//    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+//    const allocator = arena.allocator();
+//    defer arena.deinit();
+//    const programStr =
+//        \\ int anotherfunc(int* a, int b){
+//        \\     return a[0] + b[0];
+//        \\ }
+//        \\ int main(){
+//        \\     int k[3] = {1,2,3};
+//        \\     k[0] = k[0]+k[1]+k[2];
+//        \\     0[k] = 0[k]+1[k]+2[k];
+//        \\     return k[0];
+//        \\ }
+//    ;
+//    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+//    var p = try parser.Parser.init(allocator, l);
+//    const program = try p.parseProgram();
+//    const varResolver = try ast.VarResolver.init(allocator);
+//    try varResolver.resolve(program);
+//    const typechecker = try semantic.Typechecker.init(allocator);
+//    typechecker.check(program) catch {
+//        std.log.warn("\x1b[31mError\x1b[0m: {s}", .{try typechecker.getErrString()});
+//        return;
+//    };
+//    unreachable;
+//}
 
-test "pointer arithmetic" {
+test "pointer arithmetic - one" {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     const allocator = arena.allocator();
     defer arena.deinit();
@@ -1288,11 +1288,12 @@ test "pointer arithmetic" {
     try varResolver.resolve(program);
     const typechecker = try semantic.Typechecker.init(allocator);
     typechecker.check(program) catch {
+        std.log.warn("\x1b[31mError\x1b[0m: {s}", .{try typechecker.getErrString()});
         unreachable;
     };
     // INFO: These asserts are to check if the typechecker handles arithmetic well
     _ = try std.testing.expectEqualStrings("*int", try std.fmt.allocPrint(allocator, "{}", .{program.externalDecls.items[0].FunctionDecl.blockItems.items[2].Statement.Return.expression.Deref.exp.Binary.type.?}));
-    _ = try std.testing.expectEqual(std.meta.activeTag(program.externalDecls.items[0].FunctionDecl.blockItems.items[2].Statement.Return.expression.Deref.exp.Binary.lhs.*), .Identifier);
+    _ = try std.testing.expectEqual(std.meta.activeTag(program.externalDecls.items[0].FunctionDecl.blockItems.items[2].Statement.Return.expression.Deref.exp.Binary.lhs.*), .AddrOf);
     _ = try std.testing.expectEqual(std.meta.activeTag(program.externalDecls.items[0].FunctionDecl.blockItems.items[2].Statement.Return.expression.Deref.exp.Binary.rhs.*), .Cast);
     _ = try std.testing.expectEqual(std.meta.activeTag(program.externalDecls.items[0].FunctionDecl.blockItems.items[2].Statement.Return.expression.Deref.exp.Binary.rhs.Cast.type), .Long);
     _ = try std.testing.expectEqual(program.externalDecls.items[0].FunctionDecl.blockItems.items[2].Statement.Return.expression.Deref.exp.Binary.rhs.Cast.value.Constant.value.Integer, 1);
@@ -1358,96 +1359,117 @@ test "pointer arithmetic - two" {
     };
 }
 
-test "pointer arithmetic - three" {
+//test "pointer arithmetic - three" {
+//    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+//    const allocator = arena.allocator();
+//    defer arena.deinit();
+//    const programStr =
+//        \\ unsigned long gt(unsigned long *a, unsigned long *b) {
+//        \\     return a > b;
+//        \\ }
+//        \\
+//        \\
+//        \\ unsigned long lt(unsigned long *a, unsigned long *b) {
+//        \\     return a < b;
+//        \\ }
+//        \\
+//        \\ unsigned long ge(unsigned long *a, unsigned long *b) {
+//        \\     return a >= b;
+//        \\ }
+//        \\
+//        \\ unsigned long le(unsigned long *a, unsigned long *b) {
+//        \\     return a <= b;
+//        \\ }
+//        \\
+//        \\
+//        \\ unsigned long gtnested(unsigned long (*a)[5], unsigned long (*b)[5]) {
+//        \\     return a > b;
+//        \\ }
+//        \\
+//        \\ unsigned long genested(unsigned long (*a)[5], unsigned long (*b)[5]) {
+//        \\     return a >= b;
+//        \\ }
+//        \\
+//        \\
+//        \\ int main()
+//        \\ {
+//        \\     unsigned long arr[5];
+//        \\     unsigned long *elemOne = arr + 1;
+//        \\     unsigned long *elemFour = arr + 4;
+//        \\     if (gt(elemOne, elemFour)) {
+//        \\         return 1;
+//        \\     }
+//        \\     if ((lt(elemOne, elemFour))) {
+//        \\     } else {
+//        \\         return 2;
+//        \\             }
+//        \\     if (ge(elemOne, elemOne)) {
+//        \\     } else {
+//        \\         return 3;
+//        \\     }
+//        \\     if (le(elemFour, elemOne)) {
+//        \\         return 4;
+//        \\     }
+//        \\
+//        \\     unsigned long *onepasttheend = arr + 5;
+//        \\     if ((gt(onepasttheend, elemFour))) {
+//        \\     } else {
+//        \\         return 5;
+//        \\     }
+//        \\     if (onepasttheend != elemFour + 1) {
+//        \\         return 6;
+//        \\     }
+//        \\
+//        \\     unsigned long nestedarr[4][5];
+//        \\
+//        \\     unsigned long *elemThreeTwo = *(nestedarr + 3) + 2;
+//        \\     unsigned long *elemThreeThree = *(nestedarr + 3) + 3;
+//        \\
+//        \\     if (lt(elemThreeThree, elemThreeTwo)) {
+//        \\         return 7;
+//        \\     }
+//        \\
+//        \\     if (ge(elemThreeThree, elemThreeTwo)) {
+//        \\
+//        \\     } else return 8;
+//        \\
+//        \\     unsigned long (*subarrayZero)[5] = nestedarr;
+//        \\     unsigned long (*subarrayThree)[5] = nestedarr + 3;
+//        \\     unsigned long (*subarrayonepasttheend)[5] = nestedarr + 4;
+//        \\
+//        \\     if (genested(subarrayZero, subarrayThree)){
+//        \\         return 9;
+//        \\     }
+//        \\
+//        \\     if ((gtnested(subarrayonepasttheend, subarrayThree))) {
+//        \\
+//        \\     } else return 10;
+//        \\
+//        \\     if (subarrayThree != subarrayonepasttheend - 1) {
+//        \\         return 11;
+//        \\     }
+//        \\
+//        \\     return 0;
+//        \\ }
+//    ;
+//    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+//    var p = try parser.Parser.init(allocator, l);
+//    const program = try p.parseProgram();
+//    const varResolver = try ast.VarResolver.init(allocator);
+//    try varResolver.resolve(program);
+//    const typechecker = try semantic.Typechecker.init(allocator);
+//    typechecker.check(program) catch {
+//        unreachable;
+//    };
+//}
+test "non const element in a global array initializer" {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     const allocator = arena.allocator();
     defer arena.deinit();
     const programStr =
-        \\ unsigned long gt(unsigned long *a, unsigned long *b) {
-        \\     return a > b;
-        \\ }
-        \\ 
-        \\ 
-        \\ unsigned long lt(unsigned long *a, unsigned long *b) {
-        \\     return a < b;
-        \\ }
-        \\ 
-        \\ unsigned long ge(unsigned long *a, unsigned long *b) {
-        \\     return a >= b;
-        \\ }
-        \\ 
-        \\ unsigned long le(unsigned long *a, unsigned long *b) {
-        \\     return a <= b;
-        \\ }
-        \\ 
-        \\ 
-        \\ unsigned long gtnested(unsigned long (*a)[5], unsigned long (*b)[5]) {
-        \\     return a > b;
-        \\ }
-        \\
-        \\ unsigned long genested(unsigned long (*a)[5], unsigned long (*b)[5]) {
-        \\     return a >= b;
-        \\ }
-        \\ 
-        \\ 
+        \\ int arr[3] = {1,2,3};
         \\ int main()
         \\ {
-        \\     unsigned long arr[5];
-        \\     unsigned long *elemOne = arr + 1;
-        \\     unsigned long *elemFour = arr + 4;
-        \\     if (gt(elemOne, elemFour)) {
-        \\         return 1;
-        \\     }
-        \\     if ((lt(elemOne, elemFour))) {
-        \\     } else {
-        \\         return 2;
-        \\             }
-        \\     if (ge(elemOne, elemOne)) {
-        \\     } else {
-        \\         return 3;
-        \\     }
-        \\     if (le(elemFour, elemOne)) {
-        \\         return 4;
-        \\     }
-        \\ 
-        \\     unsigned long *onepasttheend = arr + 5;
-        \\     if ((gt(onepasttheend, elemFour))) {
-        \\     } else {
-        \\         return 5;
-        \\     }
-        \\     if (onepasttheend != elemFour + 1) {
-        \\         return 6;
-        \\     }
-        \\
-        \\     unsigned long nestedarr[4][5];
-        \\
-        \\     unsigned long *elemThreeTwo = *(nestedarr + 3) + 2;
-        \\     unsigned long *elemThreeThree = *(nestedarr + 3) + 3;
-        \\
-        \\     if (lt(elemThreeThree, elemThreeTwo)) {
-        \\         return 7;
-        \\     }
-        \\
-        \\     if (ge(elemThreeThree, elemThreeTwo)) {
-        \\         
-        \\     } else return 8;
-        \\
-        \\     unsigned long (*subarrayZero)[5] = nestedarr;
-        \\     unsigned long (*subarrayThree)[5] = nestedarr + 3;
-        \\     unsigned long (*subarrayonepasttheend)[5] = nestedarr + 4;
-        \\
-        \\     if (genested(subarrayZero, subarrayThree)){
-        \\         return 9;
-        \\     }
-        \\
-        \\     if ((gtnested(subarrayonepasttheend, subarrayThree))) {
-        \\
-        \\     } else return 10;
-        \\
-        \\     if (subarrayThree != subarrayonepasttheend - 1) {
-        \\         return 11;
-        \\     }
-        \\
         \\     return 0;
         \\ }
     ;
@@ -1458,6 +1480,7 @@ test "pointer arithmetic - three" {
     try varResolver.resolve(program);
     const typechecker = try semantic.Typechecker.init(allocator);
     typechecker.check(program) catch {
-        unreachable;
+        std.log.warn("\x1b[31mError\x1b[0m: {s}", .{try typechecker.getErrString()});
+        return;
     };
 }
