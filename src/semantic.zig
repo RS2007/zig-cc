@@ -622,7 +622,7 @@ fn typecheckInitializer(self: *Typechecker, initializer: *AST.Initializer, declT
         .Expression => |expr| {
             newInitializer.Expression = try typecheckExpr(self, expr);
             // Normalize declaration type: decay arrays within nested structure to pointers
-            const declPtrType = declType;
+            const declPtrType = declType.changeArrtoPointer();
             std.log.warn("declaration type: {} and expression type: {}\n", .{ declPtrType, expr.getType() });
             if (!checkConversion(declPtrType, expr.getType()) and !isNullPtrAssignment(expr, declType)) {
                 std.log.warn("error: check conversion: {any} to {any}\n", .{ declType, expr.getType() });
@@ -1202,7 +1202,7 @@ fn typecheckExpr(self: *Typechecker, expr: *AST.Expression) TypeError!*AST.Expre
             }
             for (0..fnSymbol.typeInfo.Function.args.items.len) |i| {
                 const arg = try typecheckExpr(self, fnCall.args.items[i]);
-                const argType = arg.getType();
+                const argType = arg.getType().changeArrtoPointer();
 
                 expr.FunctionCall.args.items[i] = if (std.meta.activeTag(fnSymbol.typeInfo.Function.args.items[i].*) != std.meta.activeTag(argType)) blk: {
                     std.log.warn("Casting function argument in fn: {s} from {any} to {any}\n", .{

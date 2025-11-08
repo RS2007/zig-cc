@@ -1359,110 +1359,110 @@ test "pointer arithmetic - two" {
     };
 }
 
-// TODO: typechecker bug
-//test "pointer arithmetic - three" {
-//    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-//    const allocator = arena.allocator();
-//    defer arena.deinit();
-//    const programStr =
-//        \\ unsigned long gt(unsigned long *a, unsigned long *b) {
-//        \\     return a > b;
-//        \\ }
-//        \\
-//        \\
-//        \\ unsigned long lt(unsigned long *a, unsigned long *b) {
-//        \\     return a < b;
-//        \\ }
-//        \\
-//        \\ unsigned long ge(unsigned long *a, unsigned long *b) {
-//        \\     return a >= b;
-//        \\ }
-//        \\
-//        \\ unsigned long le(unsigned long *a, unsigned long *b) {
-//        \\     return a <= b;
-//        \\ }
-//        \\
-//        \\
-//        \\ unsigned long gtnested(unsigned long (*a)[5], unsigned long (*b)[5]) {
-//        \\     return a > b;
-//        \\ }
-//        \\
-//        \\ unsigned long genested(unsigned long (*a)[5], unsigned long (*b)[5]) {
-//        \\     return a >= b;
-//        \\ }
-//        \\
-//        \\
-//        \\ int main()
-//        \\ {
-//        \\     unsigned long arr[5];
-//        \\     unsigned long *elemOne = arr + 1;
-//        \\     unsigned long *elemFour = arr + 4;
-//        \\     if (gt(elemOne, elemFour)) {
-//        \\         return 1;
-//        \\     }
-//        \\     if ((lt(elemOne, elemFour))) {
-//        \\     } else {
-//        \\         return 2;
-//        \\             }
-//        \\     if (ge(elemOne, elemOne)) {
-//        \\     } else {
-//        \\         return 3;
-//        \\     }
-//        \\     if (le(elemFour, elemOne)) {
-//        \\         return 4;
-//        \\     }
-//        \\
-//        \\     unsigned long *onepasttheend = arr + 5;
-//        \\     if ((gt(onepasttheend, elemFour))) {
-//        \\     } else {
-//        \\         return 5;
-//        \\     }
-//        \\     if (onepasttheend != elemFour + 1) {
-//        \\         return 6;
-//        \\     }
-//        \\
-//        \\     unsigned long nestedarr[4][5];
-//        \\
-//        \\     unsigned long *elemThreeTwo = *(nestedarr + 3) + 2;
-//        \\     unsigned long *elemThreeThree = *(nestedarr + 3) + 3;
-//        \\
-//        \\     if (lt(elemThreeThree, elemThreeTwo)) {
-//        \\         return 7;
-//        \\     }
-//        \\
-//        \\     if (ge(elemThreeThree, elemThreeTwo)) {
-//        \\
-//        \\     } else return 8;
-//        \\
-//        \\     unsigned long (*subarrayZero)[5] = nestedarr;
-//        \\     unsigned long (*subarrayThree)[5] = nestedarr + 3;
-//        \\     unsigned long (*subarrayonepasttheend)[5] = nestedarr + 4;
-//        \\
-//        \\     if (genested(subarrayZero, subarrayThree)){
-//        \\         return 9;
-//        \\     }
-//        \\
-//        \\     if ((gtnested(subarrayonepasttheend, subarrayThree))) {
-//        \\
-//        \\     } else return 10;
-//        \\
-//        \\     if (subarrayThree != subarrayonepasttheend - 1) {
-//        \\         return 11;
-//        \\     }
-//        \\
-//        \\     return 0;
-//        \\ }
-//    ;
-//    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
-//    var p = try parser.Parser.init(allocator, l);
-//    const program = try p.parseProgram();
-//    const varResolver = try ast.VarResolver.init(allocator);
-//    try varResolver.resolve(program);
-//    const typechecker = try semantic.Typechecker.init(allocator);
-//    typechecker.check(program) catch {
-//        unreachable;
-//    };
-//}
+test "pointer arithmetic - three" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const programStr =
+        \\ unsigned long gt(unsigned long *a, unsigned long *b) {
+        \\     return a > b;
+        \\ }
+        \\
+        \\
+        \\ unsigned long lt(unsigned long *a, unsigned long *b) {
+        \\     return a < b;
+        \\ }
+        \\
+        \\ unsigned long ge(unsigned long *a, unsigned long *b) {
+        \\     return a >= b;
+        \\ }
+        \\
+        \\ unsigned long le(unsigned long *a, unsigned long *b) {
+        \\     return a <= b;
+        \\ }
+        \\
+        \\
+        \\ unsigned long gtnested(unsigned long (*a)[5], unsigned long (*b)[5]) {
+        \\     return a > b;
+        \\ }
+        \\
+        \\ unsigned long genested(unsigned long (*a)[5], unsigned long (*b)[5]) {
+        \\     return a >= b;
+        \\ }
+        \\
+        \\
+        \\ int main()
+        \\ {
+        \\     unsigned long arr[5];
+        \\     unsigned long *elemOne = arr + 1;
+        \\     unsigned long *elemFour = arr + 4;
+        \\     if (gt(elemOne, elemFour)) {
+        \\         return 1;
+        \\     }
+        \\     if ((lt(elemOne, elemFour))) {
+        \\     } else {
+        \\         return 2;
+        \\             }
+        \\     if (ge(elemOne, elemOne)) {
+        \\     } else {
+        \\         return 3;
+        \\     }
+        \\     if (le(elemFour, elemOne)) {
+        \\         return 4;
+        \\     }
+        \\
+        \\     unsigned long *onepasttheend = arr + 5;
+        \\     if ((gt(onepasttheend, elemFour))) {
+        \\     } else {
+        \\         return 5;
+        \\     }
+        \\     if (onepasttheend != elemFour + 1) {
+        \\         return 6;
+        \\     }
+        \\
+        \\     unsigned long nestedarr[4][5];
+        \\
+        \\     unsigned long *elemThreeTwo = *(nestedarr + 3) + 2;
+        \\     unsigned long *elemThreeThree = *(nestedarr + 3) + 3;
+        \\
+        \\     if (lt(elemThreeThree, elemThreeTwo)) {
+        \\         return 7;
+        \\     }
+        \\
+        \\     if (ge(elemThreeThree, elemThreeTwo)) {
+        \\
+        \\     } else return 8;
+        \\
+        \\     unsigned long (*subarrayZero)[5] = nestedarr;
+        \\     unsigned long (*subarrayThree)[5] = nestedarr + 3;
+        \\     unsigned long (*subarrayonepasttheend)[5] = nestedarr + 4;
+        \\
+        \\     if (genested(subarrayZero, subarrayThree)){
+        \\         return 9;
+        \\     }
+        \\
+        \\     if ((gtnested(subarrayonepasttheend, subarrayThree))) {
+        \\
+        \\     } else return 10;
+        \\
+        \\     if (subarrayThree != subarrayonepasttheend - 1) {
+        \\         return 11;
+        \\     }
+        \\
+        \\     return 0;
+        \\ }
+    ;
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    const program = try p.parseProgram();
+    const varResolver = try ast.VarResolver.init(allocator);
+    try varResolver.resolve(program);
+    const typechecker = try semantic.Typechecker.init(allocator);
+    typechecker.check(program) catch {
+        unreachable;
+    };
+}
+
 test "non const element in a global array initializer" {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     const allocator = arena.allocator();
