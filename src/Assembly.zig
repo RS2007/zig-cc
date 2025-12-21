@@ -1529,8 +1529,11 @@ pub fn replacePseudoRegs(function: *Function, allocator: std.mem.Allocator, asmS
 
     if (topOfStack != 0) {
         const allocateStackInst = try allocator.create(Instruction);
+        // Align stack allocation to 16 bytes to satisfy SysV x86-64 ABI.
+        const need_bytes_i32: i32 = @as(i32, @intCast(abs(topOfStack)));
+        const aligned_bytes: i32 = alignNumUp(need_bytes_i32, 16);
         allocateStackInst.* = Instruction{
-            .AllocateStack = @as(u32, abs(topOfStack)),
+            .AllocateStack = @as(u32, @intCast(aligned_bytes)),
         };
         try function.instructions.insert(
             0,

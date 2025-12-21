@@ -1304,9 +1304,15 @@ fn typecheckExpr(self: *Typechecker, expr: *AST.Expression) TypeError!*AST.Expre
                     std.log.warn("type error in pointer expression", .{});
                     return TypeError.InvalidOperand;
                 }
-                // Preserve pointer-to-array when applicable; do not force
-                // recursive array-to-pointer decay here.
-                expr.Binary.type = commonType.?;
+                // For pointer comparisons (==, !=, <, <=, >, >=), the result
+                // is an integer (bool-like) value, not a pointer.
+                if (expr.Binary.op.isCompareOp()) {
+                    expr.Binary.type = .Integer;
+                } else {
+                    // Preserve pointer-to-array when applicable; do not force
+                    // recursive array-to-pointer decay here.
+                    expr.Binary.type = commonType.?;
+                }
                 return expr;
             }
             // Non pointer expressions
