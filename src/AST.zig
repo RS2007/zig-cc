@@ -210,14 +210,19 @@ pub const Declaration = struct {
                     try renderer.asmSymbolTable.put(name, rhsSymbol);
                 },
                 .ArrayExpr => |arrayExpr| {
-                    rhsSymbol.* = .{ .Obj = .{
-                        .type = .{ .ByteArray = .{
-                            .size = arrayExpr.type.?.Array.size * arrayExpr.initializers.items.len,
-                            .alignment = arrayExpr.type.?.Array.getScalarType().alignment(),
-                        } },
-                        .static = false,
-                        .signed = (try arrayExpr.type.?.decrementDepth()).signed(),
-                    } };
+                    const scalar_ty = arrayExpr.type.?.Array.getScalarType();
+                    rhsSymbol.* = .{
+                        .Obj = .{
+                            .type = .{
+                                .ByteArray = .{
+                                    .size = self.type.size(), // total bytes for the declared array
+                                    .alignment = scalar_ty.alignment(),
+                                },
+                            },
+                            .static = false,
+                            .signed = scalar_ty.signed(),
+                        },
+                    };
                     const rhsTemp = try renderer.allocator.create(tac.Val);
                     rhsTemp.* = .{ .Variable = self.name };
                     try varInitValue.genTACInstructionsAndCvt(renderer, instructions, rhsTemp.Variable, 0);
@@ -487,10 +492,20 @@ pub const Type = union(enum) {
         };
     }
 
+    // This function needs to be introduced to allow for an inlined pub fn size
+    inline fn scalarByteSizeOf(ty: Self) usize {
+        return switch (ty) {
+            .Integer, .UInteger => 4,
+            .Pointer, .Long, .ULong, .Float => 8,
+            else => unreachable,
+        };
+    }
+
     pub inline fn size(self: Self) usize {
         return switch (self) {
             .Integer, .UInteger => 4,
             .Pointer, .Long, .ULong, .Float => 8,
+            .Array => |arr| arr.getNestedSize() * scalarByteSizeOf(arr.getScalarType()),
             else => {
                 std.log.warn("size of {any} is not implemented\n", .{self});
                 unreachable;
@@ -584,32 +599,62 @@ pub const Type = union(enum) {
             },
         }
     }
-    pub inline fn decrementDepth(self: *const Self) semantic.TypeCheckerError!Type {
+
+    // INFO: Exists to avoid aliasing
+    pub fn deepCopy(self: Self, allocator: std.mem.Allocator) MemoryError!Self {
+        return switch (self) {
+            .Integer, .Void, .Long, .UInteger, .ULong, .Float => self,
+            .Pointer => |ptr| blk: {
+                const new_inner = try allocator.create(Type);
+                new_inner.* = try ptr.*.deepCopy(allocator);
+                break :blk .{ .Pointer = new_inner };
+            },
+            .Array => |arr| blk: {
+                const new_inner = try allocator.create(Type);
+                new_inner.* = try arr.ty.*.deepCopy(allocator);
+                break :blk .{ .Array = .{ .size = arr.size, .ty = new_inner } };
+            },
+            .Function => |func| blk: {
+                const new_ret = try allocator.create(Type);
+                new_ret.* = try func.returnType.*.deepCopy(allocator);
+                var new_args = std.ArrayList(*Type).init(allocator);
+                try new_args.ensureTotalCapacity(func.args.items.len);
+                for (func.args.items) |arg_ptr| {
+                    const copied_arg_ptr = try allocator.create(Type);
+                    copied_arg_ptr.* = try arg_ptr.*.deepCopy(allocator);
+                    new_args.appendAssumeCapacity(copied_arg_ptr);
+                }
+                break :blk .{ .Function = .{ .args = new_args, .returnType = new_ret } };
+            },
+        };
+    }
+
+    // INFO: Returns a copied type with one layer of pointer/array removed.
+    pub inline fn decrementDepth(self: *const Self, allocator: std.mem.Allocator) semantic.TypeCheckerError!Type {
         if (std.meta.activeTag(self.*) != .Pointer and std.meta.activeTag(self.*) != .Array)
             return semantic.TypeCheckerError.InvalidOperand;
 
-        return if (std.meta.activeTag(self.*) == .Array) self.Array.ty.* else self.*.Pointer.*;
+        return switch (self.*) {
+            .Pointer => try self.*.Pointer.*.deepCopy(allocator),
+            .Array => |arr| try arr.ty.*.deepCopy(allocator),
+            else => unreachable,
+        };
     }
 
-    // Converts all Array layers anywhere within the nested type to Pointers.
-    // Examples:
-    //  - int[5]            => int*
-    //  - int[5][5]         => int**
-    //  - *unsigned long[5] => **unsigned long
-    // Note: This operates in-place on nested allocated Type nodes where needed
-    // and returns a top-level Type value reflecting the transformation.
-    pub fn changeArrtoPointer(self: Self) Self {
+    // INFO: Copied here again to avoid aliasing
+    pub fn changeArrtoPointer(self: Self, allocator: std.mem.Allocator) MemoryError!Self {
         return switch (self) {
             .Array => |arr| blk: {
-                // Recursively convert inner to resolve any nested arrays
-                arr.ty.* = arr.ty.*.changeArrtoPointer();
-                // Replace this array with a pointer to the (now converted) inner type
-                break :blk .{ .Pointer = arr.ty };
+                const inner_converted = try arr.ty.*.changeArrtoPointer(allocator);
+                const new_inner = try allocator.create(Type);
+                new_inner.* = inner_converted;
+                break :blk .{ .Pointer = new_inner };
             },
             .Pointer => |ptr| blk: {
-                // Propagate conversion through the pointee
-                ptr.* = ptr.*.changeArrtoPointer();
-                break :blk .{ .Pointer = ptr };
+                const inner_converted = try ptr.*.changeArrtoPointer(allocator);
+                const new_inner = try allocator.create(Type);
+                new_inner.* = inner_converted;
+                break :blk .{ .Pointer = new_inner };
             },
             else => self,
         };
@@ -619,39 +664,6 @@ pub const Type = union(enum) {
 pub const NonVoidArg = struct {
     type: Type,
     declarator: *Declarator,
-    const Self = @This();
-
-    pub fn fixType(self: *Self, allocator: std.mem.Allocator) !void {
-        switch (self.declarator.*) {
-            .FunDeclarator => unreachable,
-            .Ident => {},
-            .PointerDeclarator => |ptr| {
-                var depth: usize = 1;
-                var runningPtr = ptr;
-                while (true) {
-                    if (std.meta.activeTag(runningPtr.*) == .Ident) break;
-                    if (std.meta.activeTag(runningPtr.*) == .FunDeclarator) unreachable;
-                    depth += 1;
-                    runningPtr = runningPtr.PointerDeclarator;
-                }
-                self.type = try astPointerTypeFromDepth(self.type, depth, allocator);
-            },
-            .ArrayDeclarator => |arrDecl| {
-                // First get the type from array and then get the internal decl and get the pointer depth
-                // The sum of these two will give the actual depth
-                var depth: usize = 0;
-                var runningPtr = arrDecl.declarator;
-                while (true) {
-                    if (std.meta.activeTag(runningPtr.*) == .Ident) break;
-                    if (std.meta.activeTag(runningPtr.*) == .FunDeclarator) unreachable;
-                    if (std.meta.activeTag(runningPtr.*) == .ArrayDeclarator) unreachable;
-                    depth += 1;
-                    runningPtr = runningPtr.PointerDeclarator;
-                }
-                self.type = try astPointerTypeFromDepth(self.type, depth + arrDecl.size.items.len, allocator);
-            },
-        }
-    }
 };
 
 // INFO: Might be a bad idea, maybe look into this later?
@@ -711,23 +723,46 @@ pub const FunctionDef = struct {
     }
     pub fn fixReturnType(self: *FunctionDef, allocator: std.mem.Allocator) !void {
         const tentativeReturnType = self.returnType;
-        switch (self.declarator.*) {
-            .PointerDeclarator => |ptr| {
-                // find pointer indirections till it hits the function
-                // declarator
-                var depth: usize = 1;
-                var runningPtr = ptr;
-                while (true) {
-                    if (std.meta.activeTag(runningPtr.*) == .Ident) unreachable;
-                    if (std.meta.activeTag(runningPtr.*) == .FunDeclarator) break;
-                    depth += 1;
-                    runningPtr = runningPtr.PointerDeclarator;
-                }
-                self.returnType = try astPointerTypeFromDepth(tentativeReturnType, depth, allocator);
-            },
-            .Ident => unreachable,
-            .FunDeclarator => {},
-            .ArrayDeclarator => unreachable,
+        var pointer_depth: usize = 0;
+        var array_dims = std.ArrayList(usize).init(allocator);
+        defer array_dims.deinit();
+
+        var runner: *Declarator = self.declarator;
+        // Walk wrappers until we reach the function declarator, collecting
+        // array dimensions and pointer depth that contribute to the return type.
+        while (true) {
+            switch (runner.*) {
+                .PointerDeclarator => |ptr| {
+                    pointer_depth += 1;
+                    runner = ptr;
+                },
+                .ArrayDeclarator => |arr| {
+                    for (arr.size.items) |sz| {
+                        try array_dims.append(sz);
+                    }
+                    runner = arr.declarator;
+                },
+                .FunDeclarator => break,
+                .Ident => unreachable,
+            }
+        }
+
+        // Build the base return type by applying array dimensions (from inner to outer)
+        var base: Type = tentativeReturnType;
+        if (array_dims.items.len > 0) {
+            var i: isize = @as(isize, @intCast(array_dims.items.len)) - 1;
+            while (i >= 0) : (i -= 1) {
+                const inner = try allocator.create(Type);
+                inner.* = base;
+                base = .{ .Array = .{ .size = array_dims.items[@as(usize, @intCast(i))], .ty = inner } };
+            }
+        }
+
+        // Finally, apply the pointer depth collected before the function.
+        if (pointer_depth > 0) {
+            self.returnType = try astPointerTypeFromDepth(base, pointer_depth, allocator);
+        } else {
+            self.returnType = base; // usually same as tentativeReturnType
         }
     }
 };
@@ -1222,7 +1257,7 @@ pub const ArrayInitializer = struct {
         offset: i64,
     ) semantic.TypeCheckerError!void {
         const arrType = arrayInit.type.?;
-        const arrMemType = try arrType.decrementDepth();
+        const arrMemType = try arrType.decrementDepth(renderer.allocator);
         const stepSize = arrMemType.size();
         for (arrayInit.initializers.items, 0..) |initializer, index| {
             try initializer.genTACInstructionsAndCvt(renderer, instructions, name, offset + @as(i64, @intCast(index * stepSize)));
@@ -1237,6 +1272,7 @@ pub const Initializer = union(enum) {
     pub fn genTACInstructionsAndCvt(initializer: *Initializer, renderer: *TACRenderer, instructions: *std.ArrayList(*tac.Instruction), name: []u8, offset: ?i64) !void {
         return switch (initializer.*) {
             .Expression => |expr| {
+                std.log.info("Generating tac for ast.initializer: {any}\n", .{expr});
                 const rhs = try expr.genTACInstructionsAndCvt(renderer, instructions);
                 const instr = try renderer.allocator.create(tac.Instruction);
 
@@ -1275,8 +1311,8 @@ pub const Declarator = union(enum) {
         switch (self.*) {
             .FunDeclarator => |funDeclarator| return funDeclarator,
             .PointerDeclarator => |pointerDeclarator| return pointerDeclarator.unwrapFuncDeclarator(),
+            .ArrayDeclarator => |arrDeclarator| return arrDeclarator.declarator.unwrapFuncDeclarator(),
             .Ident => return error.NoInnerFuncDeclarator,
-            else => unreachable,
         }
     }
     pub fn unwrapIdentDecl(self: *Self) DeclaratorError!*Declarator {
@@ -1292,7 +1328,7 @@ pub const Declarator = union(enum) {
             .FunDeclarator => true,
             .Ident => false,
             .PointerDeclarator => |pointerDeclarator| pointerDeclarator.containsFuncDeclarator(),
-            else => false,
+            .ArrayDeclarator => |arrDeclarator| arrDeclarator.declarator.containsFuncDeclarator(),
         };
     }
     pub fn format(
@@ -1415,12 +1451,16 @@ pub const Expression = union(ExpressionType) {
 
         return switch (boxedVal.*) {
             .PlainVal => |val| val,
-            .DerefedVal => |val| try loadDerefValue(
-                renderer,
-                instructions,
-                val,
-                expression.getType(),
-            ),
+            .DerefedVal => |val| blk: {
+                // Arrays are decayed in the typechecker; any dereference that
+                // reaches here loads the pointed value.
+                break :blk try loadDerefValue(
+                    renderer,
+                    instructions,
+                    val,
+                    expression.getType(),
+                );
+            },
         };
     }
     inline fn chooseCast(renderer: *TACRenderer, inner: *tac.Val, dest: *tac.Val, castType: Type) !tac.Instruction {
@@ -1849,25 +1889,11 @@ pub const Expression = union(ExpressionType) {
                 arrAtIndexPtr.* = tac.Val{
                     .Variable = try tempGen.genTemp(renderer.allocator),
                 };
-
-                const asmSymbolForArrAtIndexPtr = try getASMSymFromType(
-                    arrSubscript.arr.getType(),
-                    renderer.allocator,
-                    .{ .disableFloat = false },
-                );
+                const asmSymbolForArrAtIndexPtr = try renderer.allocator.create(assembly.Symbol);
+                asmSymbolForArrAtIndexPtr.* = .{ .Obj = .{ .type = .QuadWord, .signed = false, .static = false } };
                 try renderer.asmSymbolTable.put(arrAtIndexPtr.Variable, asmSymbolForArrAtIndexPtr);
 
-                const storeTemp = try renderer.allocator.create(tac.Val);
-                storeTemp.* = tac.Val{
-                    .Variable = try tempGen.genTemp(renderer.allocator),
-                };
                 const storeType = arrSubscript.type.?;
-                const asmSymbol = try getASMSymFromType(
-                    storeType,
-                    renderer.allocator,
-                    .{ .disableFloat = false },
-                );
-                try renderer.asmSymbolTable.put(storeTemp.Variable, asmSymbol);
 
                 try instructions.appendSlice(&[_]*tac.Instruction{
                     try tac.createInst(.AddPtr, tac.AddPtr{
@@ -2255,7 +2281,7 @@ test "Type.changeArrtoPointer: int[5] -> int*" {
     int_node.* = .Integer;
 
     var t: Type = .{ .Array = .{ .size = 5, .ty = int_node } };
-    const converted = t.changeArrtoPointer();
+    const converted = try t.changeArrtoPointer(allocator);
 
     try std.testing.expect(std.meta.activeTag(converted) == .Pointer);
     try std.testing.expect(std.meta.activeTag(converted.Pointer.*) == .Integer);
@@ -2272,7 +2298,7 @@ test "Type.changeArrtoPointer: int[5][5] -> int**" {
     inner_arr.* = .{ .Array = .{ .size = 5, .ty = base } };
 
     var t: Type = .{ .Array = .{ .size = 5, .ty = inner_arr } };
-    const converted = t.changeArrtoPointer();
+    const converted = try t.changeArrtoPointer(allocator);
 
     try std.testing.expect(std.meta.activeTag(converted) == .Pointer);
     const first = converted.Pointer.*;
@@ -2291,7 +2317,7 @@ test "Type.changeArrtoPointer: *unsigned long[5] -> **unsigned long" {
     arr.* = .{ .Array = .{ .size = 5, .ty = base } };
 
     var t: Type = .{ .Pointer = arr };
-    const converted = t.changeArrtoPointer();
+    const converted = try t.changeArrtoPointer(allocator);
 
     try std.testing.expect(std.meta.activeTag(converted) == .Pointer);
     const first = converted.Pointer.*;

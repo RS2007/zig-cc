@@ -517,6 +517,63 @@ test "parse multiple functions" {
     }
 }
 
+test "parser param types: array decays to pointer" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const programStr =
+        \\ int f(int a[5]) { return 0; }
+        \\ int main(){ return 0; }
+    ;
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    const prog = try p.parseProgram();
+    const fdecl = prog.externalDecls.items[0].FunctionDecl;
+    const param = fdecl.declarator.FunDeclarator.params.items[0].NonVoidArg;
+    // Expect param type is pointer to int (array parameter adjustment)
+    try std.testing.expect(std.meta.activeTag(param.type) == .Pointer);
+    try std.testing.expect(std.meta.activeTag(param.type.Pointer.*) == .Integer);
+}
+
+test "parser param types: multi-dim array decays one level" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const programStr =
+        \\ int g(int a[2][3]) { return 0; }
+        \\ int main(){ return 0; }
+    ;
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    const prog = try p.parseProgram();
+    const gdecl = prog.externalDecls.items[0].FunctionDecl;
+    const param = gdecl.declarator.FunDeclarator.params.items[0].NonVoidArg;
+    // Expect pointer to int[3]
+    try std.testing.expect(std.meta.activeTag(param.type) == .Pointer);
+    try std.testing.expect(std.meta.activeTag(param.type.Pointer.*) == .Array);
+    try std.testing.expect(param.type.Pointer.*.Array.size == 3);
+    try std.testing.expect(std.meta.activeTag(param.type.Pointer.*.Array.ty.*) == .Integer);
+}
+
+test "parser param types: pointer then array => extra pointer" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const programStr =
+        \\ int h(int *a[5]) { return 0; }
+        \\ int main(){ return 0; }
+    ;
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    const prog = try p.parseProgram();
+    const hdecl = prog.externalDecls.items[0].FunctionDecl;
+    const param = hdecl.declarator.FunDeclarator.params.items[0].NonVoidArg;
+    // int *a[5] parameter => decay one array layer, plus nested pointer => int**
+    try std.testing.expect(std.meta.activeTag(param.type) == .Pointer);
+    try std.testing.expect(std.meta.activeTag(param.type.Pointer.*) == .Pointer);
+    try std.testing.expect(std.meta.activeTag(param.type.Pointer.*.Pointer.*) == .Integer);
+}
+
 test "Negation and bitwise complement codegeneration" {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     const allocator = arena.allocator();

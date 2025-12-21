@@ -395,18 +395,25 @@ pub const Parser = struct {
     }
 
     pub fn parseArg(self: *Parser) ParserError!*AST.Arg {
-        const argType = try self.parseType();
-        //INFO: The lines following this has to change and should parse a declarator instead
+        const baseType = try self.parseType();
         const arg = try self.allocator.create(AST.Arg);
 
-        arg.* = if (argType == .Void) .{ .Void = {} } else blk: {
+        arg.* = if (baseType == .Void) .{ .Void = {} } else blk: {
+            // Parse declarator and compute full type from it.
             const argDeclarator = try self.parseDeclarator();
-            break :blk .{
-                .NonVoidArg = .{
-                    .type = argType,
-                    .declarator = argDeclarator,
-                },
-            };
+            var fullType = (try getDeclaratorType(self.allocator, argDeclarator, baseType)).*;
+
+            // C parameter adjustment: arrays decay one level to pointer to first element.
+            if (std.meta.activeTag(fullType) == .Array) {
+                const inner_copied = try fullType.Array.ty.*.deepCopy(self.allocator);
+                fullType = try AST.astPointerTypeFromDepth(inner_copied, 1, self.allocator);
+            } else if (std.meta.activeTag(fullType) == .Pointer and std.meta.activeTag(fullType.Pointer.*) == .Array) {
+                // Handle forms like: int *a[5] => parameter type becomes int **
+                const inner_elem = try fullType.Pointer.*.Array.ty.*.deepCopy(self.allocator);
+                fullType = try AST.astPointerTypeFromDepth(inner_elem, 2, self.allocator);
+            }
+
+            break :blk .{ .NonVoidArg = .{ .type = fullType, .declarator = argDeclarator } };
         };
         return arg;
     }
@@ -1079,7 +1086,7 @@ test "getDeclaratorType: *unsigned long[5] -> **unsigned long" {
     ptrDecl.* = .{ .PointerDeclarator = arrDecl };
 
     const ty_ptr = try getDeclaratorType(al, ptrDecl, .ULong);
-    const resolved = ty_ptr.*.changeArrtoPointer();
+    const resolved = try ty_ptr.*.changeArrtoPointer(al);
 
     try std.testing.expect(std.meta.activeTag(resolved) == .Pointer);
     try std.testing.expect(std.meta.activeTag(resolved.Pointer.*) == .Pointer);
@@ -1109,7 +1116,7 @@ test "getDeclaratorType: **int [5] -> ***int" {
     ptrOuter.* = .{ .PointerDeclarator = ptrInner };
 
     const ty_ptr = try getDeclaratorType(al, ptrOuter, .Integer);
-    const resolved = ty_ptr.*.changeArrtoPointer();
+    const resolved = try ty_ptr.*.changeArrtoPointer(al);
 
     try std.testing.expect(std.meta.activeTag(resolved) == .Pointer);
     const p1 = resolved.Pointer.*;
@@ -1140,7 +1147,7 @@ test "getDeclaratorType: *int[5][5] -> ***int" {
     ptrDecl.* = .{ .PointerDeclarator = arrDecl };
 
     const ty_ptr = try getDeclaratorType(al, ptrDecl, .Integer);
-    const resolved = ty_ptr.*.changeArrtoPointer();
+    const resolved = try ty_ptr.*.changeArrtoPointer(al);
 
     // Expect ***int
     try std.testing.expect(std.meta.activeTag(resolved) == .Pointer);
@@ -1169,7 +1176,7 @@ test "getDeclaratorType: int[5][5] -> int**" {
     arrDecl.* = .{ .ArrayDeclarator = arrNode };
 
     const ty_ptr = try getDeclaratorType(al, arrDecl, .Integer);
-    const resolved = ty_ptr.*.changeArrtoPointer();
+    const resolved = try ty_ptr.*.changeArrtoPointer(al);
 
     try std.testing.expect(std.meta.activeTag(resolved) == .Pointer);
     const p1 = resolved.Pointer.*;

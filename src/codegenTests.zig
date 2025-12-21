@@ -2194,3 +2194,356 @@ test "global arrays - linear search" {
     try asmProgram.stringify(sFileWriter, allocator, tacRenderer.asmSymbolTable);
     try cFileWriter.writeAll(programStr);
 }
+
+test "global arrays - mutability" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    const cFileWriter = (try std.fs.cwd().createFile("./cFiles/C/globalArraysMut.c", .{})).writer();
+    const sFileWriter = (try std.fs.cwd().createFile("./cFiles/S/globalArraysMut.s", .{})).writer();
+    const programStr =
+        \\ static int arr[5] = {5,1,4,2,8};
+        \\ int main() {
+        \\     arr[0] = 1;
+        \\     arr[1] = 2;
+        \\     arr[2] = 3;
+        \\     arr[3] = 4;
+        \\     arr[4] = 5;
+        \\     return arr[0] != 1 || arr[1] != 2 || arr[2] != 3 || arr[3] == 4 || arr[4] == 5;
+        \\ }
+    ;
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    const program = try p.parseProgram();
+    const varResolver = try ast.VarResolver.init(allocator);
+    try varResolver.resolve(program);
+    const typechecker = try semantic.Typechecker.init(allocator);
+    typechecker.check(program) catch {
+        std.log.warn("\x1b[33mError\x1b[0m: {s}\n", .{try typechecker.getErrString()});
+        std.debug.assert(false);
+    };
+    try ast.loopLabelPass(program, allocator);
+    const tacRenderer = try ast.TACRenderer.init(allocator, typechecker.symbolTable);
+    const tacProgram = try tacRenderer.render(program);
+
+    for (tacProgram.topLevelDecls.items) |decl| {
+        if (std.meta.activeTag(decl.*) == .Function) {
+            std.debug.print("{s}:\n", .{decl.Function.name});
+            for (decl.Function.instructions.items) |inst| {
+                std.debug.print("\t{}\n", .{inst});
+            }
+        }
+    }
+
+    const asmRenderer = try tac.AsmRenderer.init(allocator, tacRenderer.asmSymbolTable);
+    const asmProgram = try asmRenderer.render(tacProgram);
+
+    try asmProgram.stringify(sFileWriter, allocator, tacRenderer.asmSymbolTable);
+    try cFileWriter.writeAll(programStr);
+}
+
+test "padding for arrays" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    const cFileWriter = (try std.fs.cwd().createFile("./cFiles/C/arrayPadding.c", .{})).writer();
+    const sFileWriter = (try std.fs.cwd().createFile("./cFiles/S/arrayPadding.s", .{})).writer();
+    const programStr =
+        \\ static int arr[7] = {5,1,4,2,8};
+        \\ int main() {
+        \\     arr[0] = 1;
+        \\     arr[1] = 2;
+        \\     arr[2] = 3;
+        \\     arr[3] = 4;
+        \\     arr[4] = 5;
+        \\     return arr[0] != 1 || arr[1] != 2 || arr[2] != 3 || arr[3] != 4 || arr[4] != 5 || arr[5] != 0 || arr[6] != 0;
+        \\ }
+    ;
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    const program = try p.parseProgram();
+    const varResolver = try ast.VarResolver.init(allocator);
+    try varResolver.resolve(program);
+    const typechecker = try semantic.Typechecker.init(allocator);
+    typechecker.check(program) catch {
+        std.log.warn("\x1b[33mError\x1b[0m: {s}\n", .{try typechecker.getErrString()});
+        std.debug.assert(false);
+    };
+    try ast.loopLabelPass(program, allocator);
+    const tacRenderer = try ast.TACRenderer.init(allocator, typechecker.symbolTable);
+    const tacProgram = try tacRenderer.render(program);
+
+    for (tacProgram.topLevelDecls.items) |decl| {
+        if (std.meta.activeTag(decl.*) == .Function) {
+            std.debug.print("{s}:\n", .{decl.Function.name});
+            for (decl.Function.instructions.items) |inst| {
+                std.debug.print("\t{}\n", .{inst});
+            }
+        }
+    }
+
+    const asmRenderer = try tac.AsmRenderer.init(allocator, tacRenderer.asmSymbolTable);
+    const asmProgram = try asmRenderer.render(tacProgram);
+
+    try asmProgram.stringify(sFileWriter, allocator, tacRenderer.asmSymbolTable);
+    try cFileWriter.writeAll(programStr);
+}
+
+test "simple multidimension indexing" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    const cFileWriter = (try std.fs.cwd().createFile("./cFiles/C/simpleMulDimIndexing.c", .{})).writer();
+    const sFileWriter = (try std.fs.cwd().createFile("./cFiles/S/simpleMulDimIndexing.s", .{})).writer();
+    const programStr =
+        \\ int main(){
+        \\     int nestedarr[2][2][2] = {{{1,2},{3,4}},{{1,2},{3,4}}};
+        \\     return nestedarr[0][0][0];
+        \\}
+    ;
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    const program = try p.parseProgram();
+    const varResolver = try ast.VarResolver.init(allocator);
+    try varResolver.resolve(program);
+    const typechecker = try semantic.Typechecker.init(allocator);
+    typechecker.check(program) catch {
+        std.log.warn("\x1b[33mError\x1b[0m: {s}\n", .{try typechecker.getErrString()});
+        std.debug.assert(false);
+    };
+    try ast.loopLabelPass(program, allocator);
+    const tacRenderer = try ast.TACRenderer.init(allocator, typechecker.symbolTable);
+    const tacProgram = try tacRenderer.render(program);
+
+    for (tacProgram.topLevelDecls.items) |decl| {
+        if (std.meta.activeTag(decl.*) == .Function) {
+            std.debug.print("{s}:\n", .{decl.Function.name});
+            for (decl.Function.instructions.items) |inst| {
+                std.debug.print("\t{}\n", .{inst});
+            }
+        }
+    }
+
+    const asmRenderer = try tac.AsmRenderer.init(allocator, tacRenderer.asmSymbolTable);
+    const asmProgram = try asmRenderer.render(tacProgram);
+
+    try asmProgram.stringify(sFileWriter, allocator, tacRenderer.asmSymbolTable);
+    try cFileWriter.writeAll(programStr);
+}
+
+test "multidimensional indexing - one" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    const cFileWriter = (try std.fs.cwd().createFile("./cFiles/C/multidimIndexOne.c", .{})).writer();
+    const sFileWriter = (try std.fs.cwd().createFile("./cFiles/S/multidimIndexOne.s", .{})).writer();
+    const programStr =
+        \\
+        \\int readnested(int nestedarr[2][3], int i, int j, int expected) {
+        \\    return (nestedarr[i][j] == expected);
+        \\}
+        \\
+        \\int writenested(int nestedarr[2][3], int i, int j, int newval) {
+        \\    nestedarr[i][j] = newval;
+        \\    return 0;
+        \\}
+        \\
+        \\int readnestednegated(int (*nestedarr)[3], int i, int j, int expected) {
+        \\    return (nestedarr[-i][j] == expected);
+        \\}
+        \\
+        \\
+        \\int getnestedaddr(int nestedarr[2][3], int i, int j, int *expected) {
+        \\    return &nestedarr[i][j] == expected;
+        \\}
+        \\
+        \\static int nestedarr[4][3][5] = {
+        \\    {{1, 2}, {3}},
+        \\    {{4}, {5}}
+        \\};
+        \\
+        \\int readstaticnested(int i, int j, int k, int expected) {
+        \\    return nestedarr[i][j][k] == expected;
+        \\}
+        \\
+        \\int (*getarray())[3][5] {
+        \\    return nestedarr;
+        \\}
+        \\
+        \\int writenestedcomplex(int i, int j, int k, int val) {
+        \\    nestedarr[i][j][k] = val;
+        \\    return 0;
+        \\}
+        \\
+        \\int *getsubarray(int nested[2][3], int i) {
+        \\    return nested[i];
+        \\}
+        \\
+        \\int main() {
+        \\    int nestedarr_local[2][3] = {{1, 2, 3}, {4, 5, 6}};
+        \\    if (readnested(nestedarr_local, 1, 2, 6) != 0) {
+        \\        return 1;
+        \\    }
+        \\
+        \\    writenested(nestedarr_local, 1, 2, -1);
+        \\    if (nestedarr_local[1][2] != -1) {
+        \\        return 2;
+        \\    }
+        \\
+        \\    if (readnestednegated(nestedarr_local + 2, 2, 0, 1) != 0) {
+        \\        return 3;
+        \\    }
+        \\
+        \\    int *ptr = (nestedarr_local[0]) + 1;
+        \\    if (getnestedaddr(nestedarr_local, 0, 1, ptr) != 0) {
+        \\        return 4;
+        \\    }
+        \\
+        \\    if (readstaticnested(1, 1, 0, 5) != 0) {
+        \\        return 5;
+        \\    }
+        \\
+        \\    writenestedcomplex(0, 2, 3, 111);
+        \\    if (nestedarr[0][2][3] != 111) {
+        \\        return 6;
+        \\    }
+        \\
+        \\    int *row = getsubarray(nestedarr_local, 1);
+        \\    if (row + 1 != &nestedarr_local[1][1]) {
+        \\        return 7;
+        \\    }
+        \\
+        \\    return 0;
+        \\}
+    ;
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    const program = try p.parseProgram();
+    const varResolver = try ast.VarResolver.init(allocator);
+    try varResolver.resolve(program);
+    const typechecker = try semantic.Typechecker.init(allocator);
+    typechecker.check(program) catch {
+        std.log.warn("\x1b[33mError\x1b[0m: {s}\n", .{try typechecker.getErrString()});
+        std.debug.assert(false);
+    };
+    try ast.loopLabelPass(program, allocator);
+    const tacRenderer = try ast.TACRenderer.init(allocator, typechecker.symbolTable);
+    const tacProgram = try tacRenderer.render(program);
+
+    for (tacProgram.topLevelDecls.items) |decl| {
+        if (std.meta.activeTag(decl.*) == .Function) {
+            std.debug.print("{s}:\n", .{decl.Function.name});
+            for (decl.Function.instructions.items) |inst| {
+                std.debug.print("\t{}\n", .{inst});
+            }
+        }
+    }
+
+    const asmRenderer = try tac.AsmRenderer.init(allocator, tacRenderer.asmSymbolTable);
+    const asmProgram = try asmRenderer.render(tacProgram);
+
+    try asmProgram.stringify(sFileWriter, allocator, tacRenderer.asmSymbolTable);
+    try cFileWriter.writeAll(programStr);
+}
+
+test "3d array indexing scales" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    const cFileWriter = (try std.fs.cwd().createFile("./cFiles/C/arrayIndex3d.c", .{})).writer();
+    const sFileWriter = (try std.fs.cwd().createFile("./cFiles/S/arrayIndex3d.s", .{})).writer();
+
+    const programStr =
+        \\
+        \\static int k[2][2][2] = {{{1,2},{2,3}}, {{1,2},{2,3}}};
+        \\
+        \\int main() {
+        \\    return k[0][0][0];
+        \\}
+    ;
+
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    const program = try p.parseProgram();
+    const varResolver = try ast.VarResolver.init(allocator);
+    try varResolver.resolve(program);
+    const typechecker = try semantic.Typechecker.init(allocator);
+    typechecker.check(program) catch {
+        std.log.warn("\x1b[33mError\x1b[0m: {s}\n", .{try typechecker.getErrString()});
+        std.debug.assert(false);
+    };
+    try ast.loopLabelPass(program, allocator);
+    const tacRenderer = try ast.TACRenderer.init(allocator, typechecker.symbolTable);
+    const tacProgram = try tacRenderer.render(program);
+
+    var load_count: usize = 0;
+    var scales = try std.ArrayList(i64).initCapacity(allocator, 3);
+    const AddLink = struct { src: []u8, dest: []u8, scale: i64 };
+    var links = try std.ArrayList(AddLink).initCapacity(allocator, 3);
+    var load_ptr_names = try std.ArrayList([]u8).initCapacity(allocator, 1);
+    var base_of_k: ?[]u8 = null;
+    for (tacProgram.topLevelDecls.items) |decl| {
+        if (std.meta.activeTag(decl.*) == .Function and std.mem.eql(u8, decl.Function.name, "main")) {
+            for (decl.Function.instructions.items) |inst| {
+                switch (inst.*) {
+                    .Load => {
+                        load_count += 1;
+                        if (std.meta.activeTag(inst.Load.srcPointer.*) == .Variable) {
+                            try load_ptr_names.append(inst.Load.srcPointer.Variable);
+                        }
+                    },
+                    .GetAddress => |ga| {
+                        if (std.meta.activeTag(ga.src.*) == .Variable and std.mem.eql(u8, ga.src.Variable, "k") and std.meta.activeTag(ga.dest.*) == .Variable) {
+                            base_of_k = ga.dest.Variable;
+                        }
+                    },
+                    .AddPtr => |ap| {
+                        try scales.append(ap.scale);
+                        const src_name: []u8 = if (std.meta.activeTag(ap.src.*) == .Variable) ap.src.Variable else @constCast("<non-var>");
+                        const dest_name: []u8 = if (std.meta.activeTag(ap.dest.*) == .Variable) ap.dest.Variable else @constCast("<non-var>");
+                        try links.append(.{ .src = src_name, .dest = dest_name, .scale = ap.scale });
+                    },
+                    else => {},
+                }
+            }
+        }
+    }
+
+    // For k[0][0][0], we expect 3 AddPtr with scales 16 (2*2*4), 8 (2*4), 4 (4),
+    // and exactly one Load of the final scalar.
+    try std.testing.expectEqual(@as(usize, 3), scales.items.len);
+    try std.testing.expectEqual(@as(i64, 16), scales.items[0]);
+    try std.testing.expectEqual(@as(i64, 8), scales.items[1]);
+    try std.testing.expectEqual(@as(i64, 4), scales.items[2]);
+    try std.testing.expectEqual(@as(usize, 1), load_count);
+
+    // Stronger structural assertions:
+    // - First AddPtr sources the global symbol 'k'
+    // - Subsequent AddPtr source the previous AddPtr's dest temp
+    // - The single Load reads from the final AddPtr dest temp
+    try std.testing.expectEqual(@as(usize, 3), links.items.len);
+    try std.testing.expect(base_of_k != null);
+    try std.testing.expect(std.mem.eql(u8, links.items[0].src, base_of_k.?));
+    try std.testing.expect(std.mem.eql(u8, links.items[1].src, links.items[0].dest));
+    try std.testing.expect(std.mem.eql(u8, links.items[2].src, links.items[1].dest));
+    try std.testing.expectEqual(@as(usize, 1), load_ptr_names.items.len);
+    try std.testing.expect(std.mem.eql(u8, load_ptr_names.items[0], links.items[2].dest));
+
+    // Dump TAC for this test into a file for inspection
+    var tac_file = try std.fs.cwd().createFile("./tac_dump_arrayIndex3d.txt", .{});
+    defer tac_file.close();
+    var tac_writer = tac_file.writer();
+    for (tacProgram.topLevelDecls.items) |decl| {
+        if (std.meta.activeTag(decl.*) == .Function and std.mem.eql(u8, decl.Function.name, "main")) {
+            try tac_writer.print("{s}:\n", .{decl.Function.name});
+            for (decl.Function.instructions.items) |inst| {
+                try tac_writer.print("  {}\n", .{inst});
+            }
+        }
+    }
+
+    const asmRenderer = try tac.AsmRenderer.init(allocator, tacRenderer.asmSymbolTable);
+    const asmProgram = try asmRenderer.render(tacProgram);
+    try asmProgram.stringify(sFileWriter, allocator, tacRenderer.asmSymbolTable);
+    try cFileWriter.writeAll(programStr);
+}

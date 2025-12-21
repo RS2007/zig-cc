@@ -14,3 +14,5 @@ src/CFG.zig
 claude.md
 claudeOnCFG.md
 .vscode/
+codex*
+fix.md

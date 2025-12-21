@@ -514,7 +514,8 @@ pub const Operand = union(OperandType) {
             },
             .Memory => |mem| {
                 std.debug.assert(std.meta.activeTag(mem.base.*) == .Reg);
-                return (try std.fmt.allocPrint(allocator, "-0x{x}({s})", .{
+                return (try std.fmt.allocPrint(allocator, "{s}0x{x}({s})", .{
+                    if (mem.index < 0) "-" else "",
                     abs(mem.index),
                     try mem.base.stringify(allocator),
                 }));
@@ -1567,16 +1568,16 @@ inline fn replacePseudo(
     if (std.meta.activeTag(operand.*) == .PseudoMem) {
         if (lookup.contains(operand.PseudoMem.name)) {
             std.log.warn("Pseudo: {s} found in lookup\n", .{operand.PseudoMem.name});
-            topOfStack.* = topOfStack.* - operand.PseudoMem.offset;
-            operand.* = try Mem.createStack(allocator, lookup.get(operand.PseudoMem.name).? + operand.PseudoMem.offset);
+            const base = lookup.get(operand.PseudoMem.name).?;
+            operand.* = try Mem.createStack(allocator, base + operand.PseudoMem.offset);
         } else {
-            const offset: i64 = asmSymbolTable.get(operand.PseudoMem.name).?.Obj.type.size();
-            topOfStack.* = topOfStack.* - offset;
+            const bytes: i64 = asmSymbolTable.get(operand.PseudoMem.name).?.Obj.type.size();
+            topOfStack.* = topOfStack.* - bytes;
             try lookup.put(
                 operand.PseudoMem.name,
                 topOfStack.*,
             );
-            operand.* = try Mem.createStack(allocator, topOfStack.*);
+            operand.* = try Mem.createStack(allocator, topOfStack.* + operand.PseudoMem.offset);
         }
     }
 }

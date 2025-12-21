@@ -80,14 +80,19 @@ pub fn astSymTabToTacSymTab(allocator: std.mem.Allocator, astSymTab: std.StringH
                 .static = std.meta.activeTag(sym.attributes) == .StaticAttr,
                 .signed = false,
             } },
-            .Array => |arrayTy| .{ .Obj = .{
-                .type = .{ .ByteArray = .{
-                    .size = arrayTy.getNestedSize(),
-                    .alignment = arrayTy.getScalarType().alignment(),
-                } },
-                .static = std.meta.activeTag(sym.attributes) == .StaticAttr,
-                .signed = arrayTy.getScalarType().signed(),
-            } },
+            .Array => |arrayTy| .{
+                .Obj = .{
+                    .type = .{
+                        .ByteArray = .{
+                            // Reserve actual bytes, not element count
+                            .size = arrayTy.getNestedSize() * arrayTy.getScalarType().size(),
+                            .alignment = arrayTy.getScalarType().alignment(),
+                        },
+                    },
+                    .static = std.meta.activeTag(sym.attributes) == .StaticAttr,
+                    .signed = arrayTy.getScalarType().signed(),
+                },
+            },
             .Void => unreachable,
         };
         std.log.warn("symName: {s} and asmSymbol: {any}\n", .{ symName, asmSymbol });
@@ -889,23 +894,69 @@ pub const Instruction = union(InstructionType) {
                 const r9 = try allocator.create(assembly.Operand);
                 r9.* = .{ .Reg = .R9_64 };
 
-                try instructions.appendSlice(&[_]*assembly.Instruction{ try assembly.createInst(.Mov, assembly.MovInst{
-                    .src = src,
-                    .dest = .{ .Reg = .R9_64 },
-                    .type = .QuadWord,
-                }, allocator), try assembly.createInst(.Mov, assembly.MovInst{
+                // Choose LEA to load the base only when it's a data label; for
+                // stack/pseudo or register values, MOV loads the pointer value.
+                if (std.meta.activeTag(src) == .Data) {
+                    try instructions.append(try assembly.createInst(.Lea, assembly.Lea{
+                        .src = src,
+                        .dest = r9.*,
+                        .type = .QuadWord,
+                    }, allocator));
+                } else {
+                    try instructions.append(try assembly.createInst(.Mov, assembly.MovInst{
+                        .src = src,
+                        .dest = r9.*,
+                        .type = .QuadWord,
+                    }, allocator));
+                }
+
+                // Load index into r8 of appropriate width
+                try instructions.append(try assembly.createInst(.Mov, assembly.MovInst{
                     .src = index,
                     .dest = .{ .Reg = indexType.getR8Variety() },
                     .type = indexType,
-                }, allocator), try assembly.createInst(.Lea, assembly.Lea{
-                    .src = .{ .Indexed = .{
-                        .base = .R9_64,
-                        .index = indexType.getR8Variety(),
-                        .scale = addPtr.scale,
-                    } },
-                    .dest = dest,
-                    .type = destType,
-                }, allocator) });
+                }, allocator));
+
+                // If scale is supported directly by x86-64 addressing (1,2,4,8),
+                // use a single LEA. Otherwise, decompose the scale into
+                // multiple LEAs with allowed factors and accumulate into a temp
+                // register before storing to dest.
+                const scale_val: i64 = addPtr.scale;
+                if (scale_val == 1 or scale_val == 2 or scale_val == 4 or scale_val == 8) {
+                    try instructions.append(try assembly.createInst(.Lea, assembly.Lea{
+                        .src = .{ .Indexed = .{ .base = .R9_64, .index = indexType.getR8Variety(), .scale = scale_val } },
+                        .dest = dest,
+                        .type = destType,
+                    }, allocator));
+                } else {
+                    // Accumulate address into R10 to avoid mem-dest LEA and scale>8 issues
+                    const r10op = assembly.Operand{ .Reg = .R10_64 };
+                    // r10 = base
+                    try instructions.append(try assembly.createInst(.Mov, assembly.MovInst{
+                        .src = .{ .Reg = .R9_64 },
+                        .dest = r10op,
+                        .type = .QuadWord,
+                    }, allocator));
+
+                    var remaining: i64 = scale_val;
+                    inline for (.{ 8, 4, 2, 1 }) |piece| {
+                        while (remaining >= piece) {
+                            try instructions.append(try assembly.createInst(.Lea, assembly.Lea{
+                                .src = .{ .Indexed = .{ .base = .R10_64, .index = indexType.getR8Variety(), .scale = piece } },
+                                .dest = r10op,
+                                .type = .QuadWord,
+                            }, allocator));
+                            remaining -= piece;
+                        }
+                    }
+
+                    // Finally move r10 into destination location
+                    try instructions.append(try assembly.createInst(.Mov, assembly.MovInst{
+                        .src = r10op,
+                        .dest = dest,
+                        .type = .QuadWord,
+                    }, allocator));
+                }
             },
             .CopyIntoOffset => |copyIntoOffset| {
                 const src = try copyIntoOffset.src.codegen(symbolTable, allocator);

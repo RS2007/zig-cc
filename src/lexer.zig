@@ -137,7 +137,10 @@ pub const Lexer = struct {
     inline fn peekKeyword(comptime keywordStrings: []const []const u8, comptime returnTokens: []const TokenType, lexer: *Lexer, token: *Token) ?*Token {
         const initialPtr = lexer.current;
         var offset: u32 = 0;
-        while (initialPtr + offset < lexer.buffer.len and !std.ascii.isWhitespace(lexer.buffer[initialPtr + offset]) and (std.ascii.isLower(lexer.buffer[initialPtr + offset]) or std.ascii.isUpper(lexer.buffer[initialPtr + offset]))) {
+        while (initialPtr + offset < lexer.buffer.len) {
+            const ch = lexer.buffer[initialPtr + offset];
+            if (std.ascii.isWhitespace(ch)) break;
+            if (!(std.ascii.isLower(ch) or std.ascii.isUpper(ch) or std.ascii.isDigit(ch) or ch == '_')) break;
             offset += 1;
         }
         inline for (keywordStrings, returnTokens) |keywordString, returnTok| {
@@ -447,7 +450,10 @@ pub const Lexer = struct {
 
     inline fn lexKeyword(comptime keywordStrings: []const []const u8, comptime returnTokens: []const TokenType, lexer: *Lexer, token: *Token) *Token {
         const initialPtr = lexer.current;
-        while (lexer.current < lexer.buffer.len and !std.ascii.isWhitespace(lexer.buffer[lexer.current]) and (std.ascii.isLower(lexer.buffer[lexer.current]) or std.ascii.isUpper(lexer.buffer[lexer.current]))) {
+        while (lexer.current < lexer.buffer.len) {
+            const ch = lexer.buffer[lexer.current];
+            if (std.ascii.isWhitespace(ch)) break;
+            if (!(std.ascii.isLower(ch) or std.ascii.isUpper(ch) or std.ascii.isDigit(ch) or ch == '_')) break;
             lexer.current += 1;
         }
         inline for (keywordStrings, returnTokens) |keywordString, returnTok| {
