@@ -59,7 +59,6 @@ fn getDeclaratorType(allocator: std.mem.Allocator, declarator: *AST.Declarator, 
                     inner_type = t;
                 }
             }
-            std.log.warn("lhsType: {any}, returning: {any}\n", .{ lhsType, AST.Type{ .Array = .{ .size = sizes[0], .ty = inner_type } } });
 
             break :blk .{ .Array = .{ .size = sizes[0], .ty = inner_type } };
         },
@@ -83,7 +82,6 @@ pub const Parser = struct {
         program.externalDecls = externalDeclList;
         while ((try self.l.peekToken(self.allocator)) != null) {
             const externalDecl = try self.parseExternalDecl();
-            std.log.warn("external decl:{any} and current token:{any} \n", .{ externalDecl, self.l.currentToken });
             try program.externalDecls.append(externalDecl);
         }
         return program;
@@ -231,7 +229,6 @@ pub const Parser = struct {
                         return ParserError.InvalidArgument;
                     }
                     try exprList.append(@intCast(expression.Constant.value.Integer));
-                    std.log.warn("Done?: {}, next: {}\n", .{ self.l.currentToken.?, (try self.l.peekToken(self.allocator)).? });
                 }
                 declaratorSuffix.* = .{ .ArraySuffix = exprList };
                 return declaratorSuffix;
@@ -328,7 +325,6 @@ pub const Parser = struct {
         const returnType = try self.parseType();
         const declarator = try self.parseDeclarator();
         const externalDecl = try self.allocator.create(AST.ExternalDecl);
-        std.log.warn("Declarator: {any} and peek token:{any}\n", .{ declarator, (try self.l.peekToken(self.allocator)) });
         // INFO: We are not implementing function pointers for now, so if there
         // is a function declarator, that implies a function declaration.
         if (declarator.containsFuncDeclarator()) {
@@ -449,7 +445,6 @@ pub const Parser = struct {
         const returnType = try self.parseType();
         const declarator = try self.parseDeclarator();
         const declaration = try self.allocator.create(AST.Declaration);
-        std.log.warn("Creating declaration for {s}\n", .{(try declarator.unwrapIdentDecl()).Ident});
         declaration.* = .{
             .name = (try declarator.unwrapIdentDecl()).Ident,
             .type = (try getDeclaratorType(self.allocator, declarator, returnType)).*,
@@ -939,7 +934,6 @@ pub const Parser = struct {
                         .lhs = lhs,
                         .rhs = rhs,
                     } };
-                    std.log.warn("This: {any}\n", .{expr});
                     return expr;
                 },
                 .ASSIGN => {
@@ -1042,7 +1036,6 @@ pub const Parser = struct {
                     return lhs;
                 }
                 const hasPeekedPrecedence = getPrecedence(peeked.type);
-                std.log.warn("Precedence: {any} and peeked type: {s}\n", .{ peeked, self.l.buffer[peeked.start .. peeked.end + 1] });
                 if (hasPeekedPrecedence == null) {
                     return lhs;
                 }

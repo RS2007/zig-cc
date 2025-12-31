@@ -2199,8 +2199,8 @@ test "global arrays - mutability" {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
-    const cFileWriter = (try std.fs.cwd().createFile("./cFiles/C/globalArraysMut.c", .{})).writer();
-    const sFileWriter = (try std.fs.cwd().createFile("./cFiles/S/globalArraysMut.s", .{})).writer();
+    const cFileWriter = (try std.fs.cwd().createFile("./cFiles/C/multidimIndexOne.c", .{})).writer();
+    const sFileWriter = (try std.fs.cwd().createFile("./cFiles/S/multidimIndexOne.s", .{})).writer();
     const programStr =
         \\ static int arr[5] = {5,1,4,2,8};
         \\ int main() {
@@ -2529,21 +2529,161 @@ test "3d array indexing scales" {
     try std.testing.expectEqual(@as(usize, 1), load_ptr_names.items.len);
     try std.testing.expect(std.mem.eql(u8, load_ptr_names.items[0], links.items[2].dest));
 
-    // Dump TAC for this test into a file for inspection
-    var tac_file = try std.fs.cwd().createFile("./tac_dump_arrayIndex3d.txt", .{});
-    defer tac_file.close();
-    var tac_writer = tac_file.writer();
-    for (tacProgram.topLevelDecls.items) |decl| {
-        if (std.meta.activeTag(decl.*) == .Function and std.mem.eql(u8, decl.Function.name, "main")) {
-            try tac_writer.print("{s}:\n", .{decl.Function.name});
-            for (decl.Function.instructions.items) |inst| {
-                try tac_writer.print("  {}\n", .{inst});
-            }
-        }
-    }
+    const asmRenderer = try tac.AsmRenderer.init(allocator, tacRenderer.asmSymbolTable);
+    const asmProgram = try asmRenderer.render(tacProgram);
+    try asmProgram.stringify(sFileWriter, allocator, tacRenderer.asmSymbolTable);
+    try cFileWriter.writeAll(programStr);
+}
+
+test "compilcated array test case" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    const cFileWriter = (try std.fs.cwd().createFile("./cFiles/C/complArr1.c", .{})).writer();
+    const sFileWriter = (try std.fs.cwd().createFile("./cFiles/S/complArr1.s", .{})).writer();
+    const programStr =
+        \\ int set_nth_element(double *arr, int idx);
+        \\ int set_nested_element(int (*arr)[2], int i, int j);
+        \\ int set_nth_element(double *arr, int idx) {
+        \\     for (int i = 0; i < 5; i = i + 1) {
+        \\         if (arr[i] != 0) {
+        \\             return 1;
+        \\         }
+        \\     }
+        \\     arr[idx] = 8;
+        \\     return 0;
+        \\ }
+        \\ 
+        \\ int set_nested_element(int (*arr)[2], int i, int j) {
+        \\     for (int x = 0; x < 3; x = x + 1) {
+        \\         for (int y = 0; y < 2; y = y + 1) {
+        \\             int expected = -10 + 2*x + y;
+        \\             if (arr[x][y] != expected) {
+        \\                 return 4;
+        \\             }
+        \\         }
+        \\     }
+        \\     arr[i][j] = 10;
+        \\     return 0;
+        \\ }
+        \\int main() {
+        \\
+        \\    double arr[5] = {0.0, 0.0, 0.0, 0.0, 0.0};
+        \\
+        \\    int check = set_nth_element(arr, 4);
+        \\    if (check) {
+        \\        return check;
+        \\    }
+        \\
+        \\    for (int i = 0; i < 4; i = i + 1) {
+        \\        if (arr[i] != 0) {
+        \\            return 2;
+        \\        }
+        \\    }
+        \\    if (arr[4] != 8)
+        \\        return 3;
+        \\
+        \\    int nested_arr[3][2] = {{-10, -9}, {-8, -7}, {-6, -5}};
+        \\
+        \\    check = set_nested_element(nested_arr, 2, 1);
+        \\    if (check) {
+        \\        return check;
+        \\    }
+        \\
+        \\    for (int i = 0; i < 3; i = i + 1) {
+        \\        for (int j = 0; j < 2; j = j + 1) {
+        \\
+        \\            if (i == 2 && j == 1) {
+        \\                if (nested_arr[i][j] != 10) {
+        \\                    return 5;
+        \\                }
+        \\            } else {
+        \\                int expected = -10 + 2 * i + j;
+        \\                if (nested_arr[i][j] != expected) {
+        \\                    return 6;
+        \\                }
+        \\            }
+        \\        }
+        \\    }
+        \\
+        \\    return 0;
+        \\}
+    ;
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    const program = try p.parseProgram();
+    const varResolver = try ast.VarResolver.init(allocator);
+    try varResolver.resolve(program);
+    const typechecker = try semantic.Typechecker.init(allocator);
+    typechecker.check(program) catch {
+        std.log.warn("\x1b[33mError\x1b[0m: {s}\n", .{try typechecker.getErrString()});
+        std.debug.assert(false);
+    };
+    try ast.loopLabelPass(program, allocator);
+    const tacRenderer = try ast.TACRenderer.init(allocator, typechecker.symbolTable);
+    const tacProgram = try tacRenderer.render(program);
 
     const asmRenderer = try tac.AsmRenderer.init(allocator, tacRenderer.asmSymbolTable);
     const asmProgram = try asmRenderer.render(tacProgram);
+
+    try asmProgram.stringify(sFileWriter, allocator, tacRenderer.asmSymbolTable);
+    try cFileWriter.writeAll(programStr);
+}
+
+test "2d binary search" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    const cFileWriter = (try std.fs.cwd().createFile("./cFiles/C/binarysearch2d.c", .{})).writer();
+    const sFileWriter = (try std.fs.cwd().createFile("./cFiles/S/binarysearch2d.s", .{})).writer();
+    const programStr =
+        \\
+        \\ int bsearch2d(int (*arr)[4], int rows, int target) {
+        \\     int s = 0;
+        \\     int e = rows * 4 - 1;
+        \\     while (s <= e) {
+        \\         int m = s + (e - s) / 2;
+        \\         int r = m / 4;
+        \\         int c = m % 4;
+        \\         if (arr[r][c] == target) {
+        \\             return 1;
+        \\         }
+        \\         if (arr[r][c] < target) {
+        \\             s = m + 1;
+        \\         } else {
+        \\             e = m - 1;
+        \\         }
+        \\     }
+        \\     return 0;
+        \\ }
+        \\ int main() {
+        \\     int grid[3][4] = {
+        \\         {1, 3, 5, 7},
+        \\         {9, 11, 13, 15},
+        \\         {17, 19, 21, 23}
+        \\     };
+        \\     if (bsearch2d(grid, 3, 13) == 0) return 1;
+        \\     if (bsearch2d(grid, 3, 14) != 0) return 2;
+        \\     return 0;
+        \\ }
+    ;
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    const program = try p.parseProgram();
+    const varResolver = try ast.VarResolver.init(allocator);
+    try varResolver.resolve(program);
+    const typechecker = try semantic.Typechecker.init(allocator);
+    typechecker.check(program) catch {
+        std.log.warn("\x1b[33mError\x1b[0m: {s}\n", .{try typechecker.getErrString()});
+        std.debug.assert(false);
+    };
+    try ast.loopLabelPass(program, allocator);
+    const tacRenderer = try ast.TACRenderer.init(allocator, typechecker.symbolTable);
+    const tacProgram = try tacRenderer.render(program);
+
+    const asmRenderer = try tac.AsmRenderer.init(allocator, tacRenderer.asmSymbolTable);
+    const asmProgram = try asmRenderer.render(tacProgram);
+
     try asmProgram.stringify(sFileWriter, allocator, tacRenderer.asmSymbolTable);
     try cFileWriter.writeAll(programStr);
 }

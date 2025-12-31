@@ -511,11 +511,9 @@ pub fn typecheckExternalDecl(self: *Typechecker, externalDecl: *AST.ExternalDecl
             const fnSym = try self.allocator.create(Symbol);
             const fnName = (try functionDeclarator.declarator.unwrapIdentDecl()).Ident;
             var fnArgsList = std.ArrayList(*AST.Type).init(self.allocator);
-            std.log.warn("Params for {s}:\n", .{fnName});
             for (functionDeclarator.params.items) |arg| {
                 // Types for parameters are fully constructed in the parser
                 // (including array-to-pointer decay). No fixups needed here.
-                std.log.warn("\targ: {any}\n", .{arg.NonVoidArg.type});
                 try fnArgsList.append(&arg.NonVoidArg.type);
             }
             fnSym.* = .{
@@ -541,7 +539,6 @@ pub fn typecheckExternalDecl(self: *Typechecker, externalDecl: *AST.ExternalDecl
                     .attributes = .LocalAttr,
                 };
                 const argName = (try arg.NonVoidArg.declarator.unwrapIdentDecl()).Ident;
-                std.log.warn("Arg name: {s} and argSym: {any}\n", .{ argName, argSym });
                 try self.symbolTable.put(argName, argSym);
             }
 
@@ -637,19 +634,15 @@ fn checkConversion(self: *Typechecker, from: AST.Type, to: AST.Type) TypeChecker
     if (std.meta.activeTag(ft) == .Array and std.meta.activeTag(tt) == .Pointer) {
         ft = try changeTopLevelArrayToPointer(ft, self.allocator);
     }
-    std.log.warn("checkConversion: from(orig) = {any}, to(decayed) = {any}\n", .{ ft, tt });
     // if both are numeric, its a valid conversion
     if (ft.isNumeric() and tt.isNumeric()) return true;
     if (ft.isNumeric() or tt.isNumeric()) return false;
     // Here both types are pointers. Prefer a structural comparison that
     // respects pointer-to-array shapes. If that passes, allow conversion.
     const eql = ft.deepEql(tt);
-    std.log.warn("checkConversion deepEql = {}\n", .{eql});
     if (eql) return true;
-    std.log.warn("checkConversion tags: from = {any}, to = {any}\n", .{ std.meta.activeTag(fromType), std.meta.activeTag(toType) });
     // Structural compatibility across pointers/arrays (including array sizes).
     const struct_ok = typeStructCompat(ft, tt);
-    std.log.warn("typeStructCompat = {}\n", .{struct_ok});
     if (struct_ok) return true;
     // As a final fallback for pointer/array shapes, compare by "total pointer
     // depth" where each Array layer contributes one level (array-to-pointer
@@ -657,7 +650,6 @@ fn checkConversion(self: *Typechecker, from: AST.Type, to: AST.Type) TypeChecker
     if (arrOrPtr(ft) != null and arrOrPtr(tt) != null) {
         const a = ptrDepthAndBase(ft);
         const b = ptrDepthAndBase(tt);
-        std.log.warn("depth/base: from = {d}/{any}, to = {d}/{any}\n", .{ a.depth, a.base, b.depth, b.base });
         if (a.depth == b.depth and std.meta.activeTag(a.base) == std.meta.activeTag(b.base)) return true;
     }
     return false;
@@ -747,11 +739,7 @@ fn typecheckInitializer(self: *Typechecker, initializer: *AST.Initializer, declT
     newInitializer.* = initializer.*;
     switch (initializer.*) {
         .Expression => {
-            std.log.warn("typechecking initializer expression: {any}\n", .{newInitializer.Expression});
             newInitializer.Expression = try typecheckExpr(self, newInitializer.Expression);
-            std.log.warn("After casting, the type of new initializer is {any}\n", .{newInitializer.Expression});
-            // Normalize declaration type: decay arrays within nested structure to pointers
-            std.log.warn("declaration type: {} and expression type: {}\n", .{ declType, newInitializer.Expression.getType() });
             if (!(try checkConversion(self, declType, newInitializer.Expression.getType())) and !isNullPtrAssignment(newInitializer.Expression, declType)) {
                 std.log.warn("error: check conversion: {any} to {any}\n", .{ declType, newInitializer.Expression.getType() });
                 try self.errors.append(try std.fmt.allocPrint(self.allocator, "Type error at local declaration\n", .{}));
@@ -805,7 +793,6 @@ fn typecheckBlkItem(self: *Typechecker, blkItem: *AST.BlockItem) TypeCheckerErro
             // 2.if var is extern: look if there is a declaration outside
 
             // Typecheck the expression
-            std.log.warn("decl is {any}\n", .{decl});
             if (decl.varInitValue) |varInitValue| {
                 // Stages of typechecking an assigned expression
                 // 1. Typecheck within the expression and retrieve the
@@ -835,7 +822,6 @@ fn typecheckBlkItem(self: *Typechecker, blkItem: *AST.BlockItem) TypeCheckerErro
                             return TypeError.ExternVarDeclared;
                         }
                         if (self.symbolTable.get(decl.name)) |olderSym| {
-                            std.log.warn("This: {any} and {any}\n", .{ olderSym.typeInfo, TypeKind.from(decl.type) });
                             if (std.meta.activeTag(olderSym.typeInfo) != decl.type) {
                                 try self.errors.append(try std.fmt.allocPrint(
                                     self.allocator,
@@ -923,7 +909,6 @@ fn typecheckBlkItem(self: *Typechecker, blkItem: *AST.BlockItem) TypeCheckerErro
                     .typeInfo = decl.type,
                     .attributes = .LocalAttr,
                 };
-                std.log.warn("Adding local declaration for {s} with symbol: {any}\n", .{ decl.name, sym });
                 try self.symbolTable.put(decl.name, sym);
             }
         },
@@ -1222,10 +1207,8 @@ pub fn getArrSubscriptType(self: *Typechecker, arrSubscript: *AST.ArrSubscript) 
     // If the array/pointer is on the left, the right is the index; otherwise left is the index.
     if (arr_choice != null) {
         arrSubscript.index = try convert(self.allocator, arrSubscript.index, .ULong);
-        std.log.warn("arrSubscript.index = {any}\n", .{arrSubscript.index});
     } else {
         arrSubscript.arr = try convert(self.allocator, arrSubscript.arr, .ULong);
-        std.log.warn("arrSubscript.arr = {any}\n", .{arrSubscript.arr});
     }
 
     // Return the element type after one level of indexing.
@@ -1240,13 +1223,11 @@ fn typecheckExpr(self: *Typechecker, expr: *AST.Expression) TypeError!*AST.Expre
     // Expr can error because of a type issue,
     // for now we can just return a generic type error
     // and handle it from the outer functions (no diagnostic)
-    std.log.warn("typechecking expression: {any}\n", .{expr});
     switch (expr.*) {
         .AddrOf => |addrOf| {
             const innerType = try self.allocator.create(AST.Type);
             innerType.* = (try typecheckExpr(self, addrOf.exp)).getType();
             expr.AddrOf.type = .{ .Pointer = innerType };
-            std.log.warn("Assigning type to AddrOf: pointer to {any} \n", .{innerType});
             return expr;
         },
         .Deref => |deref| {
@@ -1269,7 +1250,6 @@ fn typecheckExpr(self: *Typechecker, expr: *AST.Expression) TypeError!*AST.Expre
             return expr;
         },
         .Binary => {
-            std.log.warn("lhs is {any}\n", .{expr.Binary.lhs});
             // Apply value conversion to array operands (array -> pointer), and
             // use these for type reasoning.
             const lhsChecked = try typecheckExpr(self, expr.Binary.lhs);
@@ -1278,7 +1258,6 @@ fn typecheckExpr(self: *Typechecker, expr: *AST.Expression) TypeError!*AST.Expre
             expr.Binary.rhs = try decayArrayValue(self, rhsChecked);
             const lhsType = try changeTopLevelArrayToPointer(expr.Binary.lhs.getType(), self.allocator);
             const rhsType = try changeTopLevelArrayToPointer(expr.Binary.rhs.getType(), self.allocator);
-            std.log.warn("Binary expression with lhsType = {any} and rhsType = {any}\n", .{ lhsType, rhsType });
             const isLhsPointer = std.meta.activeTag(lhsType) == .Pointer;
             const isRhsPointer = std.meta.activeTag(rhsType) == .Pointer;
 
@@ -1297,9 +1276,7 @@ fn typecheckExpr(self: *Typechecker, expr: *AST.Expression) TypeError!*AST.Expre
                 return TypeError.InvalidOperand;
             }
             if (isLhsPointer or isRhsPointer) {
-                std.log.warn("Either one of lhs or rhs is a pointer\n", .{});
                 const commonType = try getCommonPtrType(self, expr.Binary.lhs, expr.Binary.rhs);
-                std.log.warn("Got common type to be {any}\n", .{commonType});
                 if (commonType == null) {
                     std.log.warn("type error in pointer expression", .{});
                     return TypeError.InvalidOperand;
@@ -1325,7 +1302,6 @@ fn typecheckExpr(self: *Typechecker, expr: *AST.Expression) TypeError!*AST.Expre
                 std.log.warn("Cannot apply {any} to {any}", .{ expr.Binary.op, commonType });
                 return TypeError.InvalidOperand;
             }
-            std.log.warn("Converting lhs and rhs to common type = {any}\n", .{commonType});
             expr.Binary.lhs = try convert(self.allocator, expr.Binary.lhs, commonType.?);
             expr.Binary.rhs = try convert(self.allocator, expr.Binary.rhs, commonType.?);
             expr.Binary.type = switch (expr.Binary.op) {
@@ -1348,26 +1324,13 @@ fn typecheckExpr(self: *Typechecker, expr: *AST.Expression) TypeError!*AST.Expre
                 });
                 return TypeError.TypeMismatch;
             }
-            std.log.warn("Before function call arguments are modified\n", .{});
-            for (0..fnSymbol.typeInfo.Function.args.items.len) |i| {
-                std.log.warn("argument {d}: {any}\n", .{ i, fnCall.args.items[i] });
-            }
             for (0..fnSymbol.typeInfo.Function.args.items.len) |i| {
                 const checked = try typecheckExpr(self, fnCall.args.items[i]);
                 const argValue = try decayArrayValue(self, checked);
                 const paramTy = fnSymbol.typeInfo.Function.args.items[i].*;
                 expr.FunctionCall.args.items[i] = if (std.meta.activeTag(paramTy) != std.meta.activeTag(argValue.getType())) blk: {
-                    std.log.warn("Casting function argument in fn: {s} from {any} to {any}\n", .{
-                        fnCall.name,
-                        argValue.getType(),
-                        paramTy,
-                    });
                     break :blk try convert(self.allocator, argValue, paramTy);
                 } else argValue;
-            }
-            std.log.warn("Post function call arguments are modified\n", .{});
-            for (0..fnSymbol.typeInfo.Function.args.items.len) |i| {
-                std.log.warn("argument {d}: {any}\n", .{ i, fnCall.args.items[i] });
             }
             expr.FunctionCall.type = fnSymbol.typeInfo.Function.returnType.*;
             // FIXME: This convert call is stupid, delete it after some checks
@@ -1388,7 +1351,6 @@ fn typecheckExpr(self: *Typechecker, expr: *AST.Expression) TypeError!*AST.Expre
                 const decayTy = try changeTopLevelArrayToPointer(symbolType, self.allocator);
                 exprRunner.* = .{ .AddrOf = .{ .exp = innerExpr, .type = decayTy } };
             }
-            std.log.warn("Returning an exprRunner: {any}\n", .{exprRunner});
             expr.* = exprRunner.*;
             return exprRunner;
         },
@@ -1403,7 +1365,6 @@ fn typecheckExpr(self: *Typechecker, expr: *AST.Expression) TypeError!*AST.Expre
             // INFO: Constant floats need to be in .rodata/.data
             if (t == .Float) {
                 const tempId = try AST.tempGen.genTemp(self.allocator);
-                std.log.warn("tempId: {any}\n", .{tempId});
                 const sym = try self.allocator.create(Symbol);
                 sym.* = .{
                     .typeInfo = .Float,
@@ -1482,7 +1443,6 @@ fn typecheckExpr(self: *Typechecker, expr: *AST.Expression) TypeError!*AST.Expre
             return expr;
         },
         .ArrSubscript => |arrSubscript| {
-            std.log.warn("Typechecking arr subscript: arr = {any}\n",.{arrSubscript.arr});
             expr.ArrSubscript.arr = try typecheckExpr(self, arrSubscript.arr);
             expr.ArrSubscript.index = try typecheckExpr(self, arrSubscript.index);
             // In value contexts, arrays decay to pointers; ensure base is pointer

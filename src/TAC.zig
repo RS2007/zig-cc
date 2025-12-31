@@ -95,7 +95,6 @@ pub fn astSymTabToTacSymTab(allocator: std.mem.Allocator, astSymTab: std.StringH
             },
             .Void => unreachable,
         };
-        std.log.warn("symName: {s} and asmSymbol: {any}\n", .{ symName, asmSymbol });
         try asmSymTab.put(
             @constCast(symName),
             asmSymbol,
@@ -125,7 +124,6 @@ pub const AsmRenderer = struct {
             const asmTopLevelDecl = try self.allocator.create(assembly.TopLevelDecl);
             switch (topLevelDecl.*) {
                 .StaticVar => |statItem| {
-                    std.log.warn("generating tac static var: {s}\n", .{statItem.name});
                     var staticInitArray = try std.ArrayList(assembly.StaticInit).initCapacity(self.allocator, statItem.init.len);
                     for (statItem.init) |staticVarInit| {
                         staticInitArray.appendAssumeCapacity(switch (staticVarInit) {
@@ -161,7 +159,6 @@ pub const AsmRenderer = struct {
                     for (fnItem.args.items, 0..) |arg, i| {
                         const movInstructoin = try self.allocator.create(assembly.Instruction);
                         const resolvedArgSym = self.asmSymbolTable.get(arg).?;
-                        std.log.warn("resolvedArgSym for arg {s}: {any}\n", .{ arg, resolvedArgSym.* });
                         movInstructoin.* = assembly.Instruction{
                             .Mov = assembly.MovInst{
                                 .type = switch (resolvedArgSym.*) {
@@ -613,6 +610,7 @@ pub const Instruction = union(InstructionType) {
                 try instructions.appendSlice(&floatToUIntInst);
             },
             .IntToFloat => |intToFloat| {
+                std.log.warn("Int to float hit maybe\n", .{});
                 const src = try intToFloat.src.codegen(symbolTable, allocator);
                 const dest = try intToFloat.dest.codegen(symbolTable, allocator);
                 try instructions.append(try assembly.createInst(.Cvtsi2sd, assembly.Cvtsi2sd{
@@ -856,6 +854,7 @@ pub const Instruction = union(InstructionType) {
                         //    std.log.err("binary: {any}\n", .{binary});
                         //    unreachable;
                         //}
+                        // FIX: This should be changed in the instruction fixup pass and not here
                         var comparisionInst = [_]*assembly.Instruction{
                             try assembly.createInst(.Mov, assembly.MovInst{
                                 .src = left,
@@ -961,7 +960,6 @@ pub const Instruction = union(InstructionType) {
             .CopyIntoOffset => |copyIntoOffset| {
                 const src = try copyIntoOffset.src.codegen(symbolTable, allocator);
 
-                std.log.warn("The destination is {s}\n", .{copyIntoOffset.dest});
                 const srcType = copyIntoOffset.src.getAsmTypeFromSymTab(symbolTable).?;
                 //const r8 = try allocator.create(assembly.Operand);
                 //r8.* = .{ .Reg = .R8_64 };
@@ -972,7 +970,6 @@ pub const Instruction = union(InstructionType) {
                 // 2. Move the (dest, index, offset) to r9
                 // 3. Move r8 to &r9
 
-                std.log.warn("Copy into offset at index: {d}\n", .{copyIntoOffset.offset});
                 try instructions.append(
                     try assembly.createInst(
                         .Mov,
@@ -1079,7 +1076,6 @@ pub const Instruction = union(InstructionType) {
                     for (fnCall.args.items, 0..) |arg, i| {
                         const assemblyArg = try arg.codegen(symbolTable, allocator);
                         const assemblyArgType = arg.getAsmTypeFromSymTab(symbolTable).?;
-                        std.log.warn("arg: {any}, assemblyArgType: {any}\n", .{ arg, assemblyArgType });
                         try instructions.append(try assembly.createInst(.Mov, assembly.MovInst{
                             .src = assemblyArg,
                             .dest = switch (assemblyArgType) {

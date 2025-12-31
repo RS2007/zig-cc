@@ -284,7 +284,6 @@ fn convertSymToTAC(tacProgram: *tac.Program, symbolTable: std.StringHashMap(*sem
                     .Initial => |initial| {
                         var staticVarConstants = try std.ArrayList(tac.StaticVarInit).initCapacity(symbolTable.allocator, initial.len);
                         var staticVarTypes = try std.ArrayList(tac.ConstantType).initCapacity(symbolTable.allocator, initial.len);
-                        std.log.warn("Processing constant array: {any}\n", .{initial});
                         for (initial) |constant| {
                             staticVarConstants.appendAssumeCapacity(switch (constant.type) {
                                 .Integer => .{ .Integer = constant.value.Integer },
@@ -1272,7 +1271,6 @@ pub const Initializer = union(enum) {
     pub fn genTACInstructionsAndCvt(initializer: *Initializer, renderer: *TACRenderer, instructions: *std.ArrayList(*tac.Instruction), name: []u8, offset: ?i64) !void {
         return switch (initializer.*) {
             .Expression => |expr| {
-                std.log.info("Generating tac for ast.initializer: {any}\n", .{expr});
                 const rhs = try expr.genTACInstructionsAndCvt(renderer, instructions);
                 const instr = try renderer.allocator.create(tac.Instruction);
 
@@ -1571,7 +1569,6 @@ pub const Expression = union(ExpressionType) {
                         .static = false,
                     },
                 };
-                std.log.warn("Pushing in {s} = {any}\n", .{ destName, asmSymbol });
                 try renderer.asmSymbolTable.put(destName, asmSymbol);
                 dest.* = tac.Val{ .Variable = destName };
                 boxed.* = tac.BoxedVal{ .PlainVal = dest };
@@ -1709,7 +1706,6 @@ pub const Expression = union(ExpressionType) {
                 const storeTemp = try renderer.allocator.create(tac.Val);
                 storeTemp.* = tac.Val{ .Variable = try tempGen.genTemp(renderer.allocator) };
                 const storeTempName = storeTemp.Variable;
-                std.log.warn("storeTempName: {s}\n", .{storeTempName});
                 const boxed = try renderer.allocator.create(tac.BoxedVal);
                 boxed.* = tac.BoxedVal{ .PlainVal = storeTemp };
                 if (binary.op == BinOp.LOGIC_AND or binary.op == BinOp.LOGIC_OR) {
@@ -1787,7 +1783,6 @@ pub const Expression = union(ExpressionType) {
                 return boxed;
             },
             .Identifier => |iden| {
-                std.log.warn("iden: {s}\n", .{iden.name});
                 const tacVal = try renderer.allocator.create(tac.Val);
                 const boxed = try renderer.allocator.create(tac.BoxedVal);
                 tacVal.* = tac.Val{ .Variable = iden.name };
@@ -1868,7 +1863,6 @@ pub const Expression = union(ExpressionType) {
                 const tacFnCall = try renderer.allocator.create(tac.Instruction);
                 var tacFnCallArgs = std.ArrayList(*tac.Val).init(renderer.allocator);
                 for (fnCall.args.items) |arg| {
-                    std.log.warn("converting {any} to tac", .{arg});
                     try tacFnCallArgs.append(try arg.genTACInstructionsAndCvt(renderer, instructions));
                 }
                 tacFnCall.* = .{ .FunctionCall = .{
@@ -1882,8 +1876,11 @@ pub const Expression = union(ExpressionType) {
                 return boxed;
             },
             .ArrSubscript => |arrSubscript| {
-                std.log.warn("Converting to tac, arr = {any}, index = {any}\n", .{ arrSubscript.arr, arrSubscript.index });
-                const arr = try arrSubscript.arr.genTACInstructionsAndCvt(renderer, instructions);
+                const arrBoxed = try arrSubscript.arr.genTACInstructions(renderer, instructions);
+                const arr = switch (arrBoxed.*) {
+                    .PlainVal => arrBoxed.PlainVal,
+                    .DerefedVal => arrBoxed.DerefedVal,
+                };
                 const index = try arrSubscript.index.genTACInstructionsAndCvt(renderer, instructions);
                 const arrAtIndexPtr = try renderer.allocator.create(tac.Val);
                 arrAtIndexPtr.* = tac.Val{
@@ -1916,7 +1913,6 @@ pub fn expressionScopeVariableResolve(self: *VarResolver, expression: *Expressio
         .Constant => {},
         .Identifier => |identifier| {
             if (self.lookup(identifier.name)) |resolvedSym| {
-                std.log.warn("resolved sym: {s} = {s}\n", .{ identifier.name, resolvedSym.newName });
                 expression.Identifier.name = resolvedSym.newName;
             }
         },
@@ -2040,7 +2036,6 @@ pub fn blockStatementScopeVariableResolve(self: *VarResolver, blockItem: *BlockI
                 .newName = (try std.fmt.allocPrint(self.allocator, "{s}{d}", .{ identDecl, currentScope })),
             };
 
-            std.log.warn("Pushing in {s} = {any}\n", .{ identDecl, sym });
             try self.varMap.getLast().put(identDecl, sym);
             decl.name = sym.newName;
             if (decl.varInitValue) |varInitValue| {

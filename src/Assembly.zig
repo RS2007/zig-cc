@@ -32,7 +32,6 @@ pub const Program = struct {
         for (self.topLevelDecls.items) |topLevelDecl| {
             switch (topLevelDecl.*) {
                 .Function => |function| {
-                    std.log.warn("Replacing pseudos in :{s}\n", .{function.name});
                     try replacePseudoRegs(function, allocator, asmSymbolTable);
                     const fixedAsmInstructions = try fixupInstructions(&function.instructions, allocator);
                     function.instructions = fixedAsmInstructions;
@@ -317,6 +316,7 @@ pub const Reg = enum {
     XMM1,
     XMM15,
     XMM14,
+    XMM12,
     BP,
     pub fn stringify(register: Reg, allocator: std.mem.Allocator) ast.CodegenError![]u8 {
         switch (register) {
@@ -397,6 +397,9 @@ pub const Reg = enum {
             },
             .XMM15 => {
                 return (try std.fmt.allocPrint(allocator, "%xmm15", .{}));
+            },
+            .XMM12 => {
+                return (try std.fmt.allocPrint(allocator, "%xmm12", .{}));
             },
         }
     }
@@ -691,7 +694,6 @@ pub const Instruction = union(InstructionType) {
     pub fn stringify(instruction: *Instruction, allocator: std.mem.Allocator) ast.CodegenError![]u8 {
         switch (instruction.*) {
             .Mov => |mov| {
-                std.log.warn("Mov stringify: {any}\n", .{mov});
                 return (try std.fmt.allocPrint(allocator, "mov{s} {s},{s}", .{ mov.type.suffix(), try Operand.stringify(@constCast(&mov.src), allocator), try Operand.stringify(@constCast(&mov.dest), allocator) }));
             },
             .Unary => |unary| {
@@ -875,7 +877,6 @@ pub fn fixupInstructions(instructions: *std.ArrayList(*Instruction), allocator: 
                     .dest = movzx.dest,
                     .type = .QuadWord,
                 } };
-                std.log.warn("repalced the movsz with {any} and {any}\n", .{ movSrcToEax, movRaxToDest });
                 try fixedInstructions.append(movSrcToEax);
                 try fixedInstructions.append(movRaxToDest);
             },
@@ -974,12 +975,12 @@ pub fn fixupInstructions(instructions: *std.ArrayList(*Instruction), allocator: 
                         .Mov = MovInst{
                             .src = cmp.op1,
                             .dest = Operand{
-                                .Reg = cmp.type.getR10Variety(),
+                                .Reg = cmp.type.getR9Variety(),
                             },
                             .type = cmp.type,
                         },
                     };
-                    inst.Cmp.op1 = Operand{ .Reg = cmp.type.getR10Variety() };
+                    inst.Cmp.op1 = Operand{ .Reg = cmp.type.getR9Variety() };
 
                     // If cmp is of the comisd variant then the rhs can't be a memory location
                     if (inst.Cmp.type == .Float) {
@@ -995,30 +996,62 @@ pub fn fixupInstructions(instructions: *std.ArrayList(*Instruction), allocator: 
                     continue;
                 } else {
                     // INFO: cmpq doesn't support 64 bit immediates
-                    if (inst.Cmp.op2.is(.Imm) and inst.Cmp.type == .QuadWord) {
-                        const movRhsToReg = try allocator.create(Instruction);
-                        movRhsToReg.* = .{
-                            .Mov = .{
-                                .src = cmp.op2,
-                                .dest = .{ .Reg = cmp.type.getR11Variety() },
-                                .type = cmp.type,
-                            },
-                        };
-                        try fixedInstructions.append(movRhsToReg);
-                        inst.Cmp.op2 = Operand{ .Reg = cmp.type.getR11Variety() };
+                    if (inst.Cmp.op2.is(.Imm)) {
+                        if (std.meta.activeTag(inst.Cmp.type) == .QuadWord) {
+                            const movRhsToReg = try allocator.create(Instruction);
+                            movRhsToReg.* = .{
+                                .Mov = .{
+                                    .src = cmp.op2,
+                                    .dest = .{ .Reg = cmp.type.getR11Variety() },
+                                    .type = cmp.type,
+                                },
+                            };
+                            try fixedInstructions.append(movRhsToReg);
+                            inst.Cmp.op2 = Operand{ .Reg = cmp.type.getR11Variety() };
+                        } else if (inst.Cmp.type == .Float) {
+                            try fixedInstructions.appendSlice(&[_]*Instruction{
+                                try createInst(.Mov, MovInst{
+                                    .src = cmp.op2,
+                                    .dest = .{ .Reg = .R11_64 },
+                                    .type = .QuadWord,
+                                }, allocator),
+                                try createInst(.Cvtsi2sd, Cvtsi2sd{
+                                    .src = .{ .Reg = .R11_64 },
+                                    .dest = .{ .Reg = inst.Cmp.type.getR11Variety() },
+                                    .type = .QuadWord,
+                                }, allocator),
+                            });
+                            inst.Cmp.op2 = Operand{ .Reg = cmp.type.getR11Variety() };
+                        }
                     }
 
-                    if (inst.Cmp.op1.is(.Imm) and inst.Cmp.type == .QuadWord) {
-                        const movRhsToReg = try allocator.create(Instruction);
-                        movRhsToReg.* = .{
-                            .Mov = .{
-                                .src = cmp.op1,
-                                .dest = .{ .Reg = cmp.type.getR11Variety() },
-                                .type = cmp.type,
-                            },
-                        };
-                        try fixedInstructions.append(movRhsToReg);
-                        inst.Cmp.op1 = Operand{ .Reg = cmp.type.getR11Variety() };
+                    if (inst.Cmp.op1.is(.Imm)) {
+                        if (std.meta.activeTag(inst.Cmp.type) == .QuadWord) {
+                            const movRhsToReg = try allocator.create(Instruction);
+                            movRhsToReg.* = .{
+                                .Mov = .{
+                                    .src = cmp.op1,
+                                    .dest = .{ .Reg = cmp.type.getR9Variety() },
+                                    .type = cmp.type,
+                                },
+                            };
+                            try fixedInstructions.append(movRhsToReg);
+                            inst.Cmp.op1 = Operand{ .Reg = cmp.type.getR9Variety() };
+                        } else if (std.meta.activeTag(inst.Cmp.type) == .Float) {
+                            try fixedInstructions.appendSlice(&[_]*Instruction{
+                                try createInst(.Mov, MovInst{
+                                    .src = cmp.op1,
+                                    .dest = .{ .Reg = .R9_64 },
+                                    .type = .QuadWord,
+                                }, allocator),
+                                try createInst(.Cvtsi2sd, Cvtsi2sd{
+                                    .src = .{ .Reg = .R9_64 },
+                                    .dest = .{ .Reg = inst.Cmp.type.getR9Variety() },
+                                    .type = .QuadWord,
+                                }, allocator),
+                            });
+                            inst.Cmp.op1 = Operand{ .Reg = cmp.type.getR9Variety() };
+                        }
                     }
 
                     try fixedInstructions.append(inst);
@@ -1520,12 +1553,12 @@ pub fn replacePseudoRegs(function: *Function, allocator: std.mem.Allocator, asmS
             },
         }
     }
-    var lookupIter = lookup.iterator();
-    while (lookupIter.next()) |entry| {
-        const key = entry.key_ptr.*;
-        const value = entry.value_ptr.*;
-        std.log.warn("LOOKUP: {s} => {d}\n", .{ key, value });
-    }
+    //var lookupIter = lookup.iterator();
+    //while (lookupIter.next()) |entry| {
+    //    const key = entry.key_ptr.*;
+    //    const value = entry.value_ptr.*;
+    //    std.log.warn("LOOKUP: {s} => {d}\n", .{ key, value });
+    //}
 
     if (topOfStack != 0) {
         const allocateStackInst = try allocator.create(Instruction);
@@ -1555,7 +1588,6 @@ inline fn replacePseudo(
 ) ast.CodegenError!void {
     if (std.meta.activeTag(operand.*) == .Pseudo) {
         if (lookup.contains(operand.Pseudo)) {
-            std.log.warn("Pseudo: {s} found in lookup\n", .{operand.Pseudo});
             operand.* = try Mem.createStack(allocator, lookup.get(operand.Pseudo).?);
         } else {
             const offset: i64 = asmSymbolTable.get(operand.Pseudo).?.Obj.type.size();
@@ -1570,7 +1602,6 @@ inline fn replacePseudo(
 
     if (std.meta.activeTag(operand.*) == .PseudoMem) {
         if (lookup.contains(operand.PseudoMem.name)) {
-            std.log.warn("Pseudo: {s} found in lookup\n", .{operand.PseudoMem.name});
             const base = lookup.get(operand.PseudoMem.name).?;
             operand.* = try Mem.createStack(allocator, base + operand.PseudoMem.offset);
         } else {
