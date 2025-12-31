@@ -16,6 +16,41 @@ zig build
 
 - Can compile these programs:
 
+### 2d arrays
+
+```C
+int bsearch2d(int (*arr)[4], int rows, int target) {
+    int s = 0;
+    int e = rows * 4 - 1;
+    while (s <= e) {
+        int m = s + (e - s) / 2;
+        int r = m / 4;
+        int c = m % 4;
+        if (arr[r][c] == target) {
+            return 1;
+        }
+        if (arr[r][c] < target) {
+            s = m + 1;
+        } else {
+            e = m - 1;
+        }
+    }
+    return 0;
+}
+int main() {
+    int grid[3][4] = {
+        {1, 3, 5, 7},
+        {9, 11, 13, 15},
+        {17, 19, 21, 23}
+    };
+    if (bsearch2d(grid, 3, 13) == 0) return 1;
+    if (bsearch2d(grid, 3, 14) != 0) return 2;
+    return 0;
+}
+```
+
+### 1d arrays - search
+
 ```c
  int binarysearch(int *arr, int arrLen, int target) {
      int s = 0;
@@ -35,6 +70,8 @@ zig build
      return rc == 2 ? 0: -1;
  }
 ```
+
+### 1d arrays - sorting
 
 ```c
  int bubblesort(int *arr, int arrLen) {
@@ -60,6 +97,8 @@ zig build
      return 0;
  }
 ```
+
+### pointers
 
 ```c
  double calculateCompoundInterest(double* initialAmount,
@@ -88,6 +127,8 @@ zig build
  }
 ```
 
+### static variables mutability across function calls
+
 ```c
 int recurse(int n){
         static int accum = 0;
@@ -104,6 +145,8 @@ int main(){
     return recurse(10);
 }
 ```
+
+### functions 
 
 ```c
 int four = 4;
