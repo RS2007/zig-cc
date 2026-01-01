@@ -1068,8 +1068,22 @@ pub const Instruction = union(InstructionType) {
                 }, allocator));
             },
             .FunctionCall => |fnCall| {
-                const registers32 = [_]assembly.Reg{ assembly.Reg.EDI, assembly.Reg.ESI, assembly.Reg.EDX, assembly.Reg.ECX, assembly.Reg.R8, assembly.Reg.R9 };
-                const registers64 = [_]assembly.Reg{ assembly.Reg.RDI, assembly.Reg.RSI, assembly.Reg.RDX, assembly.Reg.RCX, assembly.Reg.R8_64, assembly.Reg.R9_64 };
+                const registers32 = [_]assembly.Reg{
+                    assembly.Reg.EDI,
+                    assembly.Reg.ESI,
+                    assembly.Reg.EDX,
+                    assembly.Reg.ECX,
+                    assembly.Reg.R8,
+                    assembly.Reg.R9,
+                };
+                const registers64 = [_]assembly.Reg{
+                    assembly.Reg.RDI,
+                    assembly.Reg.RSI,
+                    assembly.Reg.RDX,
+                    assembly.Reg.RCX,
+                    assembly.Reg.R8_64,
+                    assembly.Reg.R9_64,
+                };
                 const registersFloat = [_]assembly.Reg{ assembly.Reg.XMM0, assembly.Reg.XMM1 };
                 var floatArgsCount: u64 = 0;
                 if (fnCall.args.items.len < 6) {

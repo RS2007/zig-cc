@@ -40,6 +40,214 @@ test "testing lexer basic" {
     _ = try std.testing.expect(std.mem.eql(u8, l.buffer[ninthToken.*.start .. ninthToken.*.end + 1], "}"));
 }
 
+test "testing char lexing" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const buffer =
+        \\ int main(){ char a = 'a'; char b[4] = "abc"; char c[5] = "abc\n";  return 0; }
+    ;
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(buffer)));
+    // Advance to the 'char' keyword and assert its token type
+    _ = try l.nextToken(allocator); // int
+    _ = try l.nextToken(allocator); // main
+    _ = try l.nextToken(allocator); // (
+    _ = try l.nextToken(allocator); // )
+    _ = try l.nextToken(allocator); // {
+    const charToken = try l.nextToken(allocator); // char
+    _ = try std.testing.expectEqual(charToken.type, lexer.TokenType.CHAR_TYPE);
+    // Next tokens reflect updated program: identifier 'a' then '='
+    const aTok = try l.nextToken(allocator);
+    const assignTok = try l.nextToken(allocator);
+    _ = try std.testing.expectEqual(aTok.type, lexer.TokenType.IDENTIFIER);
+    _ = try std.testing.expectEqual(assignTok.type, lexer.TokenType.ASSIGN);
+    // Char literal 'a' (peek, then consume)
+    const saved_char_pos = l.current;
+    const peekCharLit = (try l.peekToken(allocator)).?;
+    _ = try std.testing.expectEqual(peekCharLit.type, lexer.TokenType.CHAR_LITERAL);
+    _ = try std.testing.expectEqual(saved_char_pos, l.current);
+    const charLitTok = try l.nextToken(allocator);
+    _ = try std.testing.expectEqual(charLitTok.type, lexer.TokenType.CHAR_LITERAL);
+    _ = try l.nextToken(allocator); // ;
+    // Next declaration: char b[4] = "abc";
+    const charToken2 = try l.nextToken(allocator); // char
+    _ = try std.testing.expectEqual(charToken2.type, lexer.TokenType.CHAR_TYPE);
+    const bTok = try l.nextToken(allocator); // b
+    _ = try std.testing.expectEqual(bTok.type, lexer.TokenType.IDENTIFIER);
+    const lSq = try l.nextToken(allocator); // [
+    _ = try std.testing.expectEqual(lSq.type, lexer.TokenType.LSQUARE);
+    const fourTok = try l.nextToken(allocator); // 4
+    _ = try std.testing.expectEqual(fourTok.type, lexer.TokenType.INTEGER);
+    const rSq = try l.nextToken(allocator); // ]
+    _ = try std.testing.expectEqual(rSq.type, lexer.TokenType.RSQUARE);
+    const assignTok2 = try l.nextToken(allocator); // =
+    _ = try std.testing.expectEqual(assignTok2.type, lexer.TokenType.ASSIGN);
+    // String literal "abc" (peek, then consume)
+    const saved_str_pos = l.current;
+    const peekStr = (try l.peekToken(allocator)).?;
+    _ = try std.testing.expectEqual(peekStr.type, lexer.TokenType.STRING_LITERAL);
+    _ = try std.testing.expectEqual(saved_str_pos, l.current);
+    const strTok = try l.nextToken(allocator); // "abc"
+    _ = try std.testing.expectEqual(strTok.type, lexer.TokenType.STRING_LITERAL);
+    const semi1 = try l.nextToken(allocator); // ;
+    _ = try std.testing.expectEqual(semi1.type, lexer.TokenType.SEMICOLON);
+    // Added line: char c[5] = "abc\n";
+    const charToken3 = try l.nextToken(allocator); // char
+    _ = try std.testing.expectEqual(charToken3.type, lexer.TokenType.CHAR_TYPE);
+    const cTok = try l.nextToken(allocator); // c
+    _ = try std.testing.expectEqual(cTok.type, lexer.TokenType.IDENTIFIER);
+    const lSq2 = try l.nextToken(allocator); // [
+    _ = try std.testing.expectEqual(lSq2.type, lexer.TokenType.LSQUARE);
+    const fiveTok = try l.nextToken(allocator); // 5
+    _ = try std.testing.expectEqual(fiveTok.type, lexer.TokenType.INTEGER);
+    const rSq2 = try l.nextToken(allocator); // ]
+    _ = try std.testing.expectEqual(rSq2.type, lexer.TokenType.RSQUARE);
+    const assignTok3 = try l.nextToken(allocator); // =
+    _ = try std.testing.expectEqual(assignTok3.type, lexer.TokenType.ASSIGN);
+    // String literal with escape "abc\n" (peek, then consume)
+    const saved_str2_pos = l.current;
+    const peekStr2 = (try l.peekToken(allocator)).?;
+    _ = try std.testing.expectEqual(peekStr2.type, lexer.TokenType.STRING_LITERAL);
+    _ = try std.testing.expectEqual(saved_str2_pos, l.current);
+    const strTok2 = try l.nextToken(allocator); // "abc\n"
+    _ = try std.testing.expectEqual(strTok2.type, lexer.TokenType.STRING_LITERAL);
+    const semi2 = try l.nextToken(allocator); // ;
+    _ = try std.testing.expectEqual(semi2.type, lexer.TokenType.SEMICOLON);
+}
+
+test "invalid string escape in declaration" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const buffer =
+        \\ int main(){ char a[4] = "ab\y"; return 0; }
+    ;
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(buffer)));
+    _ = try l.nextToken(allocator); // int
+    _ = try l.nextToken(allocator); // main
+    _ = try l.nextToken(allocator); // (
+    _ = try l.nextToken(allocator); // )
+    _ = try l.nextToken(allocator); // {
+    _ = try l.nextToken(allocator); // char
+    _ = try l.nextToken(allocator); // a
+    _ = try l.nextToken(allocator); // [
+    _ = try l.nextToken(allocator); // 4
+    _ = try l.nextToken(allocator); // ]
+    _ = try l.nextToken(allocator); // =
+    // Next should be an invalid string literal due to \y
+    // Expect the lexer to throw InvalidToken when lexing the string
+    _ = try std.testing.expectError(lexer.LexerError.InvalidToken, l.nextToken(allocator));
+}
+
+test "invalid char escape in declaration" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const buffer =
+        \\ int main(){ char c = '\\y'; return 0; }
+    ;
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(buffer)));
+    _ = try l.nextToken(allocator); // int
+    _ = try l.nextToken(allocator); // main
+    _ = try l.nextToken(allocator); // (
+    _ = try l.nextToken(allocator); // )
+    _ = try l.nextToken(allocator); // {
+    _ = try l.nextToken(allocator); // char
+    _ = try l.nextToken(allocator); // c
+    _ = try l.nextToken(allocator); // =
+    // Peek should also report invalid escape
+    _ = try std.testing.expectError(lexer.LexerError.InvalidToken, l.peekToken(allocator));
+    // And advancing should also error
+    _ = try std.testing.expectError(lexer.LexerError.InvalidToken, l.nextToken(allocator));
+}
+
+test "invalid char literal: multiple units" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const buffer =
+        \\ int main(){ char c = 'ab'; return 0; }
+    ;
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(buffer)));
+    _ = try l.nextToken(allocator); // int
+    _ = try l.nextToken(allocator); // main
+    _ = try l.nextToken(allocator); // (
+    _ = try l.nextToken(allocator); // )
+    _ = try l.nextToken(allocator); // {
+    _ = try l.nextToken(allocator); // char
+    _ = try l.nextToken(allocator); // c
+    _ = try l.nextToken(allocator); // =
+    _ = try std.testing.expectError(lexer.LexerError.InvalidToken, l.peekToken(allocator));
+    _ = try std.testing.expectError(lexer.LexerError.InvalidToken, l.nextToken(allocator));
+}
+
+test "invalid char literal: empty" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const buffer =
+        \\ int main(){ char c = ''; return 0; }
+    ;
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(buffer)));
+    _ = try l.nextToken(allocator); // int
+    _ = try l.nextToken(allocator); // main
+    _ = try l.nextToken(allocator); // (
+    _ = try l.nextToken(allocator); // )
+    _ = try l.nextToken(allocator); // {
+    _ = try l.nextToken(allocator); // char
+    _ = try l.nextToken(allocator); // c
+    _ = try l.nextToken(allocator); // =
+    _ = try std.testing.expectError(lexer.LexerError.InvalidToken, l.peekToken(allocator));
+    _ = try std.testing.expectError(lexer.LexerError.InvalidToken, l.nextToken(allocator));
+}
+
+test "unterminated char literal" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const buffer =
+        \\ int main(){ char c = 'a; return 0; }
+    ;
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(buffer)));
+    _ = try l.nextToken(allocator); // int
+    _ = try l.nextToken(allocator); // main
+    _ = try l.nextToken(allocator); // (
+    _ = try l.nextToken(allocator); // )
+    _ = try l.nextToken(allocator); // {
+    _ = try l.nextToken(allocator); // char
+    _ = try l.nextToken(allocator); // c
+    _ = try l.nextToken(allocator); // =
+    const pk = (try l.peekToken(allocator)).?;
+    _ = try std.testing.expectEqual(lexer.TokenType.INVALID, pk.type);
+    const nx = try l.nextToken(allocator);
+    _ = try std.testing.expectEqual(lexer.TokenType.INVALID, nx.type);
+}
+
+test "unterminated string literal" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const buffer =
+        \\ int main(){ char a[4] = "ab; return 0; }
+    ;
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(buffer)));
+    _ = try l.nextToken(allocator); // int
+    _ = try l.nextToken(allocator); // main
+    _ = try l.nextToken(allocator); // (
+    _ = try l.nextToken(allocator); // )
+    _ = try l.nextToken(allocator); // {
+    _ = try l.nextToken(allocator); // char
+    _ = try l.nextToken(allocator); // a
+    _ = try l.nextToken(allocator); // [
+    _ = try l.nextToken(allocator); // 4
+    _ = try l.nextToken(allocator); // ]
+    _ = try l.nextToken(allocator); // =
+    const pk = (try l.peekToken(allocator)).?;
+    _ = try std.testing.expectEqual(lexer.TokenType.INVALID, pk.type);
+    const nx = try l.nextToken(allocator);
+    _ = try std.testing.expectEqual(lexer.TokenType.INVALID, nx.type);
+}
+
 test "--" {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     const allocator = arena.allocator();

@@ -54,6 +54,9 @@ pub const TokenType = enum {
     FLOAT,
     LSQUARE,
     RSQUARE,
+    CHAR_TYPE,
+    CHAR_LITERAL,
+    STRING_LITERAL,
 };
 
 pub const Token = struct {
@@ -147,13 +150,13 @@ pub const Lexer = struct {
             if (std.mem.eql(u8, lexer.buffer[initialPtr .. initialPtr + offset], keywordString)) {
                 token.type = returnTok;
                 token.start = initialPtr;
-                token.end = initialPtr + offset - 1;
+                token.end = if (offset > 0) initialPtr + offset - 1 else initialPtr;
                 return token;
             }
         }
         token.type = TokenType.IDENTIFIER;
         token.start = initialPtr;
-        token.end = initialPtr + offset - 1;
+        token.end = if (offset > 0) initialPtr + offset - 1 else initialPtr;
         lexer.currentToken = token;
         return token;
     }
@@ -291,6 +294,14 @@ pub const Lexer = struct {
         }
     }
 
+    inline fn isValidEscape(ch: u8) bool {
+        return switch (ch) {
+            '\'', '"', '?', '\\',
+            'a', 'b', 'f', 'n', 'r', 't', 'v' => true,
+            else => false,
+        };
+    }
+
     pub fn peekToken(lexer: *Lexer, allocator: std.mem.Allocator) LexerError!?*Token {
         lexer.skipWhitespace();
         if (lexer.current >= lexer.buffer.len) {
@@ -299,6 +310,63 @@ pub const Lexer = struct {
         switch (lexer.buffer[lexer.current]) {
             ';' => {
                 return (try createSingleWidthToken(TokenType.SEMICOLON, allocator, lexer));
+            },
+            '\'' => {
+                var token = try allocator.create(Token);
+                const initialPtr = lexer.current;
+                var i: u32 = lexer.current + 1;
+                var unit_count: u32 = 0;
+                while (i < lexer.buffer.len) {
+                    if (lexer.buffer[i] == '\\') {
+                        if (i + 1 < lexer.buffer.len) {
+                            const esc = lexer.buffer[i + 1];
+                            if (!isValidEscape(esc)) return LexerError.InvalidToken;
+                            unit_count += 1;
+                            i += 2;
+                            continue;
+                        } else break;
+                    }
+                    if (lexer.buffer[i] == '\'') {
+                        if (unit_count != 1) return LexerError.InvalidToken;
+                        token.type = TokenType.CHAR_LITERAL;
+                        token.start = initialPtr;
+                        token.end = i;
+                        return token;
+                    }
+                    unit_count += 1;
+                    i += 1;
+                }
+                // Unterminated char literal
+                token.type = TokenType.INVALID;
+                token.start = initialPtr;
+                token.end = initialPtr;
+                return token;
+            },
+            '"' => {
+                var token = try allocator.create(Token);
+                const initialPtr = lexer.current;
+                var i: u32 = lexer.current + 1;
+                while (i < lexer.buffer.len) {
+                    if (lexer.buffer[i] == '\\') {
+                        if (i + 1 < lexer.buffer.len) {
+                            const esc = lexer.buffer[i + 1];
+                            if (!isValidEscape(esc)) return LexerError.InvalidToken;
+                            i += 2;
+                            continue;
+                        } else break;
+                    }
+                    if (lexer.buffer[i] == '"') {
+                        token.type = TokenType.STRING_LITERAL;
+                        token.start = initialPtr;
+                        token.end = i;
+                        return token;
+                    }
+                    i += 1;
+                }
+                token.type = TokenType.INVALID;
+                token.start = initialPtr;
+                token.end = initialPtr;
+                return token;
             },
             '(' => {
                 return (try createSingleWidthToken(TokenType.LPAREN, allocator, lexer));
@@ -394,6 +462,7 @@ pub const Lexer = struct {
                     "unsigned",
                     "signed",
                     "double",
+                    "char",
                 }, &[_]TokenType{
                     TokenType.INT_TYPE,
                     TokenType.RETURN,
@@ -412,6 +481,7 @@ pub const Lexer = struct {
                     TokenType.UNSIGNED,
                     TokenType.SIGNED,
                     TokenType.FLOAT_TYPE,
+                    TokenType.CHAR_TYPE,
                 }, lexer, token);
             },
         }
@@ -427,7 +497,7 @@ pub const Lexer = struct {
 
     inline fn nextDoubleWidthTokMacro(comptime lookAheadToks: []const TokenType, comptime returnToks: []const TokenType, fallBackTok: TokenType, lexer: *Lexer, token: *Token, allocator: std.mem.Allocator) LexerError!void {
         lexer.current += 1;
-        const peekedToken = try lexer.peekToken(allocator);
+        const peekedToken = lexer.peekToken(allocator) catch null;
         if (peekedToken) |nonNullPeeked| {
             inline for (lookAheadToks, returnToks) |lookAheadTok, returnTok| {
                 if (nonNullPeeked.*.type == lookAheadTok) {
@@ -460,14 +530,14 @@ pub const Lexer = struct {
             if (std.mem.eql(u8, lexer.buffer[initialPtr..lexer.current], keywordString)) {
                 token.type = returnTok;
                 token.start = initialPtr;
-                token.end = lexer.current - 1;
+                token.end = if (lexer.current > initialPtr) lexer.current - 1 else initialPtr;
                 lexer.currentToken = token;
                 return token;
             }
         }
         token.type = TokenType.IDENTIFIER;
         token.start = initialPtr;
-        token.end = lexer.current - 1;
+        token.end = if (lexer.current > initialPtr) lexer.current - 1 else initialPtr;
         lexer.currentToken = token;
         return token;
     }
@@ -481,6 +551,73 @@ pub const Lexer = struct {
         switch (lexer.buffer[lexer.current]) {
             '(' => {
                 nextSingleWidthTokMacro(TokenType.LPAREN, token, lexer);
+            },
+            '\'' => {
+                const initialPtr = lexer.current;
+                lexer.current += 1;
+                var unit_count: u32 = 0;
+                while (lexer.current < lexer.buffer.len) {
+                    if (lexer.buffer[lexer.current] == '\\') {
+                        if (lexer.current + 1 < lexer.buffer.len) {
+                            const esc = lexer.buffer[lexer.current + 1];
+                            if (!isValidEscape(esc)) return LexerError.InvalidToken;
+                            unit_count += 1;
+                            lexer.current += 2;
+                            continue;
+                        } else {
+                            lexer.current += 1;
+                            break;
+                        }
+                    }
+                    if (lexer.buffer[lexer.current] == '\'') {
+                        // closing quote reached
+                        if (unit_count != 1) return LexerError.InvalidToken;
+                        lexer.current += 1; // consume closing quote
+                        token.type = TokenType.CHAR_LITERAL;
+                        token.start = initialPtr;
+                        token.end = lexer.current - 1;
+                        lexer.currentToken = token;
+                        return token;
+                    }
+                    unit_count += 1;
+                    lexer.current += 1;
+                }
+                token.type = TokenType.INVALID;
+                token.start = initialPtr;
+                token.end = initialPtr;
+                lexer.currentToken = token;
+                return token;
+            },
+            '"' => {
+                const initialPtr = lexer.current;
+                lexer.current += 1;
+                while (lexer.current < lexer.buffer.len) {
+                    if (lexer.buffer[lexer.current] == '\\') {
+                        if (lexer.current + 1 < lexer.buffer.len) {
+                            const esc = lexer.buffer[lexer.current + 1];
+                            if (!isValidEscape(esc)) return LexerError.InvalidToken;
+                            lexer.current += 2;
+                            continue;
+                        } else {
+                            lexer.current += 1;
+                            break;
+                        }
+                    }
+                    if (lexer.buffer[lexer.current] == '"') {
+                        lexer.current += 1; // consume closing quote
+                        token.type = TokenType.STRING_LITERAL;
+                        token.start = initialPtr;
+                        token.end = lexer.current - 1;
+                        lexer.currentToken = token;
+                        return token;
+                    }
+                    lexer.current += 1;
+                }
+                token.type = TokenType.INVALID;
+                token.start = initialPtr;
+                token.end = initialPtr;
+                lexer.currentToken = token;
+                return token;
             },
             ')' => {
                 nextSingleWidthTokMacro(TokenType.RPAREN, token, lexer);
@@ -575,6 +712,7 @@ pub const Lexer = struct {
                     "unsigned",
                     "signed",
                     "double",
+                    "char",
                 }, &[_]TokenType{
                     TokenType.INT_TYPE,
                     TokenType.RETURN,
@@ -593,6 +731,7 @@ pub const Lexer = struct {
                     TokenType.UNSIGNED,
                     TokenType.SIGNED,
                     TokenType.FLOAT_TYPE,
+                    TokenType.CHAR_TYPE,
                 }, lexer, token);
             },
         }

@@ -4,28 +4,11 @@ const ast = @import("./AST.zig");
 const parser = @import("./parser.zig");
 const assembly = @import("./Assembly.zig");
 const semantic = @import("./semantic.zig");
-// const logz = @import("logz");
 
 pub fn main() !void {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     const allocator = arena.allocator();
     defer arena.deinit();
-    // setup a log file, return a writer
-    //try logz.setup(allocator, .{
-    //    .level = .Info,
-    //    .pool_size = 100,
-    //    .buffer_size = 4096,
-    //    .large_buffer_count = 8,
-    //    .large_buffer_size = 16384,
-    //    .output = .{
-    //        .file = "log.txt",
-    //    },
-    //    .encoding = .logfmt,
-    //});
-    //defer logz.deinit();
-    //logz.info().string("Key", "Hello World").log();
-
-    // Access argv[1]
     const args = try std.process.argsAlloc(allocator);
     defer std.process.argsFree(allocator, args);
 
@@ -41,7 +24,6 @@ pub fn main() !void {
 
     defer file.close();
 
-    // Read the entire file into a buffer
     const file_size = try file.getEndPos();
     const buffer = try allocator.alloc(u8, file_size);
     defer allocator.free(buffer);
@@ -52,14 +34,14 @@ pub fn main() !void {
     var program = try p.parseProgram();
 
     const varResolver = try ast.VarResolver.init(allocator);
-    try varResolver.resolve(program); // Resolve scope by a variable renaming pass
+    try varResolver.resolve(program);
     const typeChecker = try semantic.Typechecker.init(allocator);
-    const hasTypeError = try typeChecker.check(program); // Check if there are type issues
+    const hasTypeError = try typeChecker.check(program);
     if (hasTypeError) |typeError| {
         std.log.warn("\x1b[33mError\x1b[0m: {s}\n", .{typeError});
         std.os.linux.exit(-1);
     }
-    try ast.loopLabelPass(program, allocator); // Labelling loops for break and continue
+    try ast.loopLabelPass(program, allocator);
     const tacProgram = try program.genTAC(typeChecker.symbolTable, allocator);
 
     if (shouldDumpTac != null and std.mem.eql(u8, shouldDumpTac.?, "tacDump")) {

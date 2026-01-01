@@ -2687,3 +2687,48 @@ test "2d binary search" {
     try asmProgram.stringify(sFileWriter, allocator, tacRenderer.asmSymbolTable);
     try cFileWriter.writeAll(programStr);
 }
+
+test "generate putchar calls" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const cFileWriter = (try std.fs.cwd().createFile("./cFiles/C/putchar.c", .{})).writer();
+    const sFileWriter = (try std.fs.cwd().createFile("./cFiles/S/putchar.s", .{})).writer();
+    const programStr =
+        \\ int putchar(int c);
+        \\ int main(){
+        \\     putchar(72);
+        \\     putchar(101);
+        \\     putchar(108);
+        \\     putchar(108);
+        \\     putchar(111);
+        \\     putchar(44);
+        \\     putchar(32);
+        \\     putchar(87);
+        \\     putchar(111);
+        \\     putchar(114);
+        \\     putchar(108);
+        \\     putchar(100);
+        \\     putchar(33);
+        \\     putchar(10);
+        \\     return 0;
+        \\ }
+    ;
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    const program = try p.parseProgram();
+    const varResolver = try ast.VarResolver.init(allocator);
+    try varResolver.resolve(program);
+    const typechecker = try semantic.Typechecker.init(allocator);
+    typechecker.check(program) catch {
+        std.log.warn("\x1b[33mError\x1b[0m: {s}", .{try typechecker.getErrString()});
+        std.debug.assert(false);
+    };
+    try ast.loopLabelPass(program, allocator);
+    const tacRenderer = try ast.TACRenderer.init(allocator, typechecker.symbolTable);
+    const tacProgram = try tacRenderer.render(program);
+    const asmRenderer = try tac.AsmRenderer.init(allocator, tacRenderer.asmSymbolTable);
+    const asmProgram = try asmRenderer.render(tacProgram);
+    try asmProgram.stringify(sFileWriter, allocator, tacRenderer.asmSymbolTable);
+    try cFileWriter.writeAll(programStr);
+}
