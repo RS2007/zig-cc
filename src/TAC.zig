@@ -93,7 +93,7 @@ pub fn astSymTabToTacSymTab(allocator: std.mem.Allocator, astSymTab: std.StringH
                     .signed = arrayTy.getScalarType().signed(),
                 },
             },
-            .Void => unreachable,
+            .Void, .Char, .UChar, .SChar => unreachable,
         };
         try asmSymTab.put(
             @constCast(symName),

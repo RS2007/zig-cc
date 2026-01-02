@@ -295,6 +295,7 @@ fn convertSymToTAC(tacProgram: *tac.Program, symbolTable: std.StringHashMap(*sem
                                 .Float => .{ .Float = constant.value.Float },
                                 .Pointer => unreachable,
                                 .Array => unreachable,
+                                .Char, .UChar, .SChar => unreachable,
                                 .Function => {
                                     std.log.warn("Found a function initializer for a static variable: {s}, value: {any}\n", .{ key, value });
                                     unreachable;
@@ -310,6 +311,7 @@ fn convertSymToTAC(tacProgram: *tac.Program, symbolTable: std.StringHashMap(*sem
                                 .Pointer => unreachable,
                                 .Array => unreachable,
                                 .Function => unreachable,
+                                .SChar, .UChar, .Char => unreachable,
                             });
                         }
                         staticVar.* = .{
@@ -326,6 +328,7 @@ fn convertSymToTAC(tacProgram: *tac.Program, symbolTable: std.StringHashMap(*sem
                     .NoInit => {},
                     .Tentative => {
                         switch (value.typeInfo) {
+                            .Char, .SChar, .UChar => unreachable,
                             .Function => unreachable,
                             .Array => |arrayTy| {
                                 const nestedSize = arrayTy.getNestedSize();
@@ -1575,6 +1578,7 @@ pub const Expression = union(ExpressionType) {
         instructions: *std.ArrayList(*tac.Instruction),
     ) semantic.TypeCheckerError!*tac.BoxedVal {
         switch (expression.*) {
+            .String => unreachable,
             .Cast => |cast| {
                 const inner = try cast.value.genTACInstructionsAndCvt(renderer, instructions);
                 const boxed = try renderer.allocator.create(tac.BoxedVal);
@@ -1674,6 +1678,7 @@ pub const Expression = union(ExpressionType) {
                     .UInteger => |uint| .{ .Constant = .{ .UInt = uint } },
                     .ULong => |ulong| .{ .Constant = .{ .ULong = ulong } },
                     .Float => |float| .{ .Constant = .{ .Float = float } },
+                    .UChar, .Char => unreachable,
                 };
                 boxed.* = .{ .PlainVal = val };
                 return boxed;
