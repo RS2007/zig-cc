@@ -268,6 +268,7 @@ pub const ExpressionType = enum {
     AddrOf,
     Deref,
     ArrSubscript,
+    String,
 };
 
 fn convertSymToTAC(tacProgram: *tac.Program, symbolTable: std.StringHashMap(*semantic.Symbol)) MemoryError!void {
@@ -446,6 +447,9 @@ pub const Type = union(enum) {
     Array: ArrayTy,
     Pointer: *Type,
     Function: FunctionTy,
+    Char,
+    UChar,
+    SChar,
 
     const Self = @This();
 
@@ -465,6 +469,8 @@ pub const Type = union(enum) {
             .UInteger => .{ .UInt = 0 },
             .ULong => .{ .ULong = 0 },
             .Float => .{ .Float = 0.0 },
+            .Char, .SChar => .{ .Integer = 0 },
+            .UChar => .{ .UInt = 0 },
             .Array, .Pointer, .Void, .Function => unreachable,
         };
     }
@@ -477,6 +483,7 @@ pub const Type = union(enum) {
             .UNSIGNED_LONG => .ULong,
             .UNSIGNED_INTEGER => .UInteger,
             .FLOAT_TYPE => .Float,
+            .CHAR_TYPE => .Char,
             else => unreachable,
         };
     }
@@ -486,6 +493,7 @@ pub const Type = union(enum) {
             .Integer, .UInteger => 4,
             .Long, .ULong, .Pointer => 8,
             .Float => 8,
+            .Char, .UChar, .SChar => 1,
             .Array => unreachable,
             else => unreachable,
         };
@@ -496,6 +504,7 @@ pub const Type = union(enum) {
         return switch (ty) {
             .Integer, .UInteger => 4,
             .Pointer, .Long, .ULong, .Float => 8,
+            .Char, .UChar, .SChar => 1,
             else => unreachable,
         };
     }
@@ -504,6 +513,7 @@ pub const Type = union(enum) {
         return switch (self) {
             .Integer, .UInteger => 4,
             .Pointer, .Long, .ULong, .Float => 8,
+            .Char, .UChar, .SChar => 1,
             .Array => |arr| arr.getNestedSize() * scalarByteSizeOf(arr.getScalarType()),
             else => {
                 std.log.warn("size of {any} is not implemented\n", .{self});
@@ -514,8 +524,8 @@ pub const Type = union(enum) {
 
     pub inline fn signed(self: Self) bool {
         return switch (self) {
-            .Long, .Integer => true,
-            .UInteger, .ULong => false,
+            .Long, .Integer, .SChar, .Char => true,
+            .UInteger, .ULong, .UChar => false,
             .Float => false,
             .Pointer => false,
             else => unreachable,
@@ -535,6 +545,8 @@ pub const Type = union(enum) {
             .ULong => .ULong,
             .UInteger => .UInt,
             .Float => .Float,
+            .Char, .SChar => .Integer,
+            .UChar => .UInt,
             .Pointer, .Array, .Void, .Function => unreachable,
         };
     }
@@ -546,6 +558,8 @@ pub const Type = union(enum) {
             .ULong => .ULong,
             .UInteger => .UInteger,
             .Float => .Float,
+            .Char, .SChar => .Integer,
+            .UChar => .UInteger,
             .Pointer => |ptr| {
                 const inner = try allocator.create(semantic.TypeInfo);
                 inner.* = try ptr.toSemPointerTy(allocator);
@@ -572,7 +586,7 @@ pub const Type = union(enum) {
 
     pub inline fn isNumeric(self: Self) bool {
         return switch (self) {
-            .Integer, .UInteger, .Long, .ULong, .Float => true,
+            .Integer, .UInteger, .Long, .ULong, .Float, .Char, .UChar, .SChar => true,
             else => false,
         };
     }
@@ -596,13 +610,22 @@ pub const Type = union(enum) {
             .Function => |func| {
                 try writer.print("fn: {any}", .{func});
             },
+            .Char => {
+                try writer.print("char", .{});
+            },
+            .UChar => {
+                try writer.print("unsigned char", .{});
+            },
+            .SChar => {
+                try writer.print("signed char", .{});
+            },
         }
     }
 
     // INFO: Exists to avoid aliasing
     pub fn deepCopy(self: Self, allocator: std.mem.Allocator) MemoryError!Self {
         return switch (self) {
-            .Integer, .Void, .Long, .UInteger, .ULong, .Float => self,
+            .Integer, .Void, .Long, .UInteger, .ULong, .Float, .Char, .UChar, .SChar => self,
             .Pointer => |ptr| blk: {
                 const new_inner = try allocator.create(Type);
                 new_inner.* = try ptr.*.deepCopy(allocator);
@@ -1187,6 +1210,8 @@ pub const ConstantKind = enum {
     ULong,
     UInteger,
     Float,
+    Char,
+    UChar,
 };
 pub const Constant = struct {
     type: Type,
@@ -1196,6 +1221,8 @@ pub const Constant = struct {
         ULong: u64,
         UInteger: u32,
         Float: f64,
+        Char: u8,
+        UChar: u8,
     },
     const Self = @This();
     pub inline fn to(self: *Self, comptime T: type) T {
@@ -1399,6 +1426,8 @@ pub const ArrSubscript = struct {
     index: *Expression,
 };
 
+pub const CharType: Type = .Char;
+
 pub const Expression = union(ExpressionType) {
     Constant: Constant,
     Unary: Unary,
@@ -1411,9 +1440,10 @@ pub const Expression = union(ExpressionType) {
     AddrOf: AddrOf,
     Deref: Deref,
     ArrSubscript: ArrSubscript,
+    String: []u8,
     const Self = @This();
 
-    pub fn getType(self: *Self) Type {
+    pub inline fn getType(self: *Self) Type {
         return switch (self.*) {
             .Cast => |cast| cast.type,
             .Assignment => |assignment| assignment.type.?,
@@ -1426,6 +1456,7 @@ pub const Expression = union(ExpressionType) {
             .Deref => |deref| deref.type.?,
             .AddrOf => |addrOf| addrOf.type.?,
             .ArrSubscript => |arrSubscript| arrSubscript.type.?,
+            .String => |str| .{ .Array = .{ .size = str.len, .ty = @constCast(&CharType) } },
         };
     }
 
@@ -1932,6 +1963,7 @@ pub fn expressionScopeVariableResolve(self: *VarResolver, expression: *Expressio
         .Unary => |unary| {
             try expressionScopeVariableResolve(self, unary.exp, currentScope);
         },
+        .String => {},
         .Binary => |binary| {
             try expressionScopeVariableResolve(self, binary.lhs, currentScope);
             try expressionScopeVariableResolve(self, binary.rhs, currentScope);

@@ -725,6 +725,118 @@ test "parse multiple functions" {
     }
 }
 
+test "parse chars and strings: decls and prototypes" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const programStr =
+        \\ signed char fsc(signed char a);
+        \\ unsigned char fuc(unsigned char b);
+        \\ char fc(char c);
+        \\ int main(){
+        \\   signed char sa = 'a';
+        \\   unsigned char ua = 'b';
+        \\   char ca = 'c';
+        \\   char s[2] = "hi";
+        \\   char t[4] = "abc\n";
+        \\   return 0;
+        \\ }
+    ;
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    const prog = try p.parseProgram();
+
+    // Prototypes
+    {
+        const fsc = prog.externalDecls.items[0].FunctionDecl;
+        const fd = try fsc.declarator.unwrapFuncDeclarator();
+        _ = try std.testing.expectEqualStrings((try fd.declarator.unwrapIdentDecl()).Ident, "fsc");
+        _ = try std.testing.expect(std.meta.activeTag(fsc.returnType) == .SChar);
+        _ = try std.testing.expectEqual(@as(usize, 1), fd.params.items.len);
+        const p0 = fd.params.items[0].NonVoidArg;
+        _ = try std.testing.expect(std.meta.activeTag(p0.type) == .SChar);
+        _ = try std.testing.expectEqualStrings((try p0.declarator.unwrapIdentDecl()).Ident, "a");
+    }
+    {
+        const fuc = prog.externalDecls.items[1].FunctionDecl;
+        const fd = try fuc.declarator.unwrapFuncDeclarator();
+        _ = try std.testing.expectEqualStrings((try fd.declarator.unwrapIdentDecl()).Ident, "fuc");
+        _ = try std.testing.expect(std.meta.activeTag(fuc.returnType) == .UChar);
+        _ = try std.testing.expectEqual(@as(usize, 1), fd.params.items.len);
+        const p0 = fd.params.items[0].NonVoidArg;
+        _ = try std.testing.expect(std.meta.activeTag(p0.type) == .UChar);
+        _ = try std.testing.expectEqualStrings((try p0.declarator.unwrapIdentDecl()).Ident, "b");
+    }
+    {
+        const fc = prog.externalDecls.items[2].FunctionDecl;
+        const fd = try fc.declarator.unwrapFuncDeclarator();
+        _ = try std.testing.expectEqualStrings((try fd.declarator.unwrapIdentDecl()).Ident, "fc");
+        _ = try std.testing.expect(std.meta.activeTag(fc.returnType) == .Char);
+        _ = try std.testing.expectEqual(@as(usize, 1), fd.params.items.len);
+        const p0 = fd.params.items[0].NonVoidArg;
+        _ = try std.testing.expect(std.meta.activeTag(p0.type) == .Char);
+        _ = try std.testing.expectEqualStrings((try p0.declarator.unwrapIdentDecl()).Ident, "c");
+    }
+
+    // main function
+    const mainFn = prog.externalDecls.items[3].FunctionDecl;
+    _ = try std.testing.expectEqualStrings((try mainFn.declarator.unwrapFuncDeclarator()).declarator.Ident, "main");
+    const items = mainFn.blockItems.items;
+    // sa: signed char
+    {
+        const decl = items[0].Declaration;
+        _ = try std.testing.expectEqualStrings(decl.name, "sa");
+        _ = try std.testing.expect(std.meta.activeTag(decl.type) == .SChar);
+        _ = try std.testing.expect(decl.varInitValue != null);
+    }
+    // ua: unsigned char
+    {
+        const decl = items[1].Declaration;
+        _ = try std.testing.expectEqualStrings(decl.name, "ua");
+        _ = try std.testing.expect(std.meta.activeTag(decl.type) == .UChar);
+        _ = try std.testing.expect(decl.varInitValue != null);
+    }
+    // ca: char
+    {
+        const decl = items[2].Declaration;
+        _ = try std.testing.expectEqualStrings(decl.name, "ca");
+        _ = try std.testing.expect(std.meta.activeTag(decl.type) == .Char);
+        _ = try std.testing.expect(decl.varInitValue != null);
+    }
+    // s: char[2] = "hi"
+    {
+        const decl = items[3].Declaration;
+        _ = try std.testing.expectEqualStrings(decl.name, "s");
+        _ = try std.testing.expect(std.meta.activeTag(decl.type) == .Array);
+        _ = try std.testing.expect(decl.type.Array.size == 2);
+        _ = try std.testing.expect(std.meta.activeTag(decl.type.Array.ty.*) == .Char);
+        _ = try std.testing.expect(decl.varInitValue != null);
+        const init = decl.varInitValue.?.Expression;
+        _ = try std.testing.expect(std.meta.activeTag(init.*) == .String);
+        _ = try std.testing.expect(std.mem.eql(u8, init.String, "hi"));
+        const strTy = init.getType();
+        _ = try std.testing.expect(std.meta.activeTag(strTy) == .Array);
+        _ = try std.testing.expect(strTy.Array.size == 2);
+        _ = try std.testing.expect(std.meta.activeTag(strTy.Array.ty.*) == .Char);
+    }
+    // t: char[4] = "abc\n"
+    {
+        const decl = items[4].Declaration;
+        _ = try std.testing.expectEqualStrings(decl.name, "t");
+        _ = try std.testing.expect(std.meta.activeTag(decl.type) == .Array);
+        _ = try std.testing.expect(decl.type.Array.size == 4);
+        _ = try std.testing.expect(std.meta.activeTag(decl.type.Array.ty.*) == .Char);
+        _ = try std.testing.expect(decl.varInitValue != null);
+        const init = decl.varInitValue.?.Expression;
+        _ = try std.testing.expect(std.meta.activeTag(init.*) == .String);
+        _ = try std.testing.expect(std.mem.eql(u8, init.String, "abc\n"));
+        const strTy = init.getType();
+        _ = try std.testing.expect(std.meta.activeTag(strTy) == .Array);
+        _ = try std.testing.expect(strTy.Array.size == 4);
+        _ = try std.testing.expect(std.meta.activeTag(strTy.Array.ty.*) == .Char);
+    }
+}
+
 test "parser param types: array decays to pointer" {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     const allocator = arena.allocator();

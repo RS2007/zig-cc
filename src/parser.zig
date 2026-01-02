@@ -93,11 +93,13 @@ pub const Parser = struct {
             .INT_TYPE => .Integer,
             .LONG_TYPE => .Long,
             .FLOAT_TYPE => .Float,
+            .CHAR_TYPE => .Char,
             .UNSIGNED => blk: {
                 break :blk switch ((try self.l.nextToken(self.allocator)).type) {
                     .INT_TYPE => .UInteger,
                     .LONG_TYPE => .ULong,
                     .FLOAT_TYPE => .Float,
+                    .CHAR_TYPE => .UChar,
                     else => unreachable,
                 };
             },
@@ -107,6 +109,7 @@ pub const Parser = struct {
                     .INT_TYPE => .Integer,
                     .LONG_TYPE => .Long,
                     .FLOAT_TYPE => .Float,
+                    .CHAR_TYPE => .SChar,
                     else => unreachable,
                 };
             },
@@ -419,7 +422,7 @@ pub const Parser = struct {
         const blockItem = try self.allocator.create(AST.BlockItem);
         if (nextToken) |nextTok| {
             switch (nextTok.type) {
-                .EXTERN, .STATIC, .INT_TYPE, .LONG_TYPE, .UNSIGNED, .FLOAT_TYPE => {
+                .EXTERN, .STATIC, .INT_TYPE, .LONG_TYPE, .UNSIGNED, .SIGNED, .FLOAT_TYPE, .CHAR_TYPE => {
                     blockItem.* = AST.BlockItem{
                         .Declaration = (try self.parseDeclaration()),
                     };
@@ -475,7 +478,7 @@ pub const Parser = struct {
         const peekedToken = try self.l.peekToken(self.allocator);
         const forInit = try self.allocator.create(AST.ForInit);
         switch (peekedToken.?.type) {
-            .INT_TYPE => {
+            .INT_TYPE, .LONG_TYPE, .UNSIGNED, .SIGNED, .FLOAT_TYPE, .CHAR_TYPE => {
                 const decl = try self.parseDeclaration();
                 forInit.* = AST.ForInit{ .Declaration = decl };
             },
@@ -858,6 +861,58 @@ pub const Parser = struct {
         return addrOfNode;
     }
 
+    fn decodeCStringBytes(allocator: std.mem.Allocator, input: []const u8) ![]u8 {
+        var out = std.ArrayList(u8).init(allocator);
+        var i: usize = 0;
+        while (i < input.len) : (i += 1) {
+            const ch = input[i];
+            if (ch == '\\') {
+                if (i + 1 >= input.len) break;
+                const esc = input[i + 1];
+                const v: u8 = switch (esc) {
+                    '\'' => '\'',
+                    '"' => '"',
+                    '?' => '?',
+                    '\\' => '\\',
+                    'a' => 7,
+                    'b' => 8,
+                    'f' => 12,
+                    'n' => 10,
+                    'r' => 13,
+                    't' => 9,
+                    'v' => 11,
+                    else => return error.InvalidCharacter,
+                };
+                try out.append(v);
+                i += 1; // skip the escape char next iteration will +1 more
+            } else {
+                try out.append(ch);
+            }
+        }
+        return try out.toOwnedSlice();
+    }
+
+    pub fn parseCharLiteral(self: *Parser) ParserError!*AST.Expression {
+        const tok = try self.l.nextToken(self.allocator);
+        std.debug.assert(tok.type == lexer.TokenType.CHAR_LITERAL);
+        const inner = self.l.buffer[tok.start + 1 .. tok.end];
+        const decoded = try decodeCStringBytes(self.allocator, inner);
+        std.debug.assert(decoded.len == 1);
+        const node = try self.allocator.create(AST.Expression);
+        node.* = .{ .Constant = .{ .type = .Char, .value = .{ .Char = decoded[0] } } };
+        return node;
+    }
+
+    pub fn parseStringLiteral(self: *Parser) ParserError!*AST.Expression {
+        const tok = try self.l.nextToken(self.allocator);
+        std.debug.assert(tok.type == lexer.TokenType.STRING_LITERAL);
+        const inner = self.l.buffer[tok.start + 1 .. tok.end];
+        const decoded = try decodeCStringBytes(self.allocator, inner);
+        const node = try self.allocator.create(AST.Expression);
+        node.* = .{ .String = decoded };
+        return node;
+    }
+
     pub fn parseFactor(self: *Parser) ParserError!*AST.Expression {
         const peekToken = (try self.l.peekToken(self.allocator)).?;
         return switch (peekToken.type) {
@@ -869,6 +924,8 @@ pub const Parser = struct {
             .UNSIGNED_INT => try self.parseUnsignedInt(),
             .UNSIGNED_LONG => try self.parseUnsignedLong(),
             .FLOAT => try self.parseFloat(),
+            .CHAR_LITERAL => try self.parseCharLiteral(),
+            .STRING_LITERAL => try self.parseStringLiteral(),
             .MULTIPLY => try self.parseDeref(),
             .BITWISE_AND => try self.parseAddrOf(),
             else => |tokType| {

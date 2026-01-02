@@ -296,8 +296,7 @@ pub const Lexer = struct {
 
     inline fn isValidEscape(ch: u8) bool {
         return switch (ch) {
-            '\'', '"', '?', '\\',
-            'a', 'b', 'f', 'n', 'r', 't', 'v' => true,
+            '\'', '"', '?', '\\', 'a', 'b', 'f', 'n', 'r', 't', 'v' => true,
             else => false,
         };
     }
