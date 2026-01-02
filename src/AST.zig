@@ -1241,6 +1241,8 @@ pub const Constant = struct {
             .ULong => |ulong| ulong == 0,
             .UInteger => |uint| uint == 0,
             .Float => |float| float == 0.0,
+            .Char => |chr| chr == 0,
+            .UChar => |chr| chr == 0,
         };
     }
 };

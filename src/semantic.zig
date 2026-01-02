@@ -326,6 +326,7 @@ fn getInitializerValue(self: *Typechecker, varDeclType: AST.Type, initializer: *
                     .value = .{ .ULong = expression.Constant.to(u64) },
                 },
                 .Function => unreachable,
+                .Char, .SChar, .UChar => unreachable,
             };
             constants.appendAssumeCapacity(constant);
             initVal.* = .{
@@ -1125,6 +1126,7 @@ inline fn convert(allocator: std.mem.Allocator, expr: *AST.Expression, toType: A
             expr.ArrSubscript.type = toType;
             return expr;
         },
+        .String => unreachable,
     }
 }
 
@@ -1361,6 +1363,7 @@ fn typecheckExpr(self: *Typechecker, expr: *AST.Expression) TypeError!*AST.Expre
                 .ULong => .ULong,
                 .UInteger => .UInteger,
                 .Float => .Float,
+                .Char, .UChar => unreachable,
             };
             // INFO: Constant floats need to be in .rodata/.data
             if (t == .Float) {
@@ -1452,7 +1455,8 @@ fn typecheckExpr(self: *Typechecker, expr: *AST.Expression) TypeError!*AST.Expre
             // if neither arr nor index is a pointer, we need to throw an error
             expr.ArrSubscript.type = try getArrSubscriptType(self, @constCast(&expr.ArrSubscript));
             return expr;
-        }
+        },
+        .String => unreachable,
     }
 }
 
