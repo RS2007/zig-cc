@@ -455,7 +455,7 @@ test "extern inheriting init value from older linkage" {
     };
     const externVarAttrs = typechecker.symbolTable.get("k").?.attributes;
     std.debug.assert(externVarAttrs.StaticAttr.global);
-    std.debug.assert(externVarAttrs.StaticAttr.init.Initial[0].value.Integer == 4);
+    std.debug.assert(externVarAttrs.StaticAttr.init.Initial[0].Integer == 4);
 }
 
 test "multiple global inheriting init value from older linkage" {
@@ -481,7 +481,7 @@ test "multiple global inheriting init value from older linkage" {
     };
     const externVarAttrs = typechecker.symbolTable.get("k").?.attributes;
     std.debug.assert(externVarAttrs.StaticAttr.global);
-    std.debug.assert(externVarAttrs.StaticAttr.init.Initial[0].value.Integer == 4);
+    std.debug.assert(externVarAttrs.StaticAttr.init.Initial[0].Integer == 4);
 }
 
 test "tentative init values" {
@@ -1463,7 +1463,7 @@ test "pointer arithmetic - three" {
     };
 }
 
-test "non const element in a global array initializer" {
+test "global arrays" {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     const allocator = arena.allocator();
     defer arena.deinit();
@@ -1482,6 +1482,75 @@ test "non const element in a global array initializer" {
     const typechecker = try semantic.Typechecker.init(allocator);
     typechecker.check(program) catch {
         std.log.warn("\x1b[31mError\x1b[0m: {s}", .{try typechecker.getErrString()});
-        return;
+        unreachable;
     };
+}
+
+test "char typecheck" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const programStr =
+        \\ unsigned char ustr[3] = "ab";
+        \\ char str[3] = "ab";
+        \\ int main()
+        \\ {
+        \\     unsigned char uk = 'a';
+        \\     char *k = "acdef";
+        \\     return 0;
+        \\ }
+    ;
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    const program = try p.parseProgram();
+    const varResolver = try ast.VarResolver.init(allocator);
+    try varResolver.resolve(program);
+    const typechecker = try semantic.Typechecker.init(allocator);
+    typechecker.check(program) catch {
+        std.log.warn("\x1b[31mError\x1b[0m: {s}", .{try typechecker.getErrString()});
+        std.debug.assert(false);
+    };
+
+    {
+        const ustrDecl = program.externalDecls.items[0].VarDeclaration;
+        _ = try std.testing.expectEqualStrings("ustr", ustrDecl.name);
+        _ = try std.testing.expect(std.meta.activeTag(ustrDecl.type) == .Array);
+        _ = try std.testing.expect(ustrDecl.type.Array.size == 3);
+        _ = try std.testing.expect(std.meta.activeTag(ustrDecl.type.Array.ty.*) == .UChar);
+
+        const init = ustrDecl.varInitValue.?;
+        _ = try std.testing.expect(std.meta.activeTag(init.*) == .ArrayExpr);
+        const strTy = init.ArrayExpr.type.?;
+        _ = try std.testing.expect(std.meta.activeTag(strTy) == .Array);
+        _ = try std.testing.expect(strTy.Array.size == 3);
+        _ = try std.testing.expect(std.meta.activeTag(strTy.Array.ty.*) == .UChar);
+    }
+
+    {
+        const ukDecl = program.externalDecls.items[2].FunctionDecl.blockItems.items[0].Declaration;
+        // Locals are renamed by the VarResolver to ensure uniqueness across
+        // scopes. Accept names that start with the original identifier.
+        _ = try std.testing.expect(std.mem.startsWith(u8, ukDecl.name, "uk"));
+        _ = try std.testing.expect(std.meta.activeTag(ukDecl.type) == .UChar);
+        const init = ukDecl.varInitValue.?.Expression;
+        _ = try std.testing.expect(std.meta.activeTag(init.*) == .Constant);
+        _ = try std.testing.expect(std.meta.activeTag(init.Constant.type) == .UChar);
+    }
+
+    {
+        const kDecl = program.externalDecls.items[2].FunctionDecl.blockItems.items[1].Declaration;
+        _ = try std.testing.expect(std.meta.activeTag(kDecl.type) == .Pointer);
+        _ = try std.testing.expect(std.meta.activeTag(kDecl.type.Pointer.*) == .Char);
+
+        const kInitExpr = kDecl.varInitValue.?.Expression;
+        _ = try std.testing.expect(std.meta.activeTag(kInitExpr.*) == .AddrOf);
+        _ = try std.testing.expect(std.meta.activeTag(kInitExpr.AddrOf.type.?) == .Pointer);
+        _ = try std.testing.expect(std.meta.activeTag(kInitExpr.AddrOf.type.?.Pointer.*) == .Char);
+        _ = try std.testing.expect(std.meta.activeTag(kInitExpr.AddrOf.exp.*) == .String);
+
+        const innerStringTy = kInitExpr.AddrOf.exp.getType();
+        _ = try std.testing.expect(std.meta.activeTag(innerStringTy) == .Array);
+        _ = try std.testing.expect(std.meta.activeTag(innerStringTy.Array.ty.*) == .Char);
+        _ = try std.testing.expect(innerStringTy.Array.size == 6);
+    }
 }

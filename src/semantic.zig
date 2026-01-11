@@ -33,12 +33,36 @@ pub const Constant = struct {
         UInteger: u32,
         ULong: u64,
         Float: f64,
+        Char: u8,
+        UChar: u8,
     },
+};
+
+// Static initializer items for file-scope/static objects.
+// Mirrors nqcc2 Initializers.static_init and Assembly.StaticInit.
+pub const StaticInit = union(enum) {
+    // Scalars
+    Integer: i32,
+    Long: i64,
+    UInt: u32,
+    ULong: u64,
+    Float: f64,
+    Char: u8,
+    UChar: u8,
+
+    // Fill N bytes with zero (.zero N)
+    Zero: usize,
+
+    // String data (.ascii/.asciz)
+    String: struct { data: []u8, nul_terminated: bool },
+
+    // Pointer to a static object/label (.quad label)
+    Pointer: []u8,
 };
 
 pub const InitValue = union(InitValueKind) {
     Tentative: void,
-    Initial: []const Constant,
+    Initial: []const StaticInit,
     NoInit: void,
 };
 
@@ -228,8 +252,55 @@ inline fn pointerDeclWithScalarNonNullRhs(self: *Typechecker, varDecl: *AST.Decl
 fn castExprToDeclType(self: *Typechecker, varDeclType: AST.Type, varInitValue: *AST.Initializer) !*AST.Initializer {
     switch (varInitValue.*) {
         .Expression => |expr| {
+            if (std.meta.activeTag(varDeclType) == .Array and std.meta.activeTag(expr.*) == .String) {
+                const arrTy = varDeclType.Array;
+                const scalarTy = arrTy.getScalarType();
+                if (!isCharType(scalarTy)) {
+                    const msg = try std.fmt.allocPrint(self.allocator, "Can't initialize non-character array with string literal\n", .{});
+                    try self.errors.append(msg);
+                    return TypeError.TypeMismatch;
+                }
+
+                const strBytes = expr.String;
+                if (strBytes.len > arrTy.size) {
+                    const msg = try std.fmt.allocPrint(self.allocator, "Too many characters in string initializer: have {d}, size {d}\n", .{ strBytes.len, arrTy.size });
+                    try self.errors.append(msg);
+                    return TypeError.TypeMismatch;
+                }
+
+                var arrayInit = try self.allocator.create(AST.ArrayInitializer);
+                arrayInit.* = .{
+                    .type = varDeclType,
+                    .initializers = std.ArrayList(*AST.Initializer).init(self.allocator),
+                };
+                for (strBytes) |b| {
+                    const cexpr = try self.allocator.create(AST.Expression);
+                    cexpr.* = .{ .Constant = switch (scalarTy) {
+                        .UChar => .{ .type = .UChar, .value = .{ .UChar = b } },
+                        else => .{ .type = .Char, .value = .{ .Char = b } },
+                    } };
+                    const cinit = try self.allocator.create(AST.Initializer);
+                    cinit.* = .{ .Expression = cexpr };
+                    try arrayInit.initializers.append(cinit);
+                }
+
+                // Padding
+                for (strBytes.len..arrTy.size) |_| {
+                    const zexpr = try self.allocator.create(AST.Expression);
+                    zexpr.* = .{ .Constant = switch (scalarTy) {
+                        .UChar => .{ .type = .UChar, .value = .{ .UChar = 0 } },
+                        else => .{ .type = .Char, .value = .{ .Char = 0 } },
+                    } };
+                    const zinit = try self.allocator.create(AST.Initializer);
+                    zinit.* = .{ .Expression = zexpr };
+                    try arrayInit.initializers.append(zinit);
+                }
+                const initializer = try self.allocator.create(AST.Initializer);
+                initializer.* = .{ .ArrayExpr = arrayInit };
+                return initializer;
+            }
             if (std.meta.activeTag(varDeclType) == .Pointer) {
-                std.debug.assert(expr.isNullPtr()); // call pointerDeclWithScalarNonNullRhs before this
+                std.debug.assert(expr.isNullPtr());
                 const initializer = try self.allocator.create(AST.Initializer);
                 const expression = try self.allocator.create(AST.Expression);
                 expression.* = .{ .Constant = .{ .type = varDeclType, .value = .{ .ULong = 0 } } };
@@ -267,74 +338,83 @@ fn getInitializerValue(self: *Typechecker, varDeclType: AST.Type, initializer: *
     switch (initializer.*) {
         .ArrayExpr => |arrayExpr| {
             const size = varDeclType.Array.getNestedSize();
-            var initValues = std.ArrayList(Constant).init(self.allocator);
+            var initItems = std.ArrayList(StaticInit).init(self.allocator);
             const arrMemberType = varDeclType.decrementDepth(self.allocator) catch unreachable;
             for (arrayExpr.initializers.items) |arrayItemInitializer| {
-                const arrMemberInitValue = try getInitializerValue(self, arrMemberType, arrayItemInitializer);
-                std.debug.assert(std.meta.activeTag(arrMemberInitValue.*) == .Initial);
-                try initValues.appendSlice(arrMemberInitValue.Initial);
+                const memberInit = try getInitializerValue(self, arrMemberType, arrayItemInitializer);
+                std.debug.assert(std.meta.activeTag(memberInit.*) == .Initial);
+                try initItems.appendSlice(memberInit.Initial);
             }
-            const zero = Constant{
-                .type = varDeclType.Array.getScalarType(),
-                .value = switch (varDeclType.Array.getScalarType()) {
-                    .Pointer => .{ .ULong = 0 },
-                    .Float => .{ .Float = 0.0 },
-                    .Integer => .{ .Integer = 0 },
-                    .Long => .{ .Long = 0 },
-                    .UInteger => .{ .UInteger = 0 },
-                    .ULong => .{ .ULong = 0 },
-                    else => unreachable,
-                },
-            };
-
-            for (0..size - arrayExpr.initializers.items.len) |_| {
-                try initValues.append(zero);
+            const remaining = size - arrayExpr.initializers.items.len;
+            if (remaining > 0) {
+                const elem_bytes = varDeclType.Array.getScalarType().size();
+                try initItems.append(.{ .Zero = remaining * elem_bytes });
             }
-
-            initVal.* = .{ .Initial = try initValues.toOwnedSlice() };
+            initVal.* = .{ .Initial = try initItems.toOwnedSlice() };
         },
         .Expression => |expression| {
-            var constants = try std.ArrayList(Constant).initCapacity(self.allocator, 1);
-            const constant: Constant = switch (varDeclType) {
+            // Special-case: char arrays initialized from string literal at static scope
+            if (std.meta.activeTag(varDeclType) == .Array and std.meta.activeTag(expression.*) == .String) {
+                const arrTy = varDeclType.Array;
+                const scalarTy = arrTy.getScalarType();
+                if (!isCharType(scalarTy)) {
+                    try self.errors.append(try std.fmt.allocPrint(self.allocator, "Can't initialize non-character array with string literal\n", .{}));
+                    return TypeError.TypeMismatch;
+                }
+                const s = expression.String; // already decoded; no trailing NUL
+                if (s.len > arrTy.size) {
+                    try self.errors.append(try std.fmt.allocPrint(self.allocator, "Too many characters in string initializer: have {d}, size {d}\n", .{ s.len, arrTy.size }));
+                    return TypeError.TypeMismatch;
+                }
+                var items = std.ArrayList(StaticInit).init(self.allocator);
+                if (arrTy.size == s.len) {
+                    try items.append(.{ .String = .{ .data = s, .nul_terminated = false } });
+                } else if (arrTy.size == s.len + 1) {
+                    try items.append(.{ .String = .{ .data = s, .nul_terminated = true } });
+                } else {
+                    try items.append(.{ .String = .{ .data = s, .nul_terminated = true } });
+                    try items.append(.{ .Zero = (arrTy.size - (s.len + 1)) });
+                }
+                initVal.* = .{ .Initial = try items.toOwnedSlice() };
+                return initVal;
+            }
+
+            var items1 = try std.ArrayList(StaticInit).initCapacity(self.allocator, 1);
+            const item: StaticInit = switch (varDeclType) {
                 .Void => unreachable,
                 .Array => unreachable,
                 .Pointer => blk: {
                     std.debug.assert(expression.isNullPtr());
-                    break :blk .{
-                        .type = .ULong,
-                        .value = .{ .ULong = 0 },
-                    };
+                    break :blk .{ .ULong = 0 };
                 },
-                .Float => .{
-                    .type = .Float,
-                    .value = .{ .Float = expression.Constant.value.Float },
+                .Float => blk: {
+                    switch (expression.*) {
+                        .Constant => |c| break :blk .{ .Float = switch (c.value) {
+                            .Float => |f| f,
+                            .Integer => |v| @as(f64, @floatFromInt(v)),
+                            .Long => |v| @as(f64, @floatFromInt(v)),
+                            .UInteger => |v| @as(f64, @floatFromInt(v)),
+                            .ULong => |v| @as(f64, @floatFromInt(v)),
+                            .Char => |v| @as(f64, @floatFromInt(v)),
+                            .UChar => |v| @as(f64, @floatFromInt(v)),
+                        } },
+                        else => unreachable,
+                    }
                 },
-                .Integer => .{
-                    .type = .Integer,
-                    .value = .{ .Integer = expression.Constant.to(i32) },
-                },
-                .Long => .{
-                    .type = .Long,
-                    .value = .{ .Long = expression.Constant.to(i64) },
-                },
-                .UInteger => .{
-                    .type = .UInteger,
-                    .value = .{ .UInteger = expression.Constant.to(u32) },
-                },
-                .ULong => .{
-                    .type = .ULong,
-                    .value = .{ .ULong = expression.Constant.to(u64) },
-                },
+                .Integer => .{ .Integer = expression.Constant.to(i32) },
+                .Long => .{ .Long = expression.Constant.to(i64) },
+                .UInteger => .{ .UInt = expression.Constant.to(u32) },
+                .ULong => .{ .ULong = expression.Constant.to(u64) },
+                .Char => .{ .Char = expression.Constant.value.Char },
+                .SChar => .{ .Char = expression.Constant.value.Char },
+                .UChar => .{ .UChar = expression.Constant.value.UChar },
                 .Function => unreachable,
-                .Char, .SChar, .UChar => unreachable,
             };
-            constants.appendAssumeCapacity(constant);
-            initVal.* = .{
-                .Initial = try constants.toOwnedSlice(),
-            };
+            items1.appendAssumeCapacity(item);
+            initVal.* = .{ .Initial = try items1.toOwnedSlice() };
         },
     }
-    std.log.warn("Initval = {any}, initVal.Initial = {any}\n", .{ initVal, initVal.Initial });
+    std.log.warn("Initval = {any}\n", .{ initVal });
     return initVal;
 }
 
@@ -410,7 +490,7 @@ fn globalDeclExprNotConstant(self: *Typechecker, varInitValue: *AST.Initializer,
     switch (varInitValue.*) {
         .Expression => |expression| {
             std.log.warn("globalDeclExprNotConstant => Expression: {any}\n", .{expression});
-            if (std.meta.activeTag(expression.*) != .Constant) {
+            if (std.meta.activeTag(expression.*) != .Constant and std.meta.activeTag(expression.*) != .String) {
                 try self.errors.append(try std.fmt.allocPrint(
                     self.allocator,
                     "Global declarations only support constants for declaration of {s}\n",
@@ -584,7 +664,8 @@ pub fn typecheckExternalDecl(self: *Typechecker, externalDecl: *AST.ExternalDecl
                 try pointerDeclWithScalarNonNullRhs(self, varDecl, varInitValue, varName);
 
                 varDecl.varInitValue = try castExprToDeclType(self, varDecl.type, varInitValue);
-                initializer = (try getInitializerValue(self, varDecl.type, varInitValue)).*;
+                // Use the casted initializer (may have been expanded into an ArrayExpr)
+                initializer = (try getInitializerValue(self, varDecl.type, varDecl.varInitValue.?)).*;
                 std.log.warn("Got initializer from getInitializerValue: {any}\n", .{initializer});
 
                 // INFO: Extern decls no assignment check
@@ -739,7 +820,61 @@ fn typecheckInitializer(self: *Typechecker, initializer: *AST.Initializer, declT
     const newInitializer = try self.allocator.create(AST.Initializer);
     newInitializer.* = initializer.*;
     switch (initializer.*) {
-        .Expression => {
+        .Expression => |expr| {
+            // Special-case: char array initialized from string literal
+            if (std.meta.activeTag(declType) == .Array and std.meta.activeTag(expr.*) == .String) {
+                const arrTy = declType.Array;
+                const scalarTy = arrTy.getScalarType();
+                if (!isCharType(scalarTy)) {
+                    try self.errors.append(try std.fmt.allocPrint(
+                        self.allocator,
+                        "Can't initialize non-character array with string literal\n",
+                        .{},
+                    ));
+                    return TypeError.TypeMismatch;
+                }
+
+                const str_bytes = expr.String; // already decoded, no trailing NUL
+                if (str_bytes.len > arrTy.size) {
+                    try self.errors.append(try std.fmt.allocPrint(
+                        self.allocator,
+                        "Too many characters in string initializer: have {d}, size {d}\n",
+                        .{ str_bytes.len, arrTy.size },
+                    ));
+                    return TypeError.TypeMismatch;
+                }
+
+                // Build an ArrayExpr initializer with per-element char constants,
+                // and zero-fill the remainder.
+                var arrayInit = try self.allocator.create(AST.ArrayInitializer);
+                arrayInit.* = .{
+                    .type = declType,
+                    .initializers = std.ArrayList(*AST.Initializer).init(self.allocator),
+                };
+
+                // Emit explicit characters
+                for (str_bytes) |b| {
+                    const cexpr = try self.allocator.create(AST.Expression);
+                    cexpr.* = .{ .Constant = .{ .type = .Char, .value = .{ .Char = b } } };
+                    const cinit = try self.allocator.create(AST.Initializer);
+                    cinit.* = .{ .Expression = cexpr };
+                    try arrayInit.initializers.append(cinit);
+                }
+
+                // Zero padding
+                for (str_bytes.len..arrTy.size) |_| {
+                    const zexpr = try self.allocator.create(AST.Expression);
+                    zexpr.* = .{ .Constant = .{ .type = .Char, .value = .{ .Char = 0 } } };
+                    const zinit = try self.allocator.create(AST.Initializer);
+                    zinit.* = .{ .Expression = zexpr };
+                    try arrayInit.initializers.append(zinit);
+                }
+
+                newInitializer.* = .{ .ArrayExpr = arrayInit };
+                return newInitializer;
+            }
+
+            // Generic expression initializer path
             newInitializer.Expression = try typecheckExpr(self, newInitializer.Expression);
             if (!(try checkConversion(self, declType, newInitializer.Expression.getType())) and !isNullPtrAssignment(newInitializer.Expression, declType)) {
                 std.log.warn("error: check conversion: {any} to {any}\n", .{ declType, newInitializer.Expression.getType() });
@@ -804,6 +939,7 @@ fn typecheckBlkItem(self: *Typechecker, blkItem: *AST.BlockItem) TypeCheckerErro
                 // 4. Check if the cast has overwritten the type of the
                 // expression(Final assert)
                 decl.varInitValue = try typecheckInitializer(self, varInitValue, decl.type);
+                // no-op
 
                 // Not all conversions are allowed, this has to be done before
                 // calling convert, if checkConversion and null pointer
@@ -866,13 +1002,13 @@ fn typecheckBlkItem(self: *Typechecker, blkItem: *AST.BlockItem) TypeCheckerErro
                                 return TypeError.GlobalDeclarationNotInteger;
                             }
                             const sym = try self.allocator.create(Symbol);
-                            const attributes = try self.allocator.alloc(Constant, 1);
+                            const attributes = try self.allocator.alloc(StaticInit, 1);
                             attributes[0] = switch (decl.type) {
-                                .Integer => Constant{ .type = .Integer, .value = .{ .Integer = expr.Constant.value.Integer } },
-                                .Long => Constant{ .type = .Long, .value = .{ .Long = expr.Constant.value.Long } },
-                                .ULong => Constant{ .type = .ULong, .value = .{ .ULong = expr.Constant.value.ULong } },
-                                .UInteger => Constant{ .type = .UInteger, .value = .{ .UInteger = expr.Constant.value.UInteger } },
-                                .Float => Constant{ .type = .Float, .value = .{ .Float = expr.Constant.value.Float } },
+                                .Integer => .{ .Integer = expr.Constant.value.Integer },
+                                .Long => .{ .Long = expr.Constant.value.Long },
+                                .ULong => .{ .ULong = expr.Constant.value.ULong },
+                                .UInteger => .{ .UInt = expr.Constant.value.UInteger },
+                                .Float => .{ .Float = expr.Constant.value.Float },
                                 else => unreachable,
                             };
                             // TODO: accomodate longs
@@ -889,12 +1025,7 @@ fn typecheckBlkItem(self: *Typechecker, blkItem: *AST.BlockItem) TypeCheckerErro
                                 .typeInfo = .Integer,
                                 .attributes = .{ .StaticAttr = .{
                                     .init = blk: {
-                                        break :blk .{ .Initial = &[_]Constant{
-                                            Constant{
-                                                .type = .Integer,
-                                                .value = .{ .Integer = 0 },
-                                            },
-                                        } };
+                                        break :blk .{ .Initial = &[_]StaticInit{ .{ .Integer = 0 } } };
                                     },
                                     .global = false,
                                 } },
@@ -999,6 +1130,24 @@ inline fn convert(allocator: std.mem.Allocator, expr: *AST.Expression, toType: A
     if (std.meta.activeTag(expr_ty) == .Array and std.meta.activeTag(toType) == .Pointer) {
         const inner = try allocator.create(AST.Expression);
         inner.* = expr.*;
+        // If we're decaying a string literal to a pointer-to-(u)char, model
+        // C's implicit NUL terminator by appending a 0 byte to the string's
+        // backing slice so that getType() observes length+1.
+        if (std.meta.activeTag(inner.*) == .String) {
+            switch (toType) {
+                .Pointer => |pointee| {
+                    const base_tag = std.meta.activeTag(pointee.*);
+                    if (base_tag == .Char or base_tag == .UChar) {
+                        const s = inner.String;
+                        var buf = try allocator.alloc(u8, s.len + 1);
+                        @memcpy(buf[0..s.len], s);
+                        buf[s.len] = 0;
+                        inner.String = buf;
+                    }
+                },
+                else => {},
+            }
+        }
         expr.* = .{ .AddrOf = .{ .exp = inner, .type = toType } };
         return expr;
     }
@@ -1077,6 +1226,83 @@ inline fn convert(allocator: std.mem.Allocator, expr: *AST.Expression, toType: A
             return expr;
         },
         .Constant => {
+            // For numeric constants, fold the conversion into the constant
+            // itself instead of producing an explicit Cast node. This keeps
+            // local initializers like `unsigned char uk = 'a';` as a Constant
+            // of type UChar, which tests expect and simplifies later stages.
+            if (expr.Constant.type.isNumeric() and toType.isNumeric() and std.meta.activeTag(expr.Constant.type) != toType) {
+                const old = expr.Constant;
+                var new_const: AST.Constant = undefined;
+                new_const.type = toType;
+                new_const.value = switch (toType) {
+                    .Integer => .{ .Integer = switch (old.value) {
+                        .Integer => |v| v,
+                        .Long => |v| @as(i32, @intCast(v)),
+                        .UInteger => |v| @as(i32, @intCast(v)),
+                        .ULong => |v| @as(i32, @intCast(v)),
+                        .Float => |v| @as(i32, @intFromFloat(v)),
+                        .Char => |v| @as(i32, @intCast(v)),
+                        .UChar => |v| @as(i32, @intCast(v)),
+                    } },
+                    .Long => .{ .Long = switch (old.value) {
+                        .Integer => |v| @as(i64, @intCast(v)),
+                        .Long => |v| v,
+                        .UInteger => |v| @as(i64, @intCast(v)),
+                        .ULong => |v| @as(i64, @intCast(v)),
+                        .Float => |v| @as(i64, @intFromFloat(v)),
+                        .Char => |v| @as(i64, @intCast(v)),
+                        .UChar => |v| @as(i64, @intCast(v)),
+                    } },
+                    .UInteger => .{ .UInteger = switch (old.value) {
+                        .Integer => |v| @as(u32, @intCast(v)),
+                        .Long => |v| @as(u32, @intCast(v)),
+                        .UInteger => |v| v,
+                        .ULong => |v| @as(u32, @intCast(v)),
+                        .Float => |v| @as(u32, @intFromFloat(v)),
+                        .Char => |v| @as(u32, @intCast(v)),
+                        .UChar => |v| @as(u32, @intCast(v)),
+                    } },
+                    .ULong => .{ .ULong = switch (old.value) {
+                        .Integer => |v| @as(u64, @intCast(v)),
+                        .Long => |v| @as(u64, @intCast(v)),
+                        .UInteger => |v| @as(u64, @intCast(v)),
+                        .ULong => |v| v,
+                        .Float => |v| @as(u64, @intFromFloat(v)),
+                        .Char => |v| @as(u64, @intCast(v)),
+                        .UChar => |v| @as(u64, @intCast(v)),
+                    } },
+                    .Float => .{ .Float = switch (old.value) {
+                        .Integer => |v| @as(f64, @floatFromInt(v)),
+                        .Long => |v| @as(f64, @floatFromInt(v)),
+                        .UInteger => |v| @as(f64, @floatFromInt(v)),
+                        .ULong => |v| @as(f64, @floatFromInt(v)),
+                        .Float => |v| v,
+                        .Char => |v| @as(f64, @floatFromInt(v)),
+                        .UChar => |v| @as(f64, @floatFromInt(v)),
+                    } },
+                    .Char => .{ .Char = switch (old.value) {
+                        .Integer => |v| @as(u8, @intCast(v)),
+                        .Long => |v| @as(u8, @intCast(v)),
+                        .UInteger => |v| @as(u8, @intCast(v)),
+                        .ULong => |v| @as(u8, @intCast(v)),
+                        .Float => |v| @as(u8, @intFromFloat(v)),
+                        .Char => |v| v,
+                        .UChar => |v| v,
+                    } },
+                    .UChar => .{ .UChar = switch (old.value) {
+                        .Integer => |v| @as(u8, @intCast(v)),
+                        .Long => |v| @as(u8, @intCast(v)),
+                        .UInteger => |v| @as(u8, @intCast(v)),
+                        .ULong => |v| @as(u8, @intCast(v)),
+                        .Float => |v| @as(u8, @intFromFloat(v)),
+                        .Char => |v| v,
+                        .UChar => |v| v,
+                    } },
+                    else => unreachable,
+                };
+                expr.* = .{ .Constant = new_const };
+                return expr;
+            }
             if (std.meta.activeTag(expr.Constant.type) != toType) {
                 const castExpr = try allocator.create(AST.Expression);
                 const rhsCopy = try allocator.create(AST.Expression);
@@ -1126,7 +1352,10 @@ inline fn convert(allocator: std.mem.Allocator, expr: *AST.Expression, toType: A
             expr.ArrSubscript.type = toType;
             return expr;
         },
-        .String => unreachable,
+        .String => {
+            std.debug.assert(false); // Not sure what to do here, for now just assert here
+            return expr;
+        },
     }
 }
 
@@ -1134,7 +1363,6 @@ fn getCommonPtrTypeForArith() !AST.Type {
     return .Long;
 }
 
-// TODO: This is funky, make a different function for pointer arithmetic
 fn getCommonPtrType(self: *Typechecker, lhs: *AST.Expression, rhs: *AST.Expression) !?AST.Type {
     // Only decay top-level arrays to pointers; do not decay arrays behind
     // pointers so multi-dimensional arrays remain pointer-to-array.
@@ -1142,13 +1370,13 @@ fn getCommonPtrType(self: *Typechecker, lhs: *AST.Expression, rhs: *AST.Expressi
     var type2 = try changeTopLevelArrayToPointer(rhs.getType(), self.allocator);
     if (type1.deepEql(type2)) return type1;
     if (type1 == .Integer) {
-        lhs.* = (try convert(self.allocator, lhs, .Long)).*;
+        const new_lhs = try castToLongForPtrArith(self.allocator, lhs);
+        lhs.* = new_lhs.*;
         type1 = .Long;
     }
     if (type2 == .Integer) {
-        std.log.warn("rhs is {}\n", .{rhs});
-        rhs.* = (try convert(self.allocator, rhs, .Long)).*;
-        std.log.warn("rhs is {}\n", .{rhs});
+        const new_rhs = try castToLongForPtrArith(self.allocator, rhs);
+        rhs.* = new_rhs.*;
         type2 = .Long;
     }
     if (lhs.isNullPtr() or type1 == .Long) return type2;
@@ -1157,8 +1385,24 @@ fn getCommonPtrType(self: *Typechecker, lhs: *AST.Expression, rhs: *AST.Expressi
     return null;
 }
 
+inline fn castToLongForPtrArith(allocator: std.mem.Allocator, e: *AST.Expression) !*AST.Expression {
+    if (std.meta.activeTag(e.*) == .Constant) {
+        const inner = try allocator.create(AST.Expression);
+        inner.* = e.*;
+        const casted = try allocator.create(AST.Expression);
+        casted.* = .{ .Cast = .{ .type = .Long, .value = inner } };
+        return casted;
+    }
+    return try convert(allocator, e, .Long);
+}
+
+// INFO: gets common type for binary arithmetic operations
 fn getCommonType(type1: AST.Type, type2: AST.Type) ?AST.Type {
-    // INFO: same types => return the type
+    // Characters are casted to integers for arithmetic conversion
+    if (isCharType(type1) or isCharType(type2)) {
+        return .Integer;
+    }
+
     if (std.meta.activeTag(type1) == std.meta.activeTag(type2)) return type1;
     if (std.meta.activeTag(type1) == .Float or std.meta.activeTag(type2) == .Float) {
         return .Float;
@@ -1219,6 +1463,10 @@ pub fn getArrSubscriptType(self: *Typechecker, arrSubscript: *AST.ArrSubscript) 
         .Array => |arrayTy| arrayTy.ty.*,
         else => unreachable,
     };
+}
+
+fn isCharType(self: AST.Type) bool {
+    return (std.meta.activeTag(self) == .Char or std.meta.activeTag(self) == .UChar or std.meta.activeTag(self) == .SChar);
 }
 
 fn typecheckExpr(self: *Typechecker, expr: *AST.Expression) TypeError!*AST.Expression {
@@ -1330,9 +1578,9 @@ fn typecheckExpr(self: *Typechecker, expr: *AST.Expression) TypeError!*AST.Expre
                 const checked = try typecheckExpr(self, fnCall.args.items[i]);
                 const argValue = try decayArrayValue(self, checked);
                 const paramTy = fnSymbol.typeInfo.Function.args.items[i].*;
-                expr.FunctionCall.args.items[i] = if (std.meta.activeTag(paramTy) != std.meta.activeTag(argValue.getType())) blk: {
-                    break :blk try convert(self.allocator, argValue, paramTy);
-                } else argValue;
+                // Always run through convert to allow constant-float lowering
+                // into static storage, even when tags match.
+                expr.FunctionCall.args.items[i] = try convert(self.allocator, argValue, paramTy);
             }
             expr.FunctionCall.type = fnSymbol.typeInfo.Function.returnType.*;
             // FIXME: This convert call is stupid, delete it after some checks
@@ -1363,7 +1611,8 @@ fn typecheckExpr(self: *Typechecker, expr: *AST.Expression) TypeError!*AST.Expre
                 .ULong => .ULong,
                 .UInteger => .UInteger,
                 .Float => .Float,
-                .Char, .UChar => unreachable,
+                .Char => .Char,
+                .UChar => .UChar,
             };
             // INFO: Constant floats need to be in .rodata/.data
             if (t == .Float) {
@@ -1374,11 +1623,8 @@ fn typecheckExpr(self: *Typechecker, expr: *AST.Expression) TypeError!*AST.Expre
                     .attributes = .{
                         .StaticAttr = .{
                             .init = .{ .Initial = blk: {
-                                const constants = try self.allocator.alloc(Constant, 1);
-                                constants[0] = Constant{
-                                    .type = .Float,
-                                    .value = .{ .Float = constant.value.Float },
-                                };
+                                const constants = try self.allocator.alloc(StaticInit, 1);
+                                constants[0] = .{ .Float = constant.value.Float };
                                 break :blk constants;
                             } },
                             .global = false,
@@ -1403,6 +1649,16 @@ fn typecheckExpr(self: *Typechecker, expr: *AST.Expression) TypeError!*AST.Expre
         },
         .Unary => |unary| {
             const checked = try typecheckExpr(self, unary.exp);
+            if (isCharType(checked.getType())) {
+                expr.Unary.exp = try convert(
+                    self.allocator,
+                    expr.Unary.exp,
+                    .Integer,
+                );
+                expr.Unary.type = .Integer;
+                return expr;
+            }
+
             const value_exp = try decayArrayValue(self, checked);
             expr.Unary.exp = value_exp;
             const exprType = value_exp.getType();
@@ -1456,7 +1712,9 @@ fn typecheckExpr(self: *Typechecker, expr: *AST.Expression) TypeError!*AST.Expre
             expr.ArrSubscript.type = try getArrSubscriptType(self, @constCast(&expr.ArrSubscript));
             return expr;
         },
-        .String => unreachable,
+        .String => {
+            return expr;
+        },
     }
 }
 

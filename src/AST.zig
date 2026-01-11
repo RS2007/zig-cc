@@ -271,7 +271,7 @@ pub const ExpressionType = enum {
     String,
 };
 
-fn convertSymToTAC(tacProgram: *tac.Program, symbolTable: std.StringHashMap(*semantic.Symbol)) MemoryError!void {
+fn convertASTSymbolsToTACDeclarations(tacProgram: *tac.Program, symbolTable: std.StringHashMap(*semantic.Symbol)) MemoryError!void {
     var symbolTableIter = symbolTable.iterator();
     while (symbolTableIter.next()) |iterator| {
         const key = iterator.key_ptr.*;
@@ -283,42 +283,33 @@ fn convertSymToTAC(tacProgram: *tac.Program, symbolTable: std.StringHashMap(*sem
             .StaticAttr => |staticAttr| {
                 switch (staticAttr.init) {
                     .Initial => |initial| {
-                        var staticVarConstants = try std.ArrayList(tac.StaticVarInit).initCapacity(symbolTable.allocator, initial.len);
-                        var staticVarTypes = try std.ArrayList(tac.ConstantType).initCapacity(symbolTable.allocator, initial.len);
-                        for (initial) |constant| {
-                            staticVarConstants.appendAssumeCapacity(switch (constant.type) {
-                                .Integer => .{ .Integer = constant.value.Integer },
-                                .Void => unreachable,
-                                .Long => .{ .Long = constant.value.Long },
-                                .UInteger => .{ .UInt = constant.value.UInteger },
-                                .ULong => .{ .ULong = constant.value.ULong },
-                                .Float => .{ .Float = constant.value.Float },
-                                .Pointer => unreachable,
-                                .Array => unreachable,
-                                .Char, .UChar, .SChar => unreachable,
-                                .Function => {
-                                    std.log.warn("Found a function initializer for a static variable: {s}, value: {any}\n", .{ key, value });
-                                    unreachable;
-                                },
-                            });
-                            staticVarTypes.appendAssumeCapacity(switch (constant.type) {
-                                .Integer => tac.ConstantType.Integer,
-                                .Void => unreachable,
-                                .Long => tac.ConstantType.Long,
-                                .UInteger => tac.ConstantType.UInt,
-                                .ULong => tac.ConstantType.ULong,
-                                .Float => tac.ConstantType.Float,
-                                .Pointer => unreachable,
-                                .Array => unreachable,
-                                .Function => unreachable,
-                                .SChar, .UChar, .Char => unreachable,
+                        var inits = try std.ArrayList(tac.StaticVarInit).initCapacity(symbolTable.allocator, initial.len);
+                        for (initial) |si| {
+                            inits.appendAssumeCapacity(switch (si) {
+                                .Integer => |v| .{ .Integer = v },
+                                .Long => |v| .{ .Long = v },
+                                .UInt => |v| .{ .UInt = v },
+                                .ULong => |v| .{ .ULong = v },
+                                .Float => |v| .{ .Float = v },
+                                .Char => |v| .{ .Char = v },
+                                .UChar => |v| .{ .UChar = v },
+                                .Zero => |n| .{ .Zero = n },
+                                .String => |s| .{ .String = .{ .data = s.data, .nul_terminated = s.nul_terminated } },
+                                .Pointer => |lbl| .{ .Pointer = lbl },
                             });
                         }
+                        const alignment_bytes: u32 = switch (value.typeInfo) {
+                            .Integer, .UInteger => 4,
+                            .Long, .ULong, .Pointer, .Float => 8,
+                            .Char, .UChar, .SChar => 1,
+                            .Array => |arr| arr.getScalarType().alignment(),
+                            .Void, .Function => 1,
+                        };
                         staticVar.* = .{
                             .name = @constCast(key),
                             .global = staticAttr.global,
-                            .init = try staticVarConstants.toOwnedSlice(),
-                            .type = try staticVarTypes.toOwnedSlice(),
+                            .init = try inits.toOwnedSlice(),
+                            .alignment = alignment_bytes,
                         };
                         tacTopLevelDecl.* = .{
                             .StaticVar = staticVar,
@@ -333,17 +324,13 @@ fn convertSymToTAC(tacProgram: *tac.Program, symbolTable: std.StringHashMap(*sem
                             .Array => |arrayTy| {
                                 const nestedSize = arrayTy.getNestedSize();
                                 const scalarType = arrayTy.getScalarType();
-                                var constantsArray = try std.ArrayList(tac.StaticVarInit).initCapacity(symbolTable.allocator, nestedSize);
-                                var constantTypesArray = try std.ArrayList(tac.ConstantType).initCapacity(symbolTable.allocator, nestedSize);
-                                for (0..nestedSize) |_| {
-                                    constantsArray.appendAssumeCapacity(scalarType.zeroedTACStaticVar());
-                                    constantTypesArray.appendAssumeCapacity(try scalarType.to(tac.ConstantType));
-                                }
+                                var constantsArray = try std.ArrayList(tac.StaticVarInit).initCapacity(symbolTable.allocator, 1);
+                                try constantsArray.append(.{ .Zero = nestedSize * scalarType.size() });
                                 staticVar.* = .{
                                     .name = @constCast(key),
                                     .global = staticAttr.global,
                                     .init = try constantsArray.toOwnedSlice(),
-                                    .type = try constantTypesArray.toOwnedSlice(),
+                                    .alignment = scalarType.alignment(),
                                 };
                             },
                             .Pointer => {
@@ -351,37 +338,28 @@ fn convertSymToTAC(tacProgram: *tac.Program, symbolTable: std.StringHashMap(*sem
                                     .name = @constCast(key),
                                     .global = staticAttr.global,
                                     .init = &[_]tac.StaticVarInit{.{ .ULong = 0 }},
-                                    .type = &[_]tac.ConstantType{.ULong},
+                                    .alignment = 8,
                                 };
                             },
                             .Void => unreachable,
                             .Float, .Integer, .Long, .ULong, .UInteger => {
+                                var staticVarInitArray = try std.ArrayList(tac.StaticVarInit).initCapacity(symbolTable.allocator, 1);
+                                staticVarInitArray.appendAssumeCapacity(switch (value.typeInfo) {
+                                    .Float => .{ .Float = 0.0 },
+                                    .Integer => .{ .Integer = 0 },
+                                    .Long => .{ .Long = 0 },
+                                    .ULong => .{ .ULong = 0 },
+                                    .UInteger => .{ .UInt = 0 },
+                                    else => unreachable,
+                                });
                                 staticVar.* = .{
                                     .name = @constCast(key),
                                     .global = staticAttr.global,
-                                    .init = blk: {
-                                        var staticVarInitArray = try std.ArrayList(tac.StaticVarInit).initCapacity(symbolTable.allocator, 1);
-                                        staticVarInitArray.appendAssumeCapacity(switch (value.typeInfo) {
-                                            .Float => .{ .Float = 0.0 },
-                                            .Integer => .{ .Integer = 0 },
-                                            .Long => .{ .Long = 0 },
-                                            .ULong => .{ .ULong = 0 },
-                                            .UInteger => .{ .UInt = 0 },
-                                            else => unreachable,
-                                        });
-                                        break :blk try staticVarInitArray.toOwnedSlice();
-                                    },
-                                    .type = blk: {
-                                        var staticVarInitArray = try std.ArrayList(tac.ConstantType).initCapacity(symbolTable.allocator, 1);
-                                        staticVarInitArray.appendAssumeCapacity(switch (value.typeInfo) {
-                                            .Float => .Float,
-                                            .Integer => .Integer,
-                                            .Long => .Long,
-                                            .ULong => .ULong,
-                                            .UInteger => .UInt,
-                                            else => unreachable,
-                                        });
-                                        break :blk try staticVarInitArray.toOwnedSlice();
+                                    .init = try staticVarInitArray.toOwnedSlice(),
+                                    .alignment = switch (value.typeInfo) {
+                                        .Float, .Long, .ULong => 8,
+                                        .Integer, .UInteger => 4,
+                                        else => 1,
                                     },
                                 };
                             },
@@ -847,7 +825,11 @@ inline fn chooseIntCastInst(inner: *tac.Val, dest: *tac.Val, toType: Type, asmSy
             .src = inner,
             .dest = dest,
         } },
-        .Long, .ULong, .Pointer => if (toType.signed())
+        // Pointer-sized moves should not zero/sign-extend; copy the full
+        // pointer width directly. This avoids truncating 64-bit addresses on
+        // x86_64 (which would otherwise happen via a 32-bit movzx path).
+        .Pointer => .{ .Copy = .{ .src = inner, .dest = dest } },
+        .Long, .ULong => if (toType.signed())
             .{ .SignExtend = .{
                 .src = inner,
                 .dest = dest,
@@ -1406,11 +1388,12 @@ pub const TACRenderer = struct {
         return tacRenderer;
     }
     pub fn render(self: *Self, program: *Program) !*tac.Program {
+        self.asmSymbolTable = try tac.astSymTabToTacSymTab(self.allocator, self.astSymbolTable);
         const tacProgram = try self.allocator.create(tac.Program);
         tacProgram.* = .{
             .topLevelDecls = std.ArrayList(*tac.TopLevel).init(self.allocator),
         };
-        try convertSymToTAC(tacProgram, self.astSymbolTable);
+        try convertASTSymbolsToTACDeclarations(tacProgram, self.astSymbolTable);
         for (program.externalDecls.items) |externalDecl| {
             const functionDef = try externalDecl.genTAC(self, self.astSymbolTable);
             if (functionDef) |resolvedFnDef| {
@@ -1461,6 +1444,10 @@ pub const Expression = union(ExpressionType) {
             .Deref => |deref| deref.type.?,
             .AddrOf => |addrOf| addrOf.type.?,
             .ArrSubscript => |arrSubscript| arrSubscript.type.?,
+            // String literal type reflects the exact byte length of the
+            // literal without the implicit NUL terminator. Handling of
+            // NUL padding (when initializing char arrays) is performed
+            // later during semantic analysis.
             .String => |str| .{ .Array = .{ .size = str.len, .ty = @constCast(&CharType) } },
         };
     }
@@ -1677,8 +1664,9 @@ pub const Expression = union(ExpressionType) {
                     .Long => |long| tac.Val{ .Constant = .{ .Long = long } },
                     .UInteger => |uint| .{ .Constant = .{ .UInt = uint } },
                     .ULong => |ulong| .{ .Constant = .{ .ULong = ulong } },
-                    .Float => |float| .{ .Constant = .{ .Float = float } },
-                    .UChar, .Char => unreachable,
+                    .Float => |f| .{ .Constant = .{ .Float = f } },
+                    .UChar => |c| .{ .Constant = .{ .UChar = c } },
+                    .Char => |c| .{ .Constant = .{ .Char = c } },
                 };
                 boxed.* = .{ .PlainVal = val };
                 return boxed;
@@ -1928,14 +1916,16 @@ pub const Expression = union(ExpressionType) {
                 asmSymbolForArrAtIndexPtr.* = .{ .Obj = .{ .type = .QuadWord, .signed = false, .static = false } };
                 try renderer.asmSymbolTable.put(arrAtIndexPtr.Variable, asmSymbolForArrAtIndexPtr);
 
-                const storeType = arrSubscript.type.?;
+                const base_ty = arrSubscript.arr.getType();
+                const step_ty = base_ty.decrementDepth(renderer.allocator) catch unreachable;
+                const step_bytes: i64 = @intCast(step_ty.size());
 
                 try instructions.appendSlice(&[_]*tac.Instruction{
                     try tac.createInst(.AddPtr, tac.AddPtr{
                         .dest = arrAtIndexPtr,
                         .index = index,
                         .src = arr,
-                        .scale = @intCast(storeType.size()),
+                        .scale = step_bytes,
                     }, renderer.allocator),
                 });
                 const boxed = try renderer.allocator.create(tac.BoxedVal);

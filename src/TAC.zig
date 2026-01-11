@@ -17,26 +17,25 @@ pub const FunctionDef = struct {
     instructions: std.ArrayList(*Instruction),
 };
 
-pub const StaticVarInit = union(ConstantType) {
+pub const StaticVarInit = union(enum) {
     Integer: i32,
     Long: i64,
     UInt: u32,
     ULong: u64,
     Float: f64,
+    Char: u8,
+    UChar: u8,
+    Zero: usize,
+    String: struct { data: []u8, nul_terminated: bool },
+    Pointer: []u8,
 };
 
 pub const StaticVar = struct {
     name: []u8,
     global: bool,
     init: []const StaticVarInit,
-    type: []const ConstantType,
-
-    pub fn alignment(self: StaticVar) u8 {
-        return switch (self.type[0]) {
-            .Integer, .UInt => 4,
-            .Long, .ULong, .Float => 8,
-        };
-    }
+    // Alignment in bytes for this object in data/bss
+    alignment: u32,
 };
 
 pub fn astSymTabToTacSymTab(allocator: std.mem.Allocator, astSymTab: std.StringHashMap(*semantic.Symbol)) ast.CodegenError!std.StringHashMap(*assembly.Symbol) {
@@ -129,9 +128,14 @@ pub const AsmRenderer = struct {
                         staticInitArray.appendAssumeCapacity(switch (staticVarInit) {
                             .Integer => .{ .Integer = staticVarInit.Integer },
                             .Long => .{ .Long = staticVarInit.Long },
-                            .UInt => .{ .Integer = @intCast(staticVarInit.UInt) },
-                            .ULong => .{ .Long = @intCast(staticVarInit.ULong) },
+                            .UInt => .{ .UInt = staticVarInit.UInt },
+                            .ULong => .{ .ULong = staticVarInit.ULong },
                             .Float => .{ .Float = staticVarInit.Float },
+                            .Char => .{ .Char = staticVarInit.Char },
+                            .UChar => .{ .UChar = staticVarInit.UChar },
+                            .Zero => .{ .Zero = staticVarInit.Zero },
+                            .String => .{ .String = .{ .data = staticVarInit.String.data, .nul_terminated = staticVarInit.String.nul_terminated } },
+                            .Pointer => .{ .Pointer = staticVarInit.Pointer },
                         });
                     }
                     const staticVar = try self.allocator.create(assembly.StaticVar);
@@ -139,7 +143,7 @@ pub const AsmRenderer = struct {
                         .name = statItem.name,
                         .global = statItem.global,
                         .init = try staticInitArray.toOwnedSlice(),
-                        .alignment = statItem.alignment(),
+                        .alignment = statItem.alignment,
                     };
                     asmTopLevelDecl.* = .{
                         .StaticVar = staticVar,
@@ -169,6 +173,7 @@ pub const AsmRenderer = struct {
                                     .LongWord => .{ .Reg = registers32[i] },
                                     .QuadWord, .ByteArray => .{ .Reg = registers64[i] },
                                     .Float => .{ .Reg = registersFloat[i] },
+                                    .Byte => .{ .Reg = registers32[i] },
                                 },
                                 .dest = assembly.Operand{
                                     .Pseudo = arg,
@@ -185,6 +190,44 @@ pub const AsmRenderer = struct {
                     };
                     try asmProgram.topLevelDecls.append(asmTopLevelDecl);
                 },
+            }
+        }
+        // Emit pooled float constants discovered during instruction codegen.
+        // We look for labels with the prefix "dbl_" and reconstruct the value
+        // from the hex suffix.
+        var it = self.asmSymbolTable.iterator();
+        while (it.next()) |entry| {
+            const name = entry.key_ptr.*;
+            const sym = entry.value_ptr.*;
+            if (std.mem.startsWith(u8, name, "dbl_") and std.meta.activeTag(sym.*) == .Obj and sym.Obj.type == .Float) {
+                // Parse hex bits from name suffix
+                const hex = name[4..];
+                var bits: u64 = 0;
+                // Expect 16 hex chars; tolerate shorter by parsing available
+                var i: usize = 0;
+                while (i < hex.len) : (i += 1) {
+                    const c = hex[i];
+                    const v: u8 = switch (c) {
+                        '0'...'9' => c - '0',
+                        'a'...'f' => 10 + (c - 'a'),
+                        'A'...'F' => 10 + (c - 'A'),
+                        else => 0,
+                    };
+                    bits = (bits << 4) | @as(u64, @intCast(v));
+                }
+                const dbl: f64 = @bitCast(bits);
+                const asmStatic = try self.allocator.create(assembly.StaticVar);
+                var init_list = std.ArrayList(assembly.StaticInit).init(self.allocator);
+                try init_list.append(.{ .Float = dbl });
+                asmStatic.* = .{
+                    .name = @constCast(name),
+                    .global = false,
+                    .init = try init_list.toOwnedSlice(),
+                    .alignment = 8,
+                };
+                const tl = try self.allocator.create(assembly.TopLevelDecl);
+                tl.* = .{ .StaticVar = asmStatic };
+                try asmProgram.topLevelDecls.append(tl);
             }
         }
         return asmProgram;
@@ -1100,6 +1143,7 @@ pub const Instruction = union(InstructionType) {
                                     break :blk .{ .Reg = registersFloat[i] };
                                 },
                                 .ByteArray => unreachable,
+                                .Byte => .{ .Reg = registers32[i] },
                             },
                             .type = assemblyArgType,
                         }, allocator));
@@ -1192,6 +1236,8 @@ pub const ConstantType = enum {
     UInt,
     ULong,
     Float,
+    Char,
+    UChar,
 };
 
 pub const Constant = union(ConstantType) {
@@ -1200,6 +1246,8 @@ pub const Constant = union(ConstantType) {
     UInt: u32,
     ULong: u64,
     Float: f64,
+    Char: u8,
+    UChar: u8,
 };
 
 pub const BoxedVal = union(enum) {
@@ -1231,6 +1279,8 @@ pub const Val = union(ValType) {
                 .UInt => |u| try writer.print("{d}u", .{u}),
                 .ULong => |ul| try writer.print("{d}uL", .{ul}),
                 .Float => |f| try writer.print("{d:.6}f", .{f}),
+                .Char => |c| try writer.print("{d}", .{c}),
+                .UChar => |c| try writer.print("{d}", .{c}),
             },
             .Variable => |name| try writer.print("%{s}", .{name}),
         }
@@ -1242,6 +1292,8 @@ pub const Val = union(ValType) {
                 .Long, .Integer => true,
                 .ULong, .UInt => false,
                 .Float => false,
+                .Char => true,
+                .UChar => false,
             },
             .Variable => |varName| if (symbolTable.get(varName)) |sym| sym.Obj.signed else {
                 std.log.warn("Not found: {s}\n", .{varName});
@@ -1255,6 +1307,8 @@ pub const Val = union(ValType) {
                 .Long, .ULong => assembly.AsmType.QuadWord,
                 .Integer, .UInt => assembly.AsmType.LongWord,
                 .Float => assembly.AsmType.Float,
+                // For byte-sized literals in instructions, materialize as 32-bit immediates
+                .Char, .UChar => assembly.AsmType.LongWord,
             },
             .Variable => |varName| {
                 return if (symbolTable.get(varName)) |sym| sym.Obj.type else blk: {
@@ -1268,16 +1322,44 @@ pub const Val = union(ValType) {
         switch (val.*) {
             .Constant => |constant| {
                 const operand = try allocator.create(assembly.Operand);
-                operand.* = .{
-                    .Imm = (switch (constant) {
-                        .Integer => @intCast(constant.Integer),
-                        .Long => @intCast(constant.Long),
-                        .ULong => @intCast(constant.ULong),
-                        .UInt => @intCast(constant.UInt),
-                        else => unreachable,
-                    }),
-                };
-                return operand.*;
+                switch (constant) {
+                    .Integer => {
+                        operand.* = .{ .Imm = @intCast(constant.Integer) };
+                        return operand.*;
+                    },
+                    .Long => {
+                        operand.* = .{ .Imm = @intCast(constant.Long) };
+                        return operand.*;
+                    },
+                    .ULong => {
+                        operand.* = .{ .Imm = @intCast(constant.ULong) };
+                        return operand.*;
+                    },
+                    .UInt => {
+                        operand.* = .{ .Imm = @intCast(constant.UInt) };
+                        return operand.*;
+                    },
+                    .Char => |c| {
+                        operand.* = .{ .Imm = @intCast(c) };
+                        return operand.*;
+                    },
+                    .UChar => |c| {
+                        operand.* = .{ .Imm = @intCast(c) };
+                        return operand.*;
+                    },
+                    .Float => |f| {
+                        // Intern a label based on bit pattern and return Data operand
+                        const bits: u64 = @bitCast(f);
+                        const label = try std.fmt.allocPrint(allocator, "dbl_{x:0>16}", .{bits});
+                        if (!symbolTable.contains(label)) {
+                            const sym = try allocator.create(assembly.Symbol);
+                            sym.* = .{ .Obj = .{ .type = .Float, .static = true, .signed = false } };
+                            try symbolTable.put(label, sym);
+                        }
+                        operand.* = .{ .Data = label };
+                        return operand.*;
+                    },
+                }
             },
             .Variable => |variable| {
                 const operand = try allocator.create(assembly.Operand);

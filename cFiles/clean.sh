@@ -1,2 +1,9 @@
 rm -rf ./C/* ./S/*
-find . -type f -executable -delete
+
+if command -v gfind >/dev/null 2>&1; then
+    FIND=gfind
+else
+    FIND=find
+fi
+
+$FIND . -type f -executable -delete

@@ -74,6 +74,7 @@ pub const AsmType = union(enum) {
     QuadWord: void,
     Float: void,
     ByteArray: ByteArray,
+    Byte: void,
 
     const Self = @This();
     pub inline fn size(self: Self) i64 {
@@ -82,6 +83,7 @@ pub const AsmType = union(enum) {
             .QuadWord => 8,
             .Float => 8,
             .ByteArray => |byteArray| @intCast(byteArray.size),
+            .Byte => 1,
         };
     }
     pub inline fn from(comptime T: type, val: T) Self {
@@ -104,6 +106,7 @@ pub const AsmType = union(enum) {
             .QuadWord => "cmpq",
             .Float => "comisd",
             .ByteArray => unreachable,
+            .Byte => "cmpb",
         });
     }
     pub inline fn suffix(asmType: AsmType) []u8 {
@@ -111,6 +114,7 @@ pub const AsmType = union(enum) {
             .LongWord => "l",
             .QuadWord, .ByteArray => "q",
             .Float => "sd",
+            .Byte => "b",
         });
     }
     pub inline fn getAXVariety(asmType: AsmType) Reg {
@@ -119,6 +123,7 @@ pub const AsmType = union(enum) {
             .QuadWord => .RAX,
             .Float => .XMM0,
             .ByteArray => unreachable,
+            .Byte => .AL,
         };
     }
     pub inline fn getDXVariety(asmType: AsmType) Reg {
@@ -127,6 +132,7 @@ pub const AsmType = union(enum) {
             .QuadWord => .RDX,
             .Float => unreachable,
             .ByteArray => unreachable,
+            .Byte => .DX,
         };
     }
     pub inline fn getR10Variety(asmType: AsmType) Reg {
@@ -135,6 +141,7 @@ pub const AsmType = union(enum) {
             .QuadWord => .R10_64,
             .Float => .XMM15,
             .ByteArray => unreachable,
+            .Byte => .R10,
         };
     }
 
@@ -144,6 +151,7 @@ pub const AsmType = union(enum) {
             .QuadWord => .R8_64,
             .Float => unreachable,
             .ByteArray => unreachable,
+            .Byte => .R8,
         };
     }
     pub inline fn getR9Variety(asmType: AsmType) Reg {
@@ -152,6 +160,7 @@ pub const AsmType = union(enum) {
             .QuadWord => .R9_64,
             .Float => .XMM12,
             .ByteArray => unreachable,
+            .Byte => .R9,
         };
     }
 
@@ -161,6 +170,7 @@ pub const AsmType = union(enum) {
             .QuadWord => .R11_64,
             .Float => .XMM14,
             .ByteArray => unreachable,
+            .Byte => .R11,
         };
     }
 };
@@ -209,27 +219,50 @@ pub const Symbol = union(enum) {
 pub const StaticInit = union(enum) {
     Integer: i32,
     Long: i64,
+    UInt: u32,
+    ULong: u64,
     Float: f64,
+    Char: u8,
+    UChar: u8,
+    Zero: usize,
+    String: struct { data: []u8, nul_terminated: bool },
+    Pointer: []u8,
 
     pub fn isZero(self: StaticInit) bool {
         return switch (self) {
-            .Integer => |integer| integer == 0,
-            .Long => |long| long == 0,
+            .Integer => |v| v == 0,
+            .UInt => |v| v == 0,
+            .Long => |v| v == 0,
+            .ULong => |v| v == 0,
             .Float => false,
+            .Char => |v| v == 0,
+            .UChar => |v| v == 0,
+            .Zero => |bytes| bytes > 0,
+            .String => false,
+            .Pointer => false,
         };
     }
-    pub fn asmTypeString(self: StaticInit, allocator: std.mem.Allocator) ast.CodegenError![]u8 {
+
+    fn asmTypeStringNumeric(self: StaticInit, allocator: std.mem.Allocator) ast.CodegenError![]u8 {
         return switch (self) {
-            .Integer => try std.fmt.allocPrint(allocator, ".long", .{}),
-            .Long => try std.fmt.allocPrint(allocator, ".quad", .{}),
+            .Integer, .UInt => try std.fmt.allocPrint(allocator, ".long", .{}),
+            .Long, .ULong => try std.fmt.allocPrint(allocator, ".quad", .{}),
             .Float => try std.fmt.allocPrint(allocator, ".double", .{}),
+            .Char, .UChar => try std.fmt.allocPrint(allocator, ".byte", .{}),
+            else => unreachable,
         };
     }
-    pub fn render(self: StaticInit, allocator: std.mem.Allocator) ast.CodegenError![]u8 {
+
+    fn renderNumeric(self: StaticInit, allocator: std.mem.Allocator) ast.CodegenError![]u8 {
         return switch (self) {
-            .Integer => |integer| try std.fmt.allocPrint(allocator, "{}", .{integer}),
-            .Long => |long| try std.fmt.allocPrint(allocator, "{}", .{long}),
-            .Float => |float| try std.fmt.allocPrint(allocator, "{}", .{float}),
+            .Integer => |v| try std.fmt.allocPrint(allocator, "{}", .{v}),
+            .UInt => |v| try std.fmt.allocPrint(allocator, "{}", .{v}),
+            .Long => |v| try std.fmt.allocPrint(allocator, "{}", .{v}),
+            .ULong => |v| try std.fmt.allocPrint(allocator, "{}", .{v}),
+            .Float => |v| try std.fmt.allocPrint(allocator, "{}", .{v}),
+            .Char => |v| try std.fmt.allocPrint(allocator, "{}", .{v}),
+            .UChar => |v| try std.fmt.allocPrint(allocator, "{}", .{v}),
+            else => unreachable,
         };
     }
 };
@@ -253,14 +286,24 @@ pub const StaticVar = struct {
     pub fn renderInits(self: *Self, allocator: std.mem.Allocator) ![]u8 {
         var buf = std.ArrayList(u8).init(allocator);
         for (self.init) |init| {
-            try buf.appendSlice(try std.fmt.allocPrint(
-                allocator,
-                "{s} {s}\n",
-                .{
-                    if (init.isZero()) ".zero" else (try init.asmTypeString(allocator)),
-                    if (init.isZero()) (try std.fmt.allocPrint(allocator, "{}", .{self.alignment})) else try init.render(allocator),
+            switch (init) {
+                .Zero => |nbytes| {
+                    try buf.appendSlice(try std.fmt.allocPrint(allocator, ".zero {}\n", .{nbytes}));
                 },
-            ));
+                .String => |s| {
+                    const dir = if (s.nul_terminated) ".asciz" else ".ascii";
+                    // naive quoting; assumes input already decoded/escaped by parser
+                    try buf.appendSlice(try std.fmt.allocPrint(allocator, "{s} \"{s}\"\n", .{ dir, s.data }));
+                },
+                .Pointer => |lbl| {
+                    try buf.appendSlice(try std.fmt.allocPrint(allocator, ".quad {s}\n", .{lbl}));
+                },
+                else => {
+                    const ty = try init.asmTypeStringNumeric(allocator);
+                    const payload = try init.renderNumeric(allocator);
+                    try buf.appendSlice(try std.fmt.allocPrint(allocator, "{s} {s}\n", .{ ty, payload }));
+                },
+            }
         }
         return buf.toOwnedSlice();
     }
@@ -563,6 +606,7 @@ pub const BinaryOp = enum {
             .QuadWord => "q",
             .Float => "sd",
             .ByteArray => unreachable,
+            .Byte => "b",
         };
         return if (self == .Xor) try std.fmt.allocPrint(allocator, "xorpd", .{}) else (try std.fmt.allocPrint(allocator, "{s}{s}", .{
             switch (self) {

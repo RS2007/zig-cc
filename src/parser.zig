@@ -39,8 +39,8 @@ fn getDeclaratorType(allocator: std.mem.Allocator, declarator: *AST.Declarator, 
     declaratorType.* = switch (declarator.*) {
         .Ident => lhsType,
         .PointerDeclarator => |ptr| blk: {
-            const innerType = try getDeclaratorType(allocator, ptr, lhsType);
-            break :blk .{ .Pointer = innerType };
+            const ptrBase = try AST.astPointerTypeFromDepth(lhsType, 1, allocator);
+            break :blk (try getDeclaratorType(allocator, ptr, ptrBase)).*;
         },
         .ArrayDeclarator => |arr| blk: {
             // First, compute the base type from the inner declarator
@@ -304,20 +304,18 @@ pub const Parser = struct {
     }
 
     pub fn parseDeclarator(self: *Parser) ParserError!*AST.Declarator {
-        switch ((try self.l.peekToken(self.allocator)).?.type) {
-            .MULTIPLY => {
+        return switch ((try self.l.peekToken(self.allocator)).?.type) {
+            .MULTIPLY => blk: {
                 _ = try self.l.nextToken(self.allocator);
                 const decl = try self.parseDeclarator();
                 const outerDecl = try self.allocator.create(AST.Declarator);
                 outerDecl.* = .{
                     .PointerDeclarator = decl,
                 };
-                return outerDecl;
+                break :blk outerDecl;
             },
-            else => {
-                return self.parseDirectDeclarator();
-            },
-        }
+            else => self.parseDirectDeclarator(),
+        };
     }
 
     pub fn parseExternalDecl(self: *Parser) ParserError!*AST.ExternalDecl {
@@ -406,10 +404,6 @@ pub const Parser = struct {
             if (std.meta.activeTag(fullType) == .Array) {
                 const inner_copied = try fullType.Array.ty.*.deepCopy(self.allocator);
                 fullType = try AST.astPointerTypeFromDepth(inner_copied, 1, self.allocator);
-            } else if (std.meta.activeTag(fullType) == .Pointer and std.meta.activeTag(fullType.Pointer.*) == .Array) {
-                // Handle forms like: int *a[5] => parameter type becomes int **
-                const inner_elem = try fullType.Pointer.*.Array.ty.*.deepCopy(self.allocator);
-                fullType = try AST.astPointerTypeFromDepth(inner_elem, 2, self.allocator);
             }
 
             break :blk .{ .NonVoidArg = .{ .type = fullType, .declarator = argDeclarator } };
