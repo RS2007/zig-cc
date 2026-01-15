@@ -146,7 +146,7 @@ int main(){
 }
 ```
 
-### functions 
+### functions
 
 ```c
 int four = 4;
@@ -154,4 +154,11 @@ int add(int x, int y){ return x+y; }
 int main(){
     return add(four, 5);
 }
+```
+
+### Hello World
+
+```c
+ int printf(char *format);
+ int main() { printf("Hello, World!\n"); return 0; }
 ```

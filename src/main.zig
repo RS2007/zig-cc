@@ -4,6 +4,7 @@ const ast = @import("./AST.zig");
 const parser = @import("./parser.zig");
 const assembly = @import("./Assembly.zig");
 const semantic = @import("./semantic.zig");
+const tac = @import("./TAC.zig");
 
 pub fn main() !void {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
@@ -31,18 +32,18 @@ pub fn main() !void {
     _ = try file.readAll(buffer);
     const l = try lexer.Lexer.init(allocator, buffer);
     var p = try parser.Parser.init(allocator, l);
-    var program = try p.parseProgram();
+    const program = try p.parseProgram();
 
     const varResolver = try ast.VarResolver.init(allocator);
     try varResolver.resolve(program);
     const typeChecker = try semantic.Typechecker.init(allocator);
-    const hasTypeError = try typeChecker.check(program);
-    if (hasTypeError) |typeError| {
-        std.log.warn("\x1b[33mError\x1b[0m: {s}\n", .{typeError});
+    typeChecker.check(program) catch {
+        std.log.warn("\x1b[33mError\x1b[0m: {s}\n", .{try typeChecker.getErrString()});
         std.os.linux.exit(-1);
-    }
+    };
     try ast.loopLabelPass(program, allocator);
-    const tacProgram = try program.genTAC(typeChecker.symbolTable, allocator);
+    const tacRenderer = try ast.TACRenderer.init(allocator, typeChecker.symbolTable);
+    const tacProgram = try tacRenderer.render(program);
 
     if (shouldDumpTac != null and std.mem.eql(u8, shouldDumpTac.?, "tacDump")) {
         _ = try std.fs.cwd().createFile("tacDump", .{});
@@ -61,10 +62,14 @@ pub fn main() !void {
                 .StaticVar => |statVar| {
                     try tacDumpWriter.writeAll(try std.fmt.allocPrint(allocator, "Var with name: {s}, global: {any} and init: {any}\n", .{ statVar.name, statVar.global, statVar.init }));
                 },
+                .StaticConstant => {
+                    try tacDumpWriter.writeAll("Static constant\n");
+                },
             }
         }
     }
 
-    const asmProgram = try tacProgram.codegen(allocator);
-    try asmProgram.stringify(std.io.getStdOut().writer(), allocator);
+    const asmRenderer = try tac.AsmRenderer.init(allocator, tacRenderer.asmSymbolTable);
+    const asmProgram = try asmRenderer.render(tacProgram);
+    try asmProgram.stringify(std.io.getStdOut().writer(), allocator, tacRenderer.asmSymbolTable);
 }

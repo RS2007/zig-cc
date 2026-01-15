@@ -1,12 +1,5 @@
-// Contains the semantic passes
-
-// Do stack resolution first
-// All variables have unique names
-// How to do error recovery?
-
 const std = @import("std");
 const AST = @import("./AST.zig");
-//const logz = @import("logz");
 
 pub const SymAttributeKind = enum {
     FunctionAttr,
@@ -15,9 +8,9 @@ pub const SymAttributeKind = enum {
 };
 
 pub const InitValueKind = enum {
-    Tentative, // Maybe initialized by a lter declaration
-    Initial, // Initiialized
-    NoInit, // No information can be made about the initialization
+    Tentative,
+    Initial,
+    NoInit,
 };
 
 pub const ConstantKind = enum {
@@ -38,10 +31,7 @@ pub const Constant = struct {
     },
 };
 
-// Static initializer items for file-scope/static objects.
-// Mirrors nqcc2 Initializers.static_init and Assembly.StaticInit.
 pub const StaticInit = union(enum) {
-    // Scalars
     Integer: i32,
     Long: i64,
     UInt: u32,
@@ -49,14 +39,8 @@ pub const StaticInit = union(enum) {
     Float: f64,
     Char: u8,
     UChar: u8,
-
-    // Fill N bytes with zero (.zero N)
     Zero: usize,
-
-    // String data (.ascii/.asciz)
     String: struct { data: []u8, nul_terminated: bool },
-
-    // Pointer to a static object/label (.quad label)
     Pointer: []u8,
 };
 
@@ -153,7 +137,6 @@ pub const Symbol = struct {
 };
 
 pub const Typechecker = struct {
-    // A struct cause typecheckers requires you to store some state
     symbolTable: std.StringHashMap(*Symbol),
     allocator: std.mem.Allocator,
     errors: std.ArrayList([]u8),
@@ -177,11 +160,6 @@ pub const Typechecker = struct {
         return typechecker;
     }
     pub fn check(self: *Self, program: *AST.Program) !void {
-        // This function doesnt use the typical try-catch error handling in zig
-        // we just push the errors into an list, and we just return the string
-
-        // INFO: Typechecks a program and constructs a table
-        // Then it resolves the return labels
         try typecheckProgram(self, program);
         try typecheckReturns(self, program);
     }
@@ -414,7 +392,6 @@ fn getInitializerValue(self: *Typechecker, varDeclType: AST.Type, initializer: *
             initVal.* = .{ .Initial = try items1.toOwnedSlice() };
         },
     }
-    std.log.warn("Initval = {any}\n", .{ initVal });
     return initVal;
 }
 
@@ -821,7 +798,6 @@ fn typecheckInitializer(self: *Typechecker, initializer: *AST.Initializer, declT
     newInitializer.* = initializer.*;
     switch (initializer.*) {
         .Expression => |expr| {
-            // Special-case: char array initialized from string literal
             if (std.meta.activeTag(declType) == .Array and std.meta.activeTag(expr.*) == .String) {
                 const arrTy = declType.Array;
                 const scalarTy = arrTy.getScalarType();
@@ -876,6 +852,7 @@ fn typecheckInitializer(self: *Typechecker, initializer: *AST.Initializer, declT
 
             // Generic expression initializer path
             newInitializer.Expression = try typecheckExpr(self, newInitializer.Expression);
+
             if (!(try checkConversion(self, declType, newInitializer.Expression.getType())) and !isNullPtrAssignment(newInitializer.Expression, declType)) {
                 std.log.warn("error: check conversion: {any} to {any}\n", .{ declType, newInitializer.Expression.getType() });
                 try self.errors.append(try std.fmt.allocPrint(self.allocator, "Type error at local declaration\n", .{}));
@@ -886,6 +863,15 @@ fn typecheckInitializer(self: *Typechecker, initializer: *AST.Initializer, declT
             std.debug.assert(std.meta.activeTag(newInitializer.Expression.getType()) == declType);
         },
         .ArrayExpr => |arrayExpr| {
+            // INFO: This exists contrary to the check for strings, because strings are a unique case where strings(char arrays) can be assigned to pointers
+            if (std.meta.activeTag(declType) == .Pointer) {
+                try self.errors.append(try std.fmt.allocPrint(
+                    self.allocator,
+                    "Type error at local declaration, cannot assign array to pointer type\n",
+                    .{},
+                ));
+                return TypeError.TypeMismatch;
+            }
             for (0..arrayExpr.initializers.items.len) |i| {
                 newInitializer.ArrayExpr.initializers.items[i] = try typecheckInitializer(
                     self,
@@ -1025,7 +1011,7 @@ fn typecheckBlkItem(self: *Typechecker, blkItem: *AST.BlockItem) TypeCheckerErro
                                 .typeInfo = .Integer,
                                 .attributes = .{ .StaticAttr = .{
                                     .init = blk: {
-                                        break :blk .{ .Initial = &[_]StaticInit{ .{ .Integer = 0 } } };
+                                        break :blk .{ .Initial = &[_]StaticInit{.{ .Integer = 0 }} };
                                     },
                                     .global = false,
                                 } },
@@ -1576,11 +1562,8 @@ fn typecheckExpr(self: *Typechecker, expr: *AST.Expression) TypeError!*AST.Expre
             }
             for (0..fnSymbol.typeInfo.Function.args.items.len) |i| {
                 const checked = try typecheckExpr(self, fnCall.args.items[i]);
-                const argValue = try decayArrayValue(self, checked);
                 const paramTy = fnSymbol.typeInfo.Function.args.items[i].*;
-                // Always run through convert to allow constant-float lowering
-                // into static storage, even when tags match.
-                expr.FunctionCall.args.items[i] = try convert(self.allocator, argValue, paramTy);
+                expr.FunctionCall.args.items[i] = try convert(self.allocator, checked, paramTy);
             }
             expr.FunctionCall.type = fnSymbol.typeInfo.Function.returnType.*;
             // FIXME: This convert call is stupid, delete it after some checks

@@ -190,6 +190,31 @@ pub const AsmRenderer = struct {
                     };
                     try asmProgram.topLevelDecls.append(asmTopLevelDecl);
                 },
+                .StaticConstant => |statConst| {
+                    const staticVar = try self.allocator.create(assembly.StaticVar);
+                    var staticInitArray = try std.ArrayList(assembly.StaticInit).initCapacity(self.allocator, statConst.staticInitializers.len);
+                    for (statConst.staticInitializers) |staticVarInit| {
+                        staticInitArray.appendAssumeCapacity(switch (staticVarInit) {
+                            .Integer => .{ .Integer = staticVarInit.Integer },
+                            .Long => .{ .Long = staticVarInit.Long },
+                            .UInt => .{ .UInt = staticVarInit.UInt },
+                            .ULong => .{ .ULong = staticVarInit.ULong },
+                            .Float => .{ .Float = staticVarInit.Float },
+                            .Char => .{ .Char = staticVarInit.Char },
+                            .UChar => .{ .UChar = staticVarInit.UChar },
+                            .Zero => .{ .Zero = staticVarInit.Zero },
+                            .String => .{ .String = .{ .data = staticVarInit.String.data, .nul_terminated = staticVarInit.String.nul_terminated } },
+                            .Pointer => .{ .Pointer = staticVarInit.Pointer },
+                        });
+                    }
+                    staticVar.* = .{
+                        .name = statConst.name,
+                        .global = true,
+                        .init = try staticInitArray.toOwnedSlice(),
+                        .alignment = statConst.type.alignment(),
+                    };
+                    asmTopLevelDecl.* = .{ .StaticVar = staticVar };
+                },
             }
         }
         // Emit pooled float constants discovered during instruction codegen.
@@ -241,10 +266,18 @@ pub const Program = struct {
 pub const TopLevelType = enum {
     Function,
     StaticVar,
+    StaticConstant,
 };
 pub const TopLevel = union(TopLevelType) {
     Function: *FunctionDef,
     StaticVar: *StaticVar,
+    StaticConstant: *StaticConstant,
+};
+
+pub const StaticConstant = struct {
+    name: []u8,
+    type: ast.Type,
+    staticInitializers: []const StaticVarInit,
 };
 
 pub const InstructionType = enum {
@@ -1308,7 +1341,7 @@ pub const Val = union(ValType) {
                 .Integer, .UInt => assembly.AsmType.LongWord,
                 .Float => assembly.AsmType.Float,
                 // For byte-sized literals in instructions, materialize as 32-bit immediates
-                .Char, .UChar => assembly.AsmType.LongWord,
+                .Char, .UChar => assembly.AsmType.Byte,
             },
             .Variable => |varName| {
                 return if (symbolTable.get(varName)) |sym| sym.Obj.type else blk: {

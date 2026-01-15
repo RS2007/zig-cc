@@ -18,7 +18,6 @@ pub const TempGenerator = struct {
     pub fn genTemp(self: *TempGenerator, allocator: std.mem.Allocator) CodegenError![]u8 {
         const tempPrefix = "tmp";
         const tempVar = try std.fmt.allocPrint(allocator, "{s}{d}", .{ tempPrefix, self.genId() });
-        // if (std.mem.eql(u8, tempVar, "tmp10")) unreachable;
         return tempVar;
     }
 
@@ -1444,10 +1443,6 @@ pub const Expression = union(ExpressionType) {
             .Deref => |deref| deref.type.?,
             .AddrOf => |addrOf| addrOf.type.?,
             .ArrSubscript => |arrSubscript| arrSubscript.type.?,
-            // String literal type reflects the exact byte length of the
-            // literal without the implicit NUL terminator. Handling of
-            // NUL padding (when initializing char arrays) is performed
-            // later during semantic analysis.
             .String => |str| .{ .Array = .{ .size = str.len, .ty = @constCast(&CharType) } },
         };
     }
@@ -1565,7 +1560,40 @@ pub const Expression = union(ExpressionType) {
         instructions: *std.ArrayList(*tac.Instruction),
     ) semantic.TypeCheckerError!*tac.BoxedVal {
         switch (expression.*) {
-            .String => unreachable,
+            .String => |str| {
+                const val = try renderer.allocator.create(tac.Val);
+                const boxed = try renderer.allocator.create(tac.BoxedVal);
+                const temp = try tempGen.genTemp(renderer.allocator);
+                const asmSymbol = try renderer.allocator.create(assembly.Symbol);
+                asmSymbol.* = .{
+                    .Obj = .{
+                        .type = assembly.AsmType{
+                            .ByteArray = assembly.ByteArray{ .size = str.len, .alignment = 1 },
+                        },
+                        .signed = false,
+                        .static = false,
+                    },
+                };
+                try renderer.asmSymbolTable.put(temp, asmSymbol);
+                val.* = tac.Val{ .Variable = temp };
+                for (str, 0..) |chr, i| {
+                    const cpIntoOffset = try renderer.allocator.create(tac.Instruction);
+                    const charVal = try renderer.allocator.create(tac.Val);
+                    charVal.* = tac.Val{ .Constant = tac.Constant{
+                        .Char = chr,
+                    } };
+                    cpIntoOffset.* = tac.Instruction{
+                        .CopyIntoOffset = .{
+                            .src = charVal,
+                            .dest = temp,
+                            .offset = @intCast(i),
+                        },
+                    };
+                    try instructions.append(cpIntoOffset);
+                }
+                boxed.* = tac.BoxedVal{ .PlainVal = val };
+                return boxed;
+            },
             .Cast => |cast| {
                 const inner = try cast.value.genTACInstructionsAndCvt(renderer, instructions);
                 const boxed = try renderer.allocator.create(tac.BoxedVal);

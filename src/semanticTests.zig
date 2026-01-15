@@ -1554,3 +1554,126 @@ test "char typecheck" {
         _ = try std.testing.expect(innerStringTy.Array.size == 6);
     }
 }
+
+test "unsigned char char conflict" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const programStr =
+        \\ int foo(unsigned char c) {
+        \\     return c;
+        \\ }
+        \\ 
+        \\ int main() {
+        \\     return foo(0);
+        \\ }
+        \\ int foo(char c);
+    ;
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    const program = try p.parseProgram();
+    const varResolver = try ast.VarResolver.init(allocator);
+    try varResolver.resolve(program);
+    const typechecker = try semantic.Typechecker.init(allocator);
+    typechecker.check(program) catch {
+        std.log.warn("\x1b[31mError\x1b[0m: {s}", .{try typechecker.getErrString()});
+        return;
+    };
+    std.debug.assert(false);
+}
+
+test "char signed char conflict" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const programStr =
+        \\ char c = 10;
+        \\ 
+        \\ int main()
+        \\ {
+        \\     extern signed char c;
+        \\     return c;
+        \\ }
+    ;
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    const program = try p.parseProgram();
+    const varResolver = try ast.VarResolver.init(allocator);
+    try varResolver.resolve(program);
+    const typechecker = try semantic.Typechecker.init(allocator);
+    typechecker.check(program) catch {
+        std.log.warn("\x1b[31mError\x1b[0m: {s}", .{try typechecker.getErrString()});
+        return;
+    };
+    std.debug.assert(false);
+}
+
+test "compound initializer for pointer" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const programStr =
+        \\ int main() {
+        \\     char *ptr = {'a', 'b', 'c'};
+        \\     return 0;
+        \\ }
+    ;
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    const program = try p.parseProgram();
+    const varResolver = try ast.VarResolver.init(allocator);
+    try varResolver.resolve(program);
+    const typechecker = try semantic.Typechecker.init(allocator);
+    typechecker.check(program) catch {
+        std.log.warn("\x1b[31mError\x1b[0m: {s}", .{try typechecker.getErrString()});
+        return;
+    };
+    std.debug.assert(false);
+}
+
+test "multidim array cannot be used to initalize strings" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const programStr =
+        \\ char arr[3][3] = "hello";
+        \\ 
+        \\ int main()
+        \\ {
+        \\     return arr[0][2];
+        \\ }
+    ;
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    const program = try p.parseProgram();
+    const varResolver = try ast.VarResolver.init(allocator);
+    try varResolver.resolve(program);
+    const typechecker = try semantic.Typechecker.init(allocator);
+    typechecker.check(program) catch {
+        std.log.warn("\x1b[31mError\x1b[0m: {s}", .{try typechecker.getErrString()});
+        return;
+    };
+    std.debug.assert(false);
+}
+
+test "Returning a char casted to int from main" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const programStr =
+        \\    int main(int argc, char** argv) {
+        \\    char ints[4] = "abc";
+        \\    return ints[1];
+        \\ }
+    ;
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    const program = try p.parseProgram();
+    const varResolver = try ast.VarResolver.init(allocator);
+    try varResolver.resolve(program);
+    const typechecker = try semantic.Typechecker.init(allocator);
+    typechecker.check(program) catch {
+        std.log.warn("\x1b[31mError\x1b[0m: {s}", .{try typechecker.getErrString()});
+        std.debug.assert(false);
+    };
+}

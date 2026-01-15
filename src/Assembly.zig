@@ -64,7 +64,7 @@ pub inline fn createInst(comptime kind: InstructionType, contents: anytype, allo
     return inst;
 }
 
-const ByteArray = struct {
+pub const ByteArray = struct {
     size: usize,
     alignment: u32,
 };
