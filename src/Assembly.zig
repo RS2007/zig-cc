@@ -283,6 +283,30 @@ pub const StaticVar = struct {
         return allZero;
     }
 
+    fn escapeAsmString(allocator: std.mem.Allocator, data: []const u8) ![]u8 {
+        var buf = std.ArrayList(u8).init(allocator);
+        for (data) |b| {
+            switch (b) {
+                '\\' => try buf.appendSlice("\\\\"),
+                '"' => try buf.appendSlice("\\\""),
+                '\n' => try buf.appendSlice("\\n"),
+                '\r' => try buf.appendSlice("\\r"),
+                '\t' => try buf.appendSlice("\\t"),
+                0 => try buf.appendSlice("\\0"),
+                else => {
+                    if (b >= 0x20 and b <= 0x7e) {
+                        try buf.append(b);
+                    } else {
+                        try buf.appendSlice("\\x");
+                        try buf.append(std.fmt.digitToChar(@intCast((b >> 4) & 0x0f), .lower));
+                        try buf.append(std.fmt.digitToChar(@intCast(b & 0x0f), .lower));
+                    }
+                },
+            }
+        }
+        return buf.toOwnedSlice();
+    }
+
     pub fn renderInits(self: *Self, allocator: std.mem.Allocator) ![]u8 {
         var buf = std.ArrayList(u8).init(allocator);
         for (self.init) |init| {
@@ -292,8 +316,8 @@ pub const StaticVar = struct {
                 },
                 .String => |s| {
                     const dir = if (s.nul_terminated) ".asciz" else ".ascii";
-                    // naive quoting; assumes input already decoded/escaped by parser
-                    try buf.appendSlice(try std.fmt.allocPrint(allocator, "{s} \"{s}\"\n", .{ dir, s.data }));
+                    const escaped = try escapeAsmString(allocator, s.data);
+                    try buf.appendSlice(try std.fmt.allocPrint(allocator, "{s} \"{s}\"\n", .{ dir, escaped }));
                 },
                 .Pointer => |lbl| {
                     try buf.appendSlice(try std.fmt.allocPrint(allocator, ".quad {s}\n", .{lbl}));

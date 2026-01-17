@@ -34,8 +34,50 @@ pub const StaticVar = struct {
     name: []u8,
     global: bool,
     init: []const StaticVarInit,
-    // Alignment in bytes for this object in data/bss
     alignment: u32,
+};
+
+pub const ConstPool = struct {
+    pub const StringEntry = struct {
+        label: []u8,
+        data: []u8,
+        nul_terminated: bool,
+    };
+
+    allocator: std.mem.Allocator,
+    float_labels: std.StringHashMap(f64),
+    string_labels: std.StringHashMap([]u8),
+    strings: std.ArrayList(StringEntry),
+    next_string_id: usize,
+
+    pub fn init(allocator: std.mem.Allocator) ConstPool {
+        return .{
+            .allocator = allocator,
+            .float_labels = std.StringHashMap(f64).init(allocator),
+            .string_labels = std.StringHashMap([]u8).init(allocator),
+            .strings = std.ArrayList(StringEntry).init(allocator),
+            .next_string_id = 0,
+        };
+    }
+
+    pub fn internFloat(self: *ConstPool, value: f64) ![]u8 {
+        const bits: u64 = @bitCast(value);
+        const label = try std.fmt.allocPrint(self.allocator, "dbl_{x:0>16}", .{bits});
+        if (!self.float_labels.contains(label)) {
+            try self.float_labels.put(label, value);
+        }
+        return label;
+    }
+
+    pub fn internString(self: *ConstPool, bytes: []const u8, nul_terminated: bool) ![]u8 {
+        if (self.string_labels.get(bytes)) |label| return label;
+        const label = try std.fmt.allocPrint(self.allocator, "str_{d}", .{self.next_string_id});
+        self.next_string_id += 1;
+        const data = try self.allocator.dupe(u8, bytes);
+        try self.string_labels.put(data, label);
+        try self.strings.append(.{ .label = label, .data = data, .nul_terminated = nul_terminated });
+        return label;
+    }
 };
 
 pub fn astSymTabToTacSymTab(allocator: std.mem.Allocator, astSymTab: std.StringHashMap(*semantic.Symbol)) ast.CodegenError!std.StringHashMap(*assembly.Symbol) {
@@ -217,50 +259,39 @@ pub const AsmRenderer = struct {
                 },
             }
         }
-        // Emit pooled float constants discovered during instruction codegen.
-        // We look for labels with the prefix "dbl_" and reconstruct the value
-        // from the hex suffix.
-        var it = self.asmSymbolTable.iterator();
-        while (it.next()) |entry| {
-            const name = entry.key_ptr.*;
-            const sym = entry.value_ptr.*;
-            if (std.mem.startsWith(u8, name, "dbl_") and std.meta.activeTag(sym.*) == .Obj and sym.Obj.type == .Float) {
-                // Parse hex bits from name suffix
-                const hex = name[4..];
-                var bits: u64 = 0;
-                // Expect 16 hex chars; tolerate shorter by parsing available
-                var i: usize = 0;
-                while (i < hex.len) : (i += 1) {
-                    const c = hex[i];
-                    const v: u8 = switch (c) {
-                        '0'...'9' => c - '0',
-                        'a'...'f' => 10 + (c - 'a'),
-                        'A'...'F' => 10 + (c - 'A'),
-                        else => 0,
-                    };
-                    bits = (bits << 4) | @as(u64, @intCast(v));
-                }
-                const dbl: f64 = @bitCast(bits);
-                const asmStatic = try self.allocator.create(assembly.StaticVar);
-                var init_list = std.ArrayList(assembly.StaticInit).init(self.allocator);
-                try init_list.append(.{ .Float = dbl });
-                asmStatic.* = .{
-                    .name = @constCast(name),
-                    .global = false,
-                    .init = try init_list.toOwnedSlice(),
-                    .alignment = 8,
-                };
-                const tl = try self.allocator.create(assembly.TopLevelDecl);
-                tl.* = .{ .StaticVar = asmStatic };
-                try asmProgram.topLevelDecls.append(tl);
-            }
-        }
+        try emitConstPool(self, program.const_pool, asmProgram);
         return asmProgram;
     }
 };
 
+fn emitConstPool(self: *AsmRenderer, pool: *ConstPool, asmProgram: *assembly.Program) !void {
+    var float_it = pool.float_labels.iterator();
+    while (float_it.next()) |entry| {
+        const name = entry.key_ptr.*;
+        const value = entry.value_ptr.*;
+        const asmStatic = try self.allocator.create(assembly.StaticVar);
+        var init_list = std.ArrayList(assembly.StaticInit).init(self.allocator);
+        try init_list.append(.{ .Float = value });
+        asmStatic.* = .{ .name = @constCast(name), .global = false, .init = try init_list.toOwnedSlice(), .alignment = 8 };
+        const tl = try self.allocator.create(assembly.TopLevelDecl);
+        tl.* = .{ .StaticVar = asmStatic };
+        try asmProgram.topLevelDecls.append(tl);
+    }
+
+    for (pool.strings.items) |entry| {
+        const asmStatic = try self.allocator.create(assembly.StaticVar);
+        var init_list = std.ArrayList(assembly.StaticInit).init(self.allocator);
+        try init_list.append(.{ .String = .{ .data = entry.data, .nul_terminated = entry.nul_terminated } });
+        asmStatic.* = .{ .name = @constCast(entry.label), .global = false, .init = try init_list.toOwnedSlice(), .alignment = 1 };
+        const tl = try self.allocator.create(assembly.TopLevelDecl);
+        tl.* = .{ .StaticVar = asmStatic };
+        try asmProgram.topLevelDecls.append(tl);
+    }
+}
+
 pub const Program = struct {
     topLevelDecls: std.ArrayList(*TopLevel),
+    const_pool: *ConstPool,
 };
 
 pub const TopLevelType = enum {
@@ -1380,18 +1411,7 @@ pub const Val = union(ValType) {
                         operand.* = .{ .Imm = @intCast(c) };
                         return operand.*;
                     },
-                    .Float => |f| {
-                        // Intern a label based on bit pattern and return Data operand
-                        const bits: u64 = @bitCast(f);
-                        const label = try std.fmt.allocPrint(allocator, "dbl_{x:0>16}", .{bits});
-                        if (!symbolTable.contains(label)) {
-                            const sym = try allocator.create(assembly.Symbol);
-                            sym.* = .{ .Obj = .{ .type = .Float, .static = true, .signed = false } };
-                            try symbolTable.put(label, sym);
-                        }
-                        operand.* = .{ .Data = label };
-                        return operand.*;
-                    },
+                    .Float => unreachable,
                 }
             },
             .Variable => |variable| {

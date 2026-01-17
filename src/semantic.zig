@@ -217,7 +217,7 @@ pub fn typecheckProgram(self: *Typechecker, program: *AST.Program) TypeCheckerEr
 
 inline fn pointerDeclWithScalarNonNullRhs(self: *Typechecker, varDecl: *AST.Declaration, varInitValue: *AST.Initializer, varName: []u8) !void {
     const varDeclType = varDecl.type;
-    if (std.meta.activeTag(varDeclType) == .Pointer and std.meta.activeTag(varInitValue.*) == .Expression and !varInitValue.Expression.isNullPtr()) {
+    if (std.meta.activeTag(varDeclType) == .Pointer and std.meta.activeTag(varInitValue.*) == .Expression and std.meta.activeTag(varInitValue.Expression.*) != .String and !varInitValue.Expression.isNullPtr()) {
         try self.errors.append(try std.fmt.allocPrint(
             self.allocator,
             "Global pointer declarations only support 0 as rhs: assignment of {s}\n",
@@ -230,9 +230,14 @@ inline fn pointerDeclWithScalarNonNullRhs(self: *Typechecker, varDecl: *AST.Decl
 fn castExprToDeclType(self: *Typechecker, varDeclType: AST.Type, varInitValue: *AST.Initializer) !*AST.Initializer {
     switch (varInitValue.*) {
         .Expression => |expr| {
+            if (std.meta.activeTag(varDeclType) == .Pointer and std.meta.activeTag(expr.*) == .String) {
+                const initializer = try self.allocator.create(AST.Initializer);
+                initializer.* = .{ .Expression = expr };
+                return initializer;
+            }
             if (std.meta.activeTag(varDeclType) == .Array and std.meta.activeTag(expr.*) == .String) {
-                const arrTy = varDeclType.Array;
-                const scalarTy = arrTy.getScalarType();
+                const scalarTy = if (std.meta.activeTag(varDeclType) == .Array) varDeclType.Array.getScalarType() else varDeclType.Pointer.*;
+                const arraySize = if (std.meta.activeTag(varDeclType) == .Array) varDeclType.Array.size else expr.String.len + 1;
                 if (!isCharType(scalarTy)) {
                     const msg = try std.fmt.allocPrint(self.allocator, "Can't initialize non-character array with string literal\n", .{});
                     try self.errors.append(msg);
@@ -240,8 +245,8 @@ fn castExprToDeclType(self: *Typechecker, varDeclType: AST.Type, varInitValue: *
                 }
 
                 const strBytes = expr.String;
-                if (strBytes.len > arrTy.size) {
-                    const msg = try std.fmt.allocPrint(self.allocator, "Too many characters in string initializer: have {d}, size {d}\n", .{ strBytes.len, arrTy.size });
+                if (strBytes.len > arraySize) {
+                    const msg = try std.fmt.allocPrint(self.allocator, "Too many characters in string initializer: have {d}, size {d}\n", .{ strBytes.len, arraySize });
                     try self.errors.append(msg);
                     return TypeError.TypeMismatch;
                 }
@@ -263,7 +268,7 @@ fn castExprToDeclType(self: *Typechecker, varDeclType: AST.Type, varInitValue: *
                 }
 
                 // Padding
-                for (strBytes.len..arrTy.size) |_| {
+                for (strBytes.len..arraySize) |_| {
                     const zexpr = try self.allocator.create(AST.Expression);
                     zexpr.* = .{ .Constant = switch (scalarTy) {
                         .UChar => .{ .type = .UChar, .value = .{ .UChar = 0 } },
@@ -277,7 +282,7 @@ fn castExprToDeclType(self: *Typechecker, varDeclType: AST.Type, varInitValue: *
                 initializer.* = .{ .ArrayExpr = arrayInit };
                 return initializer;
             }
-            if (std.meta.activeTag(varDeclType) == .Pointer) {
+            if (std.meta.activeTag(varInitValue.Expression.*) != .String and std.meta.activeTag(varDeclType) == .Pointer) {
                 std.debug.assert(expr.isNullPtr());
                 const initializer = try self.allocator.create(AST.Initializer);
                 const expression = try self.allocator.create(AST.Expression);
@@ -315,7 +320,7 @@ fn getInitializerValue(self: *Typechecker, varDeclType: AST.Type, initializer: *
     const initVal = try self.allocator.create(InitValue);
     switch (initializer.*) {
         .ArrayExpr => |arrayExpr| {
-            const size = varDeclType.Array.getNestedSize();
+            const size = arrayExpr.initializers.items.len * varDeclType.size();
             var initItems = std.ArrayList(StaticInit).init(self.allocator);
             const arrMemberType = varDeclType.decrementDepth(self.allocator) catch unreachable;
             for (arrayExpr.initializers.items) |arrayItemInitializer| {
@@ -325,14 +330,26 @@ fn getInitializerValue(self: *Typechecker, varDeclType: AST.Type, initializer: *
             }
             const remaining = size - arrayExpr.initializers.items.len;
             if (remaining > 0) {
-                const elem_bytes = varDeclType.Array.getScalarType().size();
+                const elem_bytes = if (std.meta.activeTag(varDeclType) == .Pointer) varDeclType.Pointer.size() else if (std.meta.activeTag(varDeclType) == .Array) varDeclType.Array.getScalarType().size() else unreachable;
                 try initItems.append(.{ .Zero = remaining * elem_bytes });
             }
             initVal.* = .{ .Initial = try initItems.toOwnedSlice() };
         },
         .Expression => |expression| {
             // Special-case: char arrays initialized from string literal at static scope
-            if (std.meta.activeTag(varDeclType) == .Array and std.meta.activeTag(expression.*) == .String) {
+            std.log.warn("Expression type: {any}\n", .{expression.getType()});
+            if (std.meta.activeTag(varDeclType) == .Pointer and std.meta.activeTag(expression.*) == .String) {
+                const pointee = varDeclType.Pointer.*;
+                if (!isCharType(pointee)) {
+                    try self.errors.append(try std.fmt.allocPrint(self.allocator, "String literal can only initialize char *\n", .{}));
+                    return TypeError.TypeMismatch;
+                }
+                var items = std.ArrayList(StaticInit).init(self.allocator);
+                try items.append(.{ .String = .{ .data = expression.String, .nul_terminated = true } });
+                initVal.* = .{ .Initial = try items.toOwnedSlice() };
+                return initVal;
+            }
+            if (std.meta.activeTag(expression.getType()) == .Array and std.meta.activeTag(expression.*) == .String) {
                 const arrTy = varDeclType.Array;
                 const scalarTy = arrTy.getScalarType();
                 if (!isCharType(scalarTy)) {
@@ -641,8 +658,8 @@ pub fn typecheckExternalDecl(self: *Typechecker, externalDecl: *AST.ExternalDecl
                 try pointerDeclWithScalarNonNullRhs(self, varDecl, varInitValue, varName);
 
                 varDecl.varInitValue = try castExprToDeclType(self, varDecl.type, varInitValue);
-                // Use the casted initializer (may have been expanded into an ArrayExpr)
                 initializer = (try getInitializerValue(self, varDecl.type, varDecl.varInitValue.?)).*;
+
                 std.log.warn("Got initializer from getInitializerValue: {any}\n", .{initializer});
 
                 // INFO: Extern decls no assignment check

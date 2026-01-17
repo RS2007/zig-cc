@@ -270,7 +270,11 @@ pub const ExpressionType = enum {
     String,
 };
 
-fn convertASTSymbolsToTACDeclarations(tacProgram: *tac.Program, symbolTable: std.StringHashMap(*semantic.Symbol)) MemoryError!void {
+fn convertASTSymbolsToTACDeclarations(
+    tacProgram: *tac.Program,
+    symbolTable: std.StringHashMap(*semantic.Symbol),
+    renderer: *TACRenderer,
+) MemoryError!void {
     var symbolTableIter = symbolTable.iterator();
     while (symbolTableIter.next()) |iterator| {
         const key = iterator.key_ptr.*;
@@ -293,7 +297,13 @@ fn convertASTSymbolsToTACDeclarations(tacProgram: *tac.Program, symbolTable: std
                                 .Char => |v| .{ .Char = v },
                                 .UChar => |v| .{ .UChar = v },
                                 .Zero => |n| .{ .Zero = n },
-                                .String => |s| .{ .String = .{ .data = s.data, .nul_terminated = s.nul_terminated } },
+                                .String => |s| blk: {
+                                    if (std.meta.activeTag(value.typeInfo) == .Pointer) {
+                                        const label = try renderer.internString(s.data, s.nul_terminated);
+                                        break :blk .{ .Pointer = label };
+                                    }
+                                    break :blk .{ .String = .{ .data = s.data, .nul_terminated = s.nul_terminated } };
+                                },
                                 .Pointer => |lbl| .{ .Pointer = lbl },
                             });
                         }
@@ -1375,6 +1385,7 @@ pub const Declarator = union(enum) {
 pub const TACRenderer = struct {
     astSymbolTable: std.StringHashMap(*semantic.Symbol),
     asmSymbolTable: std.StringHashMap(*assembly.Symbol),
+    const_pool: tac.ConstPool,
     allocator: std.mem.Allocator,
     const Self = @This();
     pub fn init(allocator: std.mem.Allocator, astSymbolTable: std.StringHashMap(*semantic.Symbol)) !*Self {
@@ -1382,17 +1393,39 @@ pub const TACRenderer = struct {
         tacRenderer.* = .{
             .asmSymbolTable = (try tac.astSymTabToTacSymTab(allocator, astSymbolTable)),
             .astSymbolTable = astSymbolTable,
+            .const_pool = tac.ConstPool.init(allocator),
             .allocator = allocator,
         };
         return tacRenderer;
+    }
+
+    pub fn internFloat(self: *Self, value: f64) ![]u8 {
+        const label = try self.const_pool.internFloat(value);
+        if (!self.asmSymbolTable.contains(label)) {
+            const sym = try self.allocator.create(assembly.Symbol);
+            sym.* = .{ .Obj = .{ .type = .Float, .static = true, .signed = false } };
+            try self.asmSymbolTable.put(label, sym);
+        }
+        return label;
+    }
+
+    pub fn internString(self: *Self, bytes: []u8, nul_terminated: bool) ![]u8 {
+        const label = try self.const_pool.internString(bytes, nul_terminated);
+        if (!self.asmSymbolTable.contains(label)) {
+            const sym = try self.allocator.create(assembly.Symbol);
+            sym.* = .{ .Obj = .{ .type = .{ .ByteArray = .{ .size = bytes.len, .alignment = 1 } }, .static = true, .signed = false } };
+            try self.asmSymbolTable.put(label, sym);
+        }
+        return label;
     }
     pub fn render(self: *Self, program: *Program) !*tac.Program {
         self.asmSymbolTable = try tac.astSymTabToTacSymTab(self.allocator, self.astSymbolTable);
         const tacProgram = try self.allocator.create(tac.Program);
         tacProgram.* = .{
             .topLevelDecls = std.ArrayList(*tac.TopLevel).init(self.allocator),
+            .const_pool = &self.const_pool,
         };
-        try convertASTSymbolsToTACDeclarations(tacProgram, self.astSymbolTable);
+        try convertASTSymbolsToTACDeclarations(tacProgram, self.astSymbolTable, self);
         for (program.externalDecls.items) |externalDecl| {
             const functionDef = try externalDecl.genTAC(self, self.astSymbolTable);
             if (functionDef) |resolvedFnDef| {
@@ -1561,36 +1594,11 @@ pub const Expression = union(ExpressionType) {
     ) semantic.TypeCheckerError!*tac.BoxedVal {
         switch (expression.*) {
             .String => |str| {
-                const val = try renderer.allocator.create(tac.Val);
                 const boxed = try renderer.allocator.create(tac.BoxedVal);
-                const temp = try tempGen.genTemp(renderer.allocator);
-                const asmSymbol = try renderer.allocator.create(assembly.Symbol);
-                asmSymbol.* = .{
-                    .Obj = .{
-                        .type = assembly.AsmType{
-                            .ByteArray = assembly.ByteArray{ .size = str.len, .alignment = 1 },
-                        },
-                        .signed = false,
-                        .static = false,
-                    },
-                };
-                try renderer.asmSymbolTable.put(temp, asmSymbol);
-                val.* = tac.Val{ .Variable = temp };
-                for (str, 0..) |chr, i| {
-                    const cpIntoOffset = try renderer.allocator.create(tac.Instruction);
-                    const charVal = try renderer.allocator.create(tac.Val);
-                    charVal.* = tac.Val{ .Constant = tac.Constant{
-                        .Char = chr,
-                    } };
-                    cpIntoOffset.* = tac.Instruction{
-                        .CopyIntoOffset = .{
-                            .src = charVal,
-                            .dest = temp,
-                            .offset = @intCast(i),
-                        },
-                    };
-                    try instructions.append(cpIntoOffset);
-                }
+                const needsNull = str.len == 0 or str[str.len - 1] != 0;
+                const label = try renderer.internString(str, needsNull);
+                const val = try renderer.allocator.create(tac.Val);
+                val.* = tac.Val{ .Variable = label };
                 boxed.* = tac.BoxedVal{ .PlainVal = val };
                 return boxed;
             },
@@ -1692,7 +1700,10 @@ pub const Expression = union(ExpressionType) {
                     .Long => |long| tac.Val{ .Constant = .{ .Long = long } },
                     .UInteger => |uint| .{ .Constant = .{ .UInt = uint } },
                     .ULong => |ulong| .{ .Constant = .{ .ULong = ulong } },
-                    .Float => |f| .{ .Constant = .{ .Float = f } },
+                    .Float => |f| blk: {
+                        const label = try renderer.internFloat(f);
+                        break :blk tac.Val{ .Variable = label };
+                    },
                     .UChar => |c| .{ .Constant = .{ .UChar = c } },
                     .Char => |c| .{ .Constant = .{ .Char = c } },
                 };
