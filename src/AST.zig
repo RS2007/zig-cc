@@ -197,13 +197,13 @@ pub const Declaration = struct {
             const rhsSymbol = try renderer.allocator.create(assembly.Symbol);
 
             switch (varInitValue.*) {
-                .Expression => |expr| {
+                .Expression => |_| {
                     try varInitValue.genTACInstructionsAndCvt(renderer, instructions, name, null);
                     rhsSymbol.* = .{
                         .Obj = .{
-                            .signed = expr.getType().signed(),
+                            .signed = self.type.signed(),
                             .static = false,
-                            .type = assembly.AsmType.from(Type, expr.getType()),
+                            .type = assembly.AsmType.from(Type, self.type),
                         },
                     };
                     try renderer.asmSymbolTable.put(name, rhsSymbol);
@@ -653,20 +653,13 @@ pub const Type = union(enum) {
         };
     }
 
-    // INFO: Copied here again to avoid aliasing
-    pub fn changeArrtoPointer(self: Self, allocator: std.mem.Allocator) MemoryError!Self {
+    // Implements C array to pointer decay
+    pub fn decay(self: Self, allocator: std.mem.Allocator) MemoryError!Self {
         return switch (self) {
             .Array => |arr| blk: {
-                const inner_converted = try arr.ty.*.changeArrtoPointer(allocator);
-                const new_inner = try allocator.create(Type);
-                new_inner.* = inner_converted;
-                break :blk .{ .Pointer = new_inner };
-            },
-            .Pointer => |ptr| blk: {
-                const inner_converted = try ptr.*.changeArrtoPointer(allocator);
-                const new_inner = try allocator.create(Type);
-                new_inner.* = inner_converted;
-                break :blk .{ .Pointer = new_inner };
+                const inner = try allocator.create(Type);
+                inner.* = try arr.ty.*.deepCopy(allocator);
+                break :blk .{ .Pointer = inner };
             },
             else => self,
         };
@@ -830,35 +823,32 @@ inline fn chooseFloatCastInst(inner: *tac.Val, dest: *tac.Val, toType: Type) Cod
 
 inline fn chooseIntCastInst(inner: *tac.Val, dest: *tac.Val, toType: Type, asmSymbolTable: *std.StringHashMap(*assembly.Symbol)) CodegenError!tac.Instruction {
     return switch (toType) {
-        .Integer, .UInteger => .{ .Truncate = .{
-            .src = inner,
-            .dest = dest,
-        } },
+        .Integer, .UInteger => blk: {
+            const inner_asm = inner.getAsmTypeFromSymTab(asmSymbolTable).?;
+            if (inner_asm == .Byte) {
+                break :blk if (inner.isSignedFromSymTab(asmSymbolTable))
+                    .{ .SignExtend = .{ .src = inner, .dest = dest } }
+                else
+                    .{ .ZeroExtend = .{ .src = inner, .dest = dest } };
+            }
+            break :blk .{ .Truncate = .{ .src = inner, .dest = dest } };
+        },
         // Pointer-sized moves should not zero/sign-extend; copy the full
         // pointer width directly. This avoids truncating 64-bit addresses on
         // x86_64 (which would otherwise happen via a 32-bit movzx path).
         .Pointer => .{ .Copy = .{ .src = inner, .dest = dest } },
         .Long, .ULong => if (toType.signed())
-            .{ .SignExtend = .{
-                .src = inner,
-                .dest = dest,
-            } }
+            .{ .SignExtend = .{ .src = inner, .dest = dest } }
         else
-            .{ .ZeroExtend = .{
-                .src = inner,
-                .dest = dest,
-            } },
+            .{ .ZeroExtend = .{ .src = inner, .dest = dest } },
         .Float => if (inner.isSignedFromSymTab(asmSymbolTable))
-            .{ .IntToFloat = .{
-                .src = inner,
-                .dest = dest,
-            } }
+            .{ .IntToFloat = .{ .src = inner, .dest = dest } }
         else
-            .{ .UIntToFloat = .{
-                .src = inner,
-                .dest = dest,
-            } },
-        else => unreachable,
+            .{ .UIntToFloat = .{ .src = inner, .dest = dest } },
+        else => |failingType| {
+            std.log.warn("failing type: {any}\n", .{failingType});
+            unreachable;
+        },
     };
 }
 
@@ -1476,7 +1466,7 @@ pub const Expression = union(ExpressionType) {
             .Deref => |deref| deref.type.?,
             .AddrOf => |addrOf| addrOf.type.?,
             .ArrSubscript => |arrSubscript| arrSubscript.type.?,
-            .String => |str| .{ .Array = .{ .size = str.len, .ty = @constCast(&CharType) } },
+            .String => |str| .{ .Array = .{ .size = str.len + 1, .ty = @constCast(&CharType) } },
         };
     }
 
@@ -1490,7 +1480,7 @@ pub const Expression = union(ExpressionType) {
 
     pub inline fn isLvalue(self: *Self) bool {
         return switch (self.*) {
-            .Identifier, .Deref, .Assignment, .ArrSubscript => true,
+            .Identifier, .Deref, .Assignment, .ArrSubscript, .String => true,
             else => false,
         };
     }
@@ -1501,13 +1491,26 @@ pub const Expression = union(ExpressionType) {
         return switch (boxedVal.*) {
             .PlainVal => |val| val,
             .DerefedVal => |val| blk: {
+                const exprType = expression.getType();
+                if (std.meta.activeTag(exprType) == .Array) {
+                    const addr = try renderer.allocator.create(tac.Val);
+                    const temp = try tempGen.genTemp(renderer.allocator);
+                    const sym = try renderer.allocator.create(assembly.Symbol);
+                    sym.* = .{ .Obj = .{ .type = .QuadWord, .signed = false, .static = false } };
+                    try renderer.asmSymbolTable.put(temp, sym);
+                    addr.* = .{ .Variable = temp };
+                    const addrInst = try renderer.allocator.create(tac.Instruction);
+                    addrInst.* = .{ .GetAddress = .{ .src = val, .dest = addr } };
+                    try instructions.append(addrInst);
+                    break :blk addr;
+                }
                 // Arrays are decayed in the typechecker; any dereference that
                 // reaches here loads the pointed value.
                 break :blk try loadDerefValue(
                     renderer,
                     instructions,
                     val,
-                    expression.getType(),
+                    exprType,
                 );
             },
         };
@@ -1670,25 +1673,7 @@ pub const Expression = union(ExpressionType) {
             },
             .Deref => |deref| {
                 const expr = try deref.exp.genTACInstructionsAndCvt(renderer, instructions);
-                const loadInstruction = try renderer.allocator.create(tac.Instruction);
-                const tacDestName = try tempGen.genTemp(renderer.allocator);
-                const tacDest = try renderer.allocator.create(tac.Val);
-                tacDest.* = tac.Val{ .Variable = tacDestName };
-                const tacDestSym = try renderer.allocator.create(assembly.Symbol);
                 const boxed = try renderer.allocator.create(tac.BoxedVal);
-                tacDestSym.* = .{ .Obj = .{
-                    .type = assembly.AsmType.from(Type, deref.type.?),
-                    .signed = deref.type.?.signed(),
-                    .static = false,
-                } };
-                try renderer.asmSymbolTable.put(tacDestName, tacDestSym);
-                loadInstruction.* = .{
-                    .Load = .{
-                        .srcPointer = expr,
-                        .dest = tacDest,
-                    },
-                };
-                try instructions.append(loadInstruction);
                 boxed.* = .{ .DerefedVal = expr };
                 return boxed;
             },
@@ -2336,7 +2321,7 @@ pub const Node = union(enum) {
     Expression: *Expression,
 };
 
-test "Type.changeArrtoPointer: int[5] -> int*" {
+test "Type.decay: int[5] -> int*" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
@@ -2344,13 +2329,13 @@ test "Type.changeArrtoPointer: int[5] -> int*" {
     int_node.* = .Integer;
 
     var t: Type = .{ .Array = .{ .size = 5, .ty = int_node } };
-    const converted = try t.changeArrtoPointer(allocator);
+    const converted = try t.decay(allocator);
 
     try std.testing.expect(std.meta.activeTag(converted) == .Pointer);
     try std.testing.expect(std.meta.activeTag(converted.Pointer.*) == .Integer);
 }
 
-test "Type.changeArrtoPointer: int[5][5] -> int**" {
+test "Type.decay: int[5][5] -> int(*)[5]" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
@@ -2361,15 +2346,17 @@ test "Type.changeArrtoPointer: int[5][5] -> int**" {
     inner_arr.* = .{ .Array = .{ .size = 5, .ty = base } };
 
     var t: Type = .{ .Array = .{ .size = 5, .ty = inner_arr } };
-    const converted = try t.changeArrtoPointer(allocator);
+    const converted = try t.decay(allocator);
 
     try std.testing.expect(std.meta.activeTag(converted) == .Pointer);
     const first = converted.Pointer.*;
-    try std.testing.expect(std.meta.activeTag(first) == .Pointer);
-    try std.testing.expect(std.meta.activeTag(first.Pointer.*) == .Integer);
+    // Should NOT be recursive: outer array becomes pointer to inner array
+    try std.testing.expect(std.meta.activeTag(first) == .Array);
+    try std.testing.expect(first.Array.size == 5);
+    try std.testing.expect(std.meta.activeTag(first.Array.ty.*) == .Integer);
 }
 
-test "Type.changeArrtoPointer: *unsigned long[5] -> **unsigned long" {
+test "Type.decay: *unsigned long[5] is unchanged" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
@@ -2380,10 +2367,11 @@ test "Type.changeArrtoPointer: *unsigned long[5] -> **unsigned long" {
     arr.* = .{ .Array = .{ .size = 5, .ty = base } };
 
     var t: Type = .{ .Pointer = arr };
-    const converted = try t.changeArrtoPointer(allocator);
+    const converted = try t.decay(allocator);
 
+    // Should NOT change pointers
     try std.testing.expect(std.meta.activeTag(converted) == .Pointer);
     const first = converted.Pointer.*;
-    try std.testing.expect(std.meta.activeTag(first) == .Pointer);
-    try std.testing.expect(std.meta.activeTag(first.Pointer.*) == .ULong);
+    try std.testing.expect(std.meta.activeTag(first) == .Array);
+    try std.testing.expect(first.Array.size == 5);
 }

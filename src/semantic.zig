@@ -237,7 +237,7 @@ fn castExprToDeclType(self: *Typechecker, varDeclType: AST.Type, varInitValue: *
             }
             if (std.meta.activeTag(varDeclType) == .Array and std.meta.activeTag(expr.*) == .String) {
                 const scalarTy = if (std.meta.activeTag(varDeclType) == .Array) varDeclType.Array.getScalarType() else varDeclType.Pointer.*;
-                const arraySize = if (std.meta.activeTag(varDeclType) == .Array) varDeclType.Array.size else expr.String.len + 1;
+                const arraySize = if (std.meta.activeTag(varDeclType) == .Array) varDeclType.Array.size else expr.String.len;
                 if (!isCharType(scalarTy)) {
                     const msg = try std.fmt.allocPrint(self.allocator, "Can't initialize non-character array with string literal\n", .{});
                     try self.errors.append(msg);
@@ -696,38 +696,20 @@ pub fn typecheckExternalDecl(self: *Typechecker, externalDecl: *AST.ExternalDecl
     }
 }
 
-fn checkConversion(self: *Typechecker, from: AST.Type, to: AST.Type) TypeCheckerError!bool {
-    // For conversion checks, leave the declaration type (from) unchanged,
-    // and only apply a top-level array decay to the source expression type (to).
-    // This models C's rule that expressions of array type decay to pointers
-    // in most contexts, while the declared type remains as written.
-    const fromType = from;
-    const toType = try changeTopLevelArrayToPointer(to, self.allocator);
-    var ft = fromType;
-    var tt = toType;
-    // If the declaration side is an Array and the expression side is a Pointer,
-    // compare against the decayed form of the Array as well (common for pointer-to-array).
-    if (std.meta.activeTag(ft) == .Array and std.meta.activeTag(tt) == .Pointer) {
-        ft = try changeTopLevelArrayToPointer(ft, self.allocator);
+fn checkConversion(self: *Typechecker, target: AST.Type, source: AST.Type) TypeCheckerError!bool {
+    var targetType = target;
+    var sourceType = try source.decay(self.allocator);
+
+    // INFO: This is for array parameters
+    // If target is int a[] in the function void f(int []a)
+    // And the invocation passes in a as a ptr (int *b) => f(b)
+    // In such a case this should work
+    if (std.meta.activeTag(targetType) == .Array and std.meta.activeTag(sourceType) == .Pointer) {
+        targetType = try targetType.decay(self.allocator);
     }
-    // if both are numeric, its a valid conversion
-    if (ft.isNumeric() and tt.isNumeric()) return true;
-    if (ft.isNumeric() or tt.isNumeric()) return false;
-    // Here both types are pointers. Prefer a structural comparison that
-    // respects pointer-to-array shapes. If that passes, allow conversion.
-    const eql = ft.deepEql(tt);
-    if (eql) return true;
-    // Structural compatibility across pointers/arrays (including array sizes).
-    const struct_ok = typeStructCompat(ft, tt);
-    if (struct_ok) return true;
-    // As a final fallback for pointer/array shapes, compare by "total pointer
-    // depth" where each Array layer contributes one level (array-to-pointer
-    // decay), and ensure the scalar base types match.
-    if (arrOrPtr(ft) != null and arrOrPtr(tt) != null) {
-        const a = ptrDepthAndBase(ft);
-        const b = ptrDepthAndBase(tt);
-        if (a.depth == b.depth and std.meta.activeTag(a.base) == std.meta.activeTag(b.base)) return true;
-    }
+    if (targetType.isNumeric() and sourceType.isNumeric()) return true;
+    if (targetType.isNumeric() or sourceType.isNumeric()) return false;
+    if (typeStructCompat(targetType, sourceType)) return true;
     return false;
 }
 
@@ -780,33 +762,20 @@ fn isNullPtrAssignment(expr: *AST.Expression, toType: AST.Type) bool {
     return expr.isNullPtr();
 }
 
-// Convert only a top-level Array into a Pointer to its element type.
-// Leaves Pointers unchanged, even if they point to Arrays. This preserves
-// pointer-to-array semantics (e.g., *(arr + 3) has type Array-of-T).
-inline fn changeTopLevelArrayToPointer(t: AST.Type, allocator: std.mem.Allocator) !AST.Type {
-    return switch (t) {
-        .Array => |arr| blk: {
-            const inner = try allocator.create(AST.Type);
-            inner.* = try arr.ty.*.deepCopy(allocator);
-            break :blk .{ .Pointer = inner };
-        },
-        else => t,
-    };
-}
-
-// Apply array-to-pointer decay for value contexts: if the expression's type is
-// Array, wrap it in an AddrOf so downstream code sees a pointer-to-element.
-// Does not recursively decay arrays behind pointers.
-inline fn decayArrayValue(self: *Typechecker, e: *AST.Expression) TypeCheckerError!*AST.Expression {
+// decay method on types exist only for type checking in semantic analysis
+// This on the other hand does lowering for value contexts by adding an
+// AddrOf (array decaying into a pointer)
+inline fn decayArrayValue(allocator: std.mem.Allocator, e: *AST.Expression) !*AST.Expression {
     const t = e.getType();
     if (std.meta.activeTag(t) != .Array) return e;
 
-    const elem_ptr = try self.allocator.create(AST.Type);
-    elem_ptr.* = try t.Array.ty.*.deepCopy(self.allocator);
-    const ptr_ty: AST.Type = .{ .Pointer = elem_ptr };
+    const ptr_ty = try t.decay(allocator);
 
-    const wrapped = try self.allocator.create(AST.Expression);
-    wrapped.* = .{ .AddrOf = .{ .type = ptr_ty, .exp = e } };
+    const inner = try allocator.create(AST.Expression);
+    inner.* = e.*;
+
+    const wrapped = try allocator.create(AST.Expression);
+    wrapped.* = .{ .AddrOf = .{ .type = ptr_ty, .exp = inner } };
     return wrapped;
 }
 
@@ -827,7 +796,7 @@ fn typecheckInitializer(self: *Typechecker, initializer: *AST.Initializer, declT
                     return TypeError.TypeMismatch;
                 }
 
-                const str_bytes = expr.String; // already decoded, no trailing NUL
+                const str_bytes = expr.String;
                 if (str_bytes.len > arrTy.size) {
                     try self.errors.append(try std.fmt.allocPrint(
                         self.allocator,
@@ -837,8 +806,6 @@ fn typecheckInitializer(self: *Typechecker, initializer: *AST.Initializer, declT
                     return TypeError.TypeMismatch;
                 }
 
-                // Build an ArrayExpr initializer with per-element char constants,
-                // and zero-fill the remainder.
                 var arrayInit = try self.allocator.create(AST.ArrayInitializer);
                 arrayInit.* = .{
                     .type = declType,
@@ -1126,32 +1093,12 @@ inline fn convert(allocator: std.mem.Allocator, expr: *AST.Expression, toType: A
     // Centralize array-to-pointer decay: whenever a conversion target is a Pointer
     // and the source expression currently has an Array type, rewrite the
     // expression as an AddrOf to model C's array-to-pointer decay semantics.
-    // This ensures consistent behavior across assignment, binary arithmetic,
-    // function arguments, ternary expressions, and returns, without sprinkling
-    // decay logic in each caller.
     const expr_ty = expr.getType();
     if (std.meta.activeTag(expr_ty) == .Array and std.meta.activeTag(toType) == .Pointer) {
-        const inner = try allocator.create(AST.Expression);
-        inner.* = expr.*;
-        // If we're decaying a string literal to a pointer-to-(u)char, model
-        // C's implicit NUL terminator by appending a 0 byte to the string's
-        // backing slice so that getType() observes length+1.
-        if (std.meta.activeTag(inner.*) == .String) {
-            switch (toType) {
-                .Pointer => |pointee| {
-                    const base_tag = std.meta.activeTag(pointee.*);
-                    if (base_tag == .Char or base_tag == .UChar) {
-                        const s = inner.String;
-                        var buf = try allocator.alloc(u8, s.len + 1);
-                        @memcpy(buf[0..s.len], s);
-                        buf[s.len] = 0;
-                        inner.String = buf;
-                    }
-                },
-                else => {},
-            }
-        }
-        expr.* = .{ .AddrOf = .{ .exp = inner, .type = toType } };
+        const decayed = try decayArrayValue(allocator, expr);
+        expr.* = decayed.*;
+        // Ensure the resulting AddrOf has the exact target type requested.
+        expr.AddrOf.type = toType;
         return expr;
     }
     switch (expr.*) {
@@ -1369,8 +1316,8 @@ fn getCommonPtrTypeForArith() !AST.Type {
 fn getCommonPtrType(self: *Typechecker, lhs: *AST.Expression, rhs: *AST.Expression) !?AST.Type {
     // Only decay top-level arrays to pointers; do not decay arrays behind
     // pointers so multi-dimensional arrays remain pointer-to-array.
-    var type1 = try changeTopLevelArrayToPointer(lhs.getType(), self.allocator);
-    var type2 = try changeTopLevelArrayToPointer(rhs.getType(), self.allocator);
+    var type1 = try lhs.getType().decay(self.allocator);
+    var type2 = try rhs.getType().decay(self.allocator);
     if (type1.deepEql(type2)) return type1;
     if (type1 == .Integer) {
         const new_lhs = try castToLongForPtrArith(self.allocator, lhs);
@@ -1473,9 +1420,6 @@ fn isCharType(self: AST.Type) bool {
 }
 
 fn typecheckExpr(self: *Typechecker, expr: *AST.Expression) TypeError!*AST.Expression {
-    // Expr can error because of a type issue,
-    // for now we can just return a generic type error
-    // and handle it from the outer functions (no diagnostic)
     switch (expr.*) {
         .AddrOf => |addrOf| {
             const innerType = try self.allocator.create(AST.Type);
@@ -1484,7 +1428,7 @@ fn typecheckExpr(self: *Typechecker, expr: *AST.Expression) TypeError!*AST.Expre
             return expr;
         },
         .Deref => |deref| {
-            const innerType = try (try typecheckExpr(self, deref.exp)).getType().changeArrtoPointer(self.allocator);
+            const innerType = (try typecheckExpr(self, deref.exp)).getType();
             if (std.meta.activeTag(innerType) != .Pointer) {
                 std.log.warn("Dereferenced type is not a pointer, got {any} instead\n", .{std.meta.activeTag(innerType)});
                 return TypeError.InvalidOperand;
@@ -1493,7 +1437,7 @@ fn typecheckExpr(self: *Typechecker, expr: *AST.Expression) TypeError!*AST.Expre
             return expr;
         },
         .Cast => {
-            return expr;
+            unreachable;
         },
         .Assignment => |assignment| {
             const lhsType = (try typecheckExpr(self, assignment.lhs)).getType();
@@ -1503,14 +1447,12 @@ fn typecheckExpr(self: *Typechecker, expr: *AST.Expression) TypeError!*AST.Expre
             return expr;
         },
         .Binary => {
-            // Apply value conversion to array operands (array -> pointer), and
-            // use these for type reasoning.
             const lhsChecked = try typecheckExpr(self, expr.Binary.lhs);
             const rhsChecked = try typecheckExpr(self, expr.Binary.rhs);
-            expr.Binary.lhs = try decayArrayValue(self, lhsChecked);
-            expr.Binary.rhs = try decayArrayValue(self, rhsChecked);
-            const lhsType = try changeTopLevelArrayToPointer(expr.Binary.lhs.getType(), self.allocator);
-            const rhsType = try changeTopLevelArrayToPointer(expr.Binary.rhs.getType(), self.allocator);
+            expr.Binary.lhs = try decayArrayValue(self.allocator, lhsChecked);
+            expr.Binary.rhs = try decayArrayValue(self.allocator, rhsChecked);
+            const lhsType = expr.Binary.lhs.getType();
+            const rhsType = expr.Binary.rhs.getType();
             const isLhsPointer = std.meta.activeTag(lhsType) == .Pointer;
             const isRhsPointer = std.meta.activeTag(rhsType) == .Pointer;
 
@@ -1598,7 +1540,7 @@ fn typecheckExpr(self: *Typechecker, expr: *AST.Expression) TypeError!*AST.Expre
             if (std.meta.activeTag(symbolType) == .Array) {
                 const innerExpr = try self.allocator.create(AST.Expression);
                 innerExpr.* = exprRunner.*;
-                const decayTy = try changeTopLevelArrayToPointer(symbolType, self.allocator);
+                const decayTy = try symbolType.decay(self.allocator);
                 exprRunner.* = .{ .AddrOf = .{ .exp = innerExpr, .type = decayTy } };
             }
             expr.* = exprRunner.*;
@@ -1642,9 +1584,10 @@ fn typecheckExpr(self: *Typechecker, expr: *AST.Expression) TypeError!*AST.Expre
                         .name = tempId,
                     },
                 };
+                return expr;
             }
             // TODO: Should we store this type?
-            // expr.Constant.type = t;
+            expr.Constant.type = t;
             return expr;
         },
         .Unary => |unary| {
@@ -1659,7 +1602,7 @@ fn typecheckExpr(self: *Typechecker, expr: *AST.Expression) TypeError!*AST.Expre
                 return expr;
             }
 
-            const value_exp = try decayArrayValue(self, checked);
+            const value_exp = try decayArrayValue(self.allocator, checked);
             expr.Unary.exp = value_exp;
             const exprType = value_exp.getType();
             if (exprType == .Float and unary.unaryOp == .COMPLEMENT) {
@@ -1674,8 +1617,8 @@ fn typecheckExpr(self: *Typechecker, expr: *AST.Expression) TypeError!*AST.Expre
 
             const lhsChecked = try typecheckExpr(self, ternary.lhs);
             const rhsChecked = try typecheckExpr(self, ternary.rhs);
-            expr.Ternary.lhs = try decayArrayValue(self, lhsChecked);
-            expr.Ternary.rhs = try decayArrayValue(self, rhsChecked);
+            expr.Ternary.lhs = try decayArrayValue(self.allocator, lhsChecked);
+            expr.Ternary.rhs = try decayArrayValue(self.allocator, rhsChecked);
             const lhsType = expr.Ternary.lhs.getType();
             const rhsType = expr.Ternary.rhs.getType();
             std.log.warn("rhs is {}\n", .{ternary.rhs});
@@ -1705,7 +1648,7 @@ fn typecheckExpr(self: *Typechecker, expr: *AST.Expression) TypeError!*AST.Expre
             expr.ArrSubscript.arr = try typecheckExpr(self, arrSubscript.arr);
             expr.ArrSubscript.index = try typecheckExpr(self, arrSubscript.index);
             // In value contexts, arrays decay to pointers; ensure base is pointer
-            expr.ArrSubscript.arr = try decayArrayValue(self, expr.ArrSubscript.arr);
+            expr.ArrSubscript.arr = try decayArrayValue(self.allocator, expr.ArrSubscript.arr);
 
             // Error cases
             // if neither arr nor index is a pointer, we need to throw an error

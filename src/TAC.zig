@@ -608,30 +608,35 @@ pub const Instruction = union(InstructionType) {
             .SignExtend => |signExt| {
                 const src = try signExt.src.codegen(symbolTable, allocator);
                 const dest = try signExt.dest.codegen(symbolTable, allocator);
+                const src_type = signExt.src.getAsmTypeFromSymTab(symbolTable).?;
+                const temp_reg = src_type.getR10Variety();
+                const extend_reg = if (src_type == .Byte) assembly.Reg.EAX else assembly.Reg.R11_64;
+                const dest_type = if (src_type == .Byte) assembly.AsmType.LongWord else signExt.dest.getAsmTypeFromSymTab(symbolTable).?;
                 var signExtend = [_]*assembly.Instruction{
                     try assembly.createInst(
                         .Mov,
                         assembly.MovInst{
                             .src = src,
-                            .dest = assembly.Operand{ .Reg = assembly.Reg.R10 },
-                            .type = signExt.src.getAsmTypeFromSymTab(symbolTable).?,
+                            .dest = assembly.Operand{ .Reg = temp_reg },
+                            .type = src_type,
                         },
                         allocator,
                     ),
                     try assembly.createInst(
                         .Movsx,
                         assembly.Movsx{
-                            .src = assembly.Operand{ .Reg = assembly.Reg.R10 },
-                            .dest = assembly.Operand{ .Reg = assembly.Reg.R11_64 },
+                            .src = assembly.Operand{ .Reg = temp_reg },
+                            .dest = assembly.Operand{ .Reg = extend_reg },
+                            .srcType = src_type,
                         },
                         allocator,
                     ),
                     try assembly.createInst(
                         .Mov,
                         assembly.MovInst{
-                            .src = assembly.Operand{ .Reg = assembly.Reg.R11_64 },
+                            .src = assembly.Operand{ .Reg = extend_reg },
                             .dest = dest,
-                            .type = signExt.dest.getAsmTypeFromSymTab(symbolTable).?,
+                            .type = dest_type,
                         },
                         allocator,
                     ),
@@ -654,11 +659,36 @@ pub const Instruction = union(InstructionType) {
             .ZeroExtend => |zeroExt| {
                 const src = try zeroExt.src.codegen(symbolTable, allocator);
                 const dest = try zeroExt.dest.codegen(symbolTable, allocator);
-                try instructions.append(try assembly.createInst(
-                    assembly.InstructionType.Movzx,
-                    assembly.Movzx{ .src = src, .dest = dest },
-                    allocator,
-                ));
+                const src_type = zeroExt.src.getAsmTypeFromSymTab(symbolTable).?;
+                if (src_type == .Byte) {
+                    const movSrcToAl = try allocator.create(assembly.Instruction);
+                    movSrcToAl.* = .{ .Mov = .{
+                        .src = src,
+                        .dest = .{ .Reg = assembly.Reg.AL },
+                        .type = .Byte,
+                    } };
+                    const zeroEax = try allocator.create(assembly.Instruction);
+                    zeroEax.* = .{ .Mov = .{
+                        .src = .{ .Imm = 0 },
+                        .dest = .{ .Reg = assembly.Reg.EAX },
+                        .type = .LongWord,
+                    } };
+                    const movRaxToDest = try allocator.create(assembly.Instruction);
+                    movRaxToDest.* = .{ .Mov = .{
+                        .src = .{ .Reg = assembly.Reg.RAX },
+                        .dest = dest,
+                        .type = .QuadWord,
+                    } };
+                    try instructions.append(zeroEax);
+                    try instructions.append(movSrcToAl);
+                    try instructions.append(movRaxToDest);
+                } else {
+                    try instructions.append(try assembly.createInst(
+                        assembly.InstructionType.Movzx,
+                        assembly.Movzx{ .src = src, .dest = dest },
+                        allocator,
+                    ));
+                }
             },
             .FloatToUInt => |floatToUInt| {
                 const src = try floatToUInt.src.codegen(symbolTable, allocator);

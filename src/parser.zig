@@ -32,35 +32,39 @@ pub const ParserError = error{
     Unimplemented,
     NoInnerFuncDeclarator,
     FunctionDeclCantUnwrapIdent,
+    ExpectedVarDecl,
 };
 
-fn getDeclaratorType(allocator: std.mem.Allocator, declarator: *AST.Declarator, lhsType: AST.Type) !*AST.Type {
+fn buildArrayType(allocator: std.mem.Allocator, baseType: AST.Type, sizes: []const usize) !AST.Type {
+    std.debug.assert(sizes.len >= 1);
+    var inner_type = try allocator.create(AST.Type);
+    inner_type.* = baseType;
+
+    if (sizes.len >= 2) {
+        var i: usize = sizes.len - 1;
+        while (i > 0) : (i -= 1) {
+            const t = try allocator.create(AST.Type);
+            t.* = .{ .Array = .{ .size = sizes[i], .ty = inner_type } };
+            inner_type = t;
+        }
+    }
+
+    return .{ .Array = .{ .size = sizes[0], .ty = inner_type } };
+}
+
+fn getDeclaratorType(allocator: std.mem.Allocator, declarator: *AST.Declarator, baseType: AST.Type) !*AST.Type {
     const declaratorType = try allocator.create(AST.Type);
     declaratorType.* = switch (declarator.*) {
-        .Ident => lhsType,
+        .Ident => baseType,
         .PointerDeclarator => |ptr| blk: {
-            const ptrBase = try AST.astPointerTypeFromDepth(lhsType, 1, allocator);
-            break :blk (try getDeclaratorType(allocator, ptr, ptrBase)).*;
+            const derived_type = try AST.astPointerTypeFromDepth(baseType, 1, allocator);
+            break :blk (try getDeclaratorType(allocator, ptr, derived_type)).*;
         },
         .ArrayDeclarator => |arr| blk: {
-            // First, compute the base type from the inner declarator
-            var inner_type = try getDeclaratorType(allocator, arr.declarator, lhsType);
             const sizes = arr.size.items;
             std.debug.assert(sizes.len >= 1);
-
-            // Build nested array types from inner-most to outer-most.
-            // For sizes like [s0, s1, s2], this builds:
-            //   Array(size=s0, ty=Array(size=s1, ty=Array(size=s2, ty=inner_type)))
-            if (sizes.len >= 2) {
-                var i: usize = sizes.len - 1;
-                while (i > 0) : (i -= 1) {
-                    const t = try allocator.create(AST.Type);
-                    t.* = .{ .Array = .{ .size = sizes[i], .ty = inner_type } };
-                    inner_type = t;
-                }
-            }
-
-            break :blk .{ .Array = .{ .size = sizes[0], .ty = inner_type } };
+            const derived_type = try buildArrayType(allocator, baseType, sizes);
+            break :blk (try getDeclaratorType(allocator, arr.declarator, derived_type)).*;
         },
         .FunDeclarator => unreachable,
     };
@@ -1109,121 +1113,98 @@ pub const Parser = struct {
     }
 };
 
-test "getDeclaratorType: *unsigned long[5] -> **unsigned long" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const al = arena.allocator();
-
-    // Build declarator: * ( [5] ident )
-    const ident = try al.create(AST.Declarator);
-    ident.* = .{ .Ident = @constCast("x"[0..1]) };
-
-    var sizes = std.ArrayList(usize).init(al);
-    try sizes.append(5);
-    const arrNode = try al.create(AST.ArrDeclarator);
-    arrNode.* = .{ .declarator = ident, .size = sizes };
-
-    const arrDecl = try al.create(AST.Declarator);
-    arrDecl.* = .{ .ArrayDeclarator = arrNode };
-
-    const ptrDecl = try al.create(AST.Declarator);
-    ptrDecl.* = .{ .PointerDeclarator = arrDecl };
-
-    const ty_ptr = try getDeclaratorType(al, ptrDecl, .ULong);
-    const resolved = try ty_ptr.*.changeArrtoPointer(al);
-
-    try std.testing.expect(std.meta.activeTag(resolved) == .Pointer);
-    try std.testing.expect(std.meta.activeTag(resolved.Pointer.*) == .Pointer);
-    try std.testing.expect(std.meta.activeTag(resolved.Pointer.*.Pointer.*) == .ULong);
+fn parseFirstVarDecl(allocator: std.mem.Allocator, source: []const u8) !AST.Type {
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(source)));
+    var p = try Parser.init(allocator, l);
+    const qualifier = AST.Qualifier.from((try p.l.peekToken(p.allocator)).?.type);
+    if (qualifier != null) {
+        _ = try p.l.nextToken(p.allocator);
+    }
+    const baseType = try p.parseType();
+    const declarator = try p.parseDeclarator();
+    return (try getDeclaratorType(p.allocator, declarator, baseType)).*;
 }
 
-test "getDeclaratorType: **int [5] -> ***int" {
+test "parser declarator: unsigned long *x[5]" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const al = arena.allocator();
 
-    // Build declarator: * ( * ( [5] ident ) )
-    const ident = try al.create(AST.Declarator);
-    ident.* = .{ .Ident = @constCast("x"[0..1]) };
-
-    var sizes = std.ArrayList(usize).init(al);
-    try sizes.append(5);
-    const arrNode = try al.create(AST.ArrDeclarator);
-    arrNode.* = .{ .declarator = ident, .size = sizes };
-    const arrDecl = try al.create(AST.Declarator);
-    arrDecl.* = .{ .ArrayDeclarator = arrNode };
-
-    const ptrInner = try al.create(AST.Declarator);
-    ptrInner.* = .{ .PointerDeclarator = arrDecl };
-
-    const ptrOuter = try al.create(AST.Declarator);
-    ptrOuter.* = .{ .PointerDeclarator = ptrInner };
-
-    const ty_ptr = try getDeclaratorType(al, ptrOuter, .Integer);
-    const resolved = try ty_ptr.*.changeArrtoPointer(al);
-
-    try std.testing.expect(std.meta.activeTag(resolved) == .Pointer);
-    const p1 = resolved.Pointer.*;
-    try std.testing.expect(std.meta.activeTag(p1) == .Pointer);
-    const p2 = p1.Pointer.*;
-    try std.testing.expect(std.meta.activeTag(p2) == .Pointer);
-    try std.testing.expect(std.meta.activeTag(p2.Pointer.*) == .Integer);
+    const decl_type = try parseFirstVarDecl(al, "unsigned long *x[5];");
+    try std.testing.expect(std.meta.activeTag(decl_type) == .Array);
+    try std.testing.expectEqual(@as(usize, 5), decl_type.Array.size);
+    try std.testing.expect(std.meta.activeTag(decl_type.Array.ty.*) == .Pointer);
+    try std.testing.expect(std.meta.activeTag(decl_type.Array.ty.*.Pointer.*) == .ULong);
 }
 
-test "getDeclaratorType: *int[5][5] -> ***int" {
+test "parser declarator: int **x[5]" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const al = arena.allocator();
 
-    // Build declarator: * ( [5][5] ident )
-    const ident = try al.create(AST.Declarator);
-    ident.* = .{ .Ident = @constCast("x"[0..1]) };
-
-    var sizes = std.ArrayList(usize).init(al);
-    try sizes.append(5);
-    try sizes.append(5);
-    const arrNode = try al.create(AST.ArrDeclarator);
-    arrNode.* = .{ .declarator = ident, .size = sizes };
-    const arrDecl = try al.create(AST.Declarator);
-    arrDecl.* = .{ .ArrayDeclarator = arrNode };
-
-    const ptrDecl = try al.create(AST.Declarator);
-    ptrDecl.* = .{ .PointerDeclarator = arrDecl };
-
-    const ty_ptr = try getDeclaratorType(al, ptrDecl, .Integer);
-    const resolved = try ty_ptr.*.changeArrtoPointer(al);
-
-    // Expect ***int
-    try std.testing.expect(std.meta.activeTag(resolved) == .Pointer);
-    const p1 = resolved.Pointer.*;
-    try std.testing.expect(std.meta.activeTag(p1) == .Pointer);
-    const p2 = p1.Pointer.*;
-    try std.testing.expect(std.meta.activeTag(p2) == .Pointer);
-    try std.testing.expect(std.meta.activeTag(p2.Pointer.*) == .Integer);
+    const decl_type = try parseFirstVarDecl(al, "int **x[5];");
+    try std.testing.expect(std.meta.activeTag(decl_type) == .Array);
+    try std.testing.expectEqual(@as(usize, 5), decl_type.Array.size);
+    const inner = decl_type.Array.ty.*;
+    try std.testing.expect(std.meta.activeTag(inner) == .Pointer);
+    try std.testing.expect(std.meta.activeTag(inner.Pointer.*) == .Pointer);
+    try std.testing.expect(std.meta.activeTag(inner.Pointer.*.Pointer.*) == .Integer);
 }
 
-test "getDeclaratorType: int[5][5] -> int**" {
+test "parser declarator: int *x[5][5]" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const al = arena.allocator();
 
-    // Build declarator: [5][5] ident
-    const ident = try al.create(AST.Declarator);
-    ident.* = .{ .Ident = @constCast("x"[0..1]) };
+    const decl_type = try parseFirstVarDecl(al, "int *x[5][5];");
+    try std.testing.expect(std.meta.activeTag(decl_type) == .Array);
+    try std.testing.expectEqual(@as(usize, 5), decl_type.Array.size);
+    const inner = decl_type.Array.ty.*;
+    try std.testing.expect(std.meta.activeTag(inner) == .Array);
+    try std.testing.expectEqual(@as(usize, 5), inner.Array.size);
+    try std.testing.expect(std.meta.activeTag(inner.Array.ty.*) == .Pointer);
+    try std.testing.expect(std.meta.activeTag(inner.Array.ty.*.Pointer.*) == .Integer);
+}
 
-    var sizes = std.ArrayList(usize).init(al);
-    try sizes.append(5);
-    try sizes.append(5);
-    const arrNode = try al.create(AST.ArrDeclarator);
-    arrNode.* = .{ .declarator = ident, .size = sizes };
-    const arrDecl = try al.create(AST.Declarator);
-    arrDecl.* = .{ .ArrayDeclarator = arrNode };
+test "parser declarator: int x[5][5]" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const al = arena.allocator();
 
-    const ty_ptr = try getDeclaratorType(al, arrDecl, .Integer);
-    const resolved = try ty_ptr.*.changeArrtoPointer(al);
+    const decl_type = try parseFirstVarDecl(al, "int x[5][5];");
+    try std.testing.expect(std.meta.activeTag(decl_type) == .Array);
+    try std.testing.expectEqual(@as(usize, 5), decl_type.Array.size);
+    const inner = decl_type.Array.ty.*;
+    try std.testing.expect(std.meta.activeTag(inner) == .Array);
+    try std.testing.expectEqual(@as(usize, 5), inner.Array.size);
+    try std.testing.expect(std.meta.activeTag(inner.Array.ty.*) == .Integer);
+}
 
-    try std.testing.expect(std.meta.activeTag(resolved) == .Pointer);
-    const p1 = resolved.Pointer.*;
-    try std.testing.expect(std.meta.activeTag(p1) == .Pointer);
-    try std.testing.expect(std.meta.activeTag(p1.Pointer.*) == .Integer);
+test "parser declarator: int (*x)[5]" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const al = arena.allocator();
+
+    const decl_type = try parseFirstVarDecl(al, "int (*x)[5];");
+    try std.testing.expect(std.meta.activeTag(decl_type) == .Pointer);
+    const inner = decl_type.Pointer.*;
+    try std.testing.expect(std.meta.activeTag(inner) == .Array);
+    try std.testing.expectEqual(@as(usize, 5), inner.Array.size);
+    try std.testing.expect(std.meta.activeTag(inner.Array.ty.*) == .Integer);
+}
+
+test "parser declarator: int (*x)[5][6]" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const al = arena.allocator();
+
+    const decl_type = try parseFirstVarDecl(al, "int (*x)[5][6];");
+    try std.testing.expect(std.meta.activeTag(decl_type) == .Pointer);
+    const inner = decl_type.Pointer.*;
+    try std.testing.expect(std.meta.activeTag(inner) == .Array);
+    try std.testing.expectEqual(@as(usize, 5), inner.Array.size);
+    const inner2 = inner.Array.ty.*;
+    try std.testing.expect(std.meta.activeTag(inner2) == .Array);
+    try std.testing.expectEqual(@as(usize, 6), inner2.Array.size);
+    try std.testing.expect(std.meta.activeTag(inner2.Array.ty.*) == .Integer);
 }

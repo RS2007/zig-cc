@@ -1549,6 +1549,7 @@ test "char typecheck" {
         _ = try std.testing.expect(std.meta.activeTag(kInitExpr.AddrOf.exp.*) == .String);
 
         const innerStringTy = kInitExpr.AddrOf.exp.getType();
+        std.log.warn("Actual innerStringTy.Array.size: {d}\n", .{innerStringTy.Array.size});
         _ = try std.testing.expect(std.meta.activeTag(innerStringTy) == .Array);
         _ = try std.testing.expect(std.meta.activeTag(innerStringTy.Array.ty.*) == .Char);
         _ = try std.testing.expect(innerStringTy.Array.size == 6);

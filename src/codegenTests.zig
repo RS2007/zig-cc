@@ -2925,3 +2925,43 @@ test "static strings -> global pointers" {
     try asmProgram.stringify(sFileWriter, allocator, tacRenderer.asmSymbolTable);
     try cFileWriter.writeAll(programStr);
 }
+
+test "addr of string" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const cFileWriter = (try std.fs.cwd().createFile("./cFiles/C/addrofstring.c", .{})).writer();
+    const sFileWriter = (try std.fs.cwd().createFile("./cFiles/S/addrofstring.s", .{})).writer();
+    const programStr =
+        \\ int puts(char *s);
+        \\
+        \\ int main() {
+        \\     char (*str)[16] = &"Sample\tstring!\n";
+        \\     puts(*str);
+        \\     char (*one_past_the_end)[16] = str + 1;
+        \\     char *onePastTheEnd = *str + 16;
+        \\     char *last_byte_pointer = onePastTheEnd - 1;
+        \\     if (*last_byte_pointer != 0) {
+        \\         return 1;
+        \\     }
+        \\     return 0;
+        \\ }
+    ;
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    const program = try p.parseProgram();
+    const varResolver = try ast.VarResolver.init(allocator);
+    try varResolver.resolve(program);
+    const typechecker = try semantic.Typechecker.init(allocator);
+    typechecker.check(program) catch {
+        std.log.warn("\x1b[33mError\x1b[0m: {s}", .{try typechecker.getErrString()});
+        std.debug.assert(false);
+    };
+    try ast.loopLabelPass(program, allocator);
+    const tacRenderer = try ast.TACRenderer.init(allocator, typechecker.symbolTable);
+    const tacProgram = try tacRenderer.render(program);
+    const asmRenderer = try tac.AsmRenderer.init(allocator, tacRenderer.asmSymbolTable);
+    const asmProgram = try asmRenderer.render(tacProgram);
+    try asmProgram.stringify(sFileWriter, allocator, tacRenderer.asmSymbolTable);
+    try cFileWriter.writeAll(programStr);
+}

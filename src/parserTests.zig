@@ -816,7 +816,7 @@ test "parse chars and strings: decls and prototypes" {
         _ = try std.testing.expect(std.mem.eql(u8, init.String, "hi"));
         const strTy = init.getType();
         _ = try std.testing.expect(std.meta.activeTag(strTy) == .Array);
-        _ = try std.testing.expect(strTy.Array.size == 2);
+        _ = try std.testing.expect(strTy.Array.size == 3);
         _ = try std.testing.expect(std.meta.activeTag(strTy.Array.ty.*) == .Char);
     }
     // t: char[4] = "abc\n"
@@ -832,7 +832,7 @@ test "parse chars and strings: decls and prototypes" {
         _ = try std.testing.expect(std.mem.eql(u8, init.String, "abc\n"));
         const strTy = init.getType();
         _ = try std.testing.expect(std.meta.activeTag(strTy) == .Array);
-        _ = try std.testing.expect(strTy.Array.size == 4);
+        _ = try std.testing.expect(strTy.Array.size == 5);
         _ = try std.testing.expect(std.meta.activeTag(strTy.Array.ty.*) == .Char);
     }
 }

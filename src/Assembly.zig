@@ -93,6 +93,7 @@ pub const AsmType = union(enum) {
                 .Integer, .UInteger => .LongWord,
                 .Long, .ULong => .QuadWord,
                 .Float => .Float,
+                .Char, .SChar, .UChar => .Byte,
                 .Pointer => .QuadWord,
                 else => unreachable,
             };
@@ -141,7 +142,7 @@ pub const AsmType = union(enum) {
             .QuadWord => .R10_64,
             .Float => .XMM15,
             .ByteArray => unreachable,
-            .Byte => .R10,
+            .Byte => .R10B,
         };
     }
 
@@ -360,6 +361,7 @@ pub const StaticVar = struct {
 pub const Reg = enum {
     AX,
     R10,
+    R10B,
     DX,
     R11,
     EDI,
@@ -398,6 +400,9 @@ pub const Reg = enum {
             },
             .R10 => {
                 return (try std.fmt.allocPrint(allocator, "%r10d", .{}));
+            },
+            .R10B => {
+                return (try std.fmt.allocPrint(allocator, "%r10b", .{}));
             },
             .R10_64 => {
                 return (try std.fmt.allocPrint(allocator, "%r10", .{}));
@@ -713,6 +718,7 @@ pub const Idiv = struct {
 pub const Movsx = struct {
     src: Operand,
     dest: Operand,
+    srcType: AsmType,
 };
 
 pub const Movzx = struct {
@@ -825,37 +831,34 @@ pub const Instruction = union(InstructionType) {
                 return (try std.fmt.allocPrint(allocator, "call {s}", .{fnCall.name}));
             },
             .Movsx => |movsx| {
-                return (try std.fmt.allocPrint(allocator, "movslq {s},{s}", .{ try Operand.stringify(@constCast(&movsx.src), allocator), try Operand.stringify(@constCast(&movsx.dest), allocator) }));
+                const suffix = switch (movsx.srcType) {
+                    .Byte => "sbl",
+                    .LongWord => "slq",
+                    else => "slq",
+                };
+                const dest = if (movsx.srcType == .Byte)
+                    Operand{ .Reg = Reg.EAX }
+                else
+                    movsx.dest;
+                return (try std.fmt.allocPrint(allocator, "mov{s} {s},{s}", .{ suffix, try Operand.stringify(@constCast(&movsx.src), allocator), try Operand.stringify(@constCast(&dest), allocator) }));
             },
             .Movzx => {
                 @panic("Never hit this, movzx should be replaced by two mov instructions");
             },
             .Cvttsd2si => |cvttsd2si| {
-                const srcString = try @constCast(&cvttsd2si.src).stringify(allocator);
-                const destString = try @constCast(&cvttsd2si.dest).stringify(allocator);
-                return (try std.fmt.allocPrint(allocator, "cvttsd2si{s} {s},{s}", .{
-                    cvttsd2si.type.suffix(),
-                    srcString,
-                    destString,
-                }));
+                const srcStringified = try @constCast(&cvttsd2si.src).stringify(allocator);
+                const destStringified = try @constCast(&cvttsd2si.dest).stringify(allocator);
+                return (try std.fmt.allocPrint(allocator, "cvttsd2si{s} {s},{s}", .{ cvttsd2si.type.suffix(), srcStringified, destStringified }));
             },
             .Cvtsi2sd => |cvtsi2sd| {
-                const srcString = try @constCast(&cvtsi2sd.src).stringify(allocator);
-                const destString = try @constCast(&cvtsi2sd.dest).stringify(allocator);
-                return (try std.fmt.allocPrint(allocator, "cvtsi2sd{s} {s},{s}", .{
-                    cvtsi2sd.type.suffix(),
-                    srcString,
-                    destString,
-                }));
+                const srcStringified = try @constCast(&cvtsi2sd.src).stringify(allocator);
+                const destStringified = try @constCast(&cvtsi2sd.dest).stringify(allocator);
+                return (try std.fmt.allocPrint(allocator, "cvtsi2sd{s} {s},{s}", .{ cvtsi2sd.type.suffix(), srcStringified, destStringified }));
             },
             .Lea => |lea| {
-                const srcString = try @constCast(&lea.src).stringify(allocator);
-                const destString = try @constCast(&lea.dest).stringify(allocator);
-                return (try std.fmt.allocPrint(allocator, "lea{s} {s},{s}", .{
-                    lea.type.suffix(),
-                    srcString,
-                    destString,
-                }));
+                const srcStringified = try @constCast(&lea.src).stringify(allocator);
+                const destStringified = try @constCast(&lea.dest).stringify(allocator);
+                return (try std.fmt.allocPrint(allocator, "leaq {s},{s}", .{ srcStringified, destStringified }));
             },
         }
     }
@@ -933,20 +936,53 @@ pub fn fixupInstructions(instructions: *std.ArrayList(*Instruction), allocator: 
                 }
             },
             .Movzx => |movzx| {
-                const movSrcToEax = try allocator.create(Instruction);
-                movSrcToEax.* = .{ .Mov = .{
-                    .src = movzx.src,
-                    .dest = .{ .Reg = Reg.EAX },
-                    .type = .LongWord,
-                } };
-                const movRaxToDest = try allocator.create(Instruction);
-                movRaxToDest.* = .{ .Mov = .{
-                    .src = .{ .Reg = Reg.RAX },
-                    .dest = movzx.dest,
-                    .type = .QuadWord,
-                } };
-                try fixedInstructions.append(movSrcToEax);
-                try fixedInstructions.append(movRaxToDest);
+                const is_byte_src = movzx.src.isOfKind(.Memory) or movzx.src.isOfKind(.PseudoMem);
+                if (is_byte_src) {
+                    const zeroEax = try allocator.create(Instruction);
+                    zeroEax.* = .{ .Mov = .{
+                        .src = .{ .Imm = 0 },
+                        .dest = .{ .Reg = Reg.EAX },
+                        .type = .LongWord,
+                    } };
+                    const byte_mem = switch (movzx.src) {
+                        .PseudoMem => |pseudo| Operand{ .Memory = .{ .base = blk: {
+                            const base = try allocator.create(Operand);
+                            base.* = .{ .Reg = Reg.BP };
+                            break :blk base;
+                        }, .index = pseudo.offset } },
+                        else => movzx.src,
+                    };
+                    const movSrcToAl = try allocator.create(Instruction);
+                    movSrcToAl.* = .{ .Mov = .{
+                        .src = byte_mem,
+                        .dest = .{ .Reg = Reg.AL },
+                        .type = .Byte,
+                    } };
+                    const movRaxToDest = try allocator.create(Instruction);
+                    movRaxToDest.* = .{ .Mov = .{
+                        .src = .{ .Reg = Reg.RAX },
+                        .dest = movzx.dest,
+                        .type = .QuadWord,
+                    } };
+                    try fixedInstructions.append(zeroEax);
+                    try fixedInstructions.append(movSrcToAl);
+                    try fixedInstructions.append(movRaxToDest);
+                } else {
+                    const movSrcToEax = try allocator.create(Instruction);
+                    movSrcToEax.* = .{ .Mov = .{
+                        .src = movzx.src,
+                        .dest = .{ .Reg = Reg.EAX },
+                        .type = .LongWord,
+                    } };
+                    const movRaxToDest = try allocator.create(Instruction);
+                    movRaxToDest.* = .{ .Mov = .{
+                        .src = .{ .Reg = Reg.RAX },
+                        .dest = movzx.dest,
+                        .type = .QuadWord,
+                    } };
+                    try fixedInstructions.append(movSrcToEax);
+                    try fixedInstructions.append(movRaxToDest);
+                }
             },
             .Cvttsd2si => |cvttsd2si| {
                 const movSrcToEax = try allocator.create(Instruction);
