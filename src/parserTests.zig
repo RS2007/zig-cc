@@ -496,7 +496,7 @@ test "testing basic parser" {
     const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
     var p = try parser.Parser.init(allocator, l);
     const program = try p.parseProgram();
-    _ = try std.testing.expect(std.mem.eql(u8, program.externalDecls.items[0].FunctionDecl.declarator.FunDeclarator.declarator.Ident, "main"));
+    _ = try std.testing.expect(std.mem.eql(u8, program.externalDecls.items[0].FunctionDecl.name, "main"));
 }
 
 test "parse factor" {
@@ -713,11 +713,11 @@ test "parse multiple functions" {
     const varResolver = try ast.VarResolver.init(allocator);
     try varResolver.resolve(program);
     std.log.warn("Add function : {s}, body: {any}\n", .{
-        program.externalDecls.items[0].FunctionDecl.declarator.FunDeclarator.declarator.Ident,
+        program.externalDecls.items[0].FunctionDecl.name,
         program.externalDecls.items[0].FunctionDecl.blockItems.items[0].Statement.Return,
     });
     std.log.warn("Main function : {s}, body: {any}\n", .{
-        program.externalDecls.items[1].FunctionDecl.declarator.FunDeclarator.declarator.Ident,
+        program.externalDecls.items[1].FunctionDecl.name,
         program.externalDecls.items[1].FunctionDecl.blockItems.items[0].Statement.Return.expression.FunctionCall,
     });
     for (program.externalDecls.items[1].FunctionDecl.blockItems.items[0].Statement.Return.expression.FunctionCall.args.items) |arg| {
@@ -749,38 +749,35 @@ test "parse chars and strings: decls and prototypes" {
     // Prototypes
     {
         const fsc = prog.externalDecls.items[0].FunctionDecl;
-        const fd = try fsc.declarator.unwrapFuncDeclarator();
-        _ = try std.testing.expectEqualStrings((try fd.declarator.unwrapIdentDecl()).Ident, "fsc");
+        _ = try std.testing.expectEqualStrings(fsc.name, "fsc");
         _ = try std.testing.expect(std.meta.activeTag(fsc.returnType) == .SChar);
-        _ = try std.testing.expectEqual(@as(usize, 1), fd.params.items.len);
-        const p0 = fd.params.items[0].NonVoidArg;
+        _ = try std.testing.expectEqual(@as(usize, 1), fsc.params.items.len);
+        const p0 = fsc.params.items[0].NonVoidArg;
         _ = try std.testing.expect(std.meta.activeTag(p0.type) == .SChar);
         _ = try std.testing.expectEqualStrings((try p0.declarator.unwrapIdentDecl()).Ident, "a");
     }
     {
         const fuc = prog.externalDecls.items[1].FunctionDecl;
-        const fd = try fuc.declarator.unwrapFuncDeclarator();
-        _ = try std.testing.expectEqualStrings((try fd.declarator.unwrapIdentDecl()).Ident, "fuc");
+        _ = try std.testing.expectEqualStrings(fuc.name, "fuc");
         _ = try std.testing.expect(std.meta.activeTag(fuc.returnType) == .UChar);
-        _ = try std.testing.expectEqual(@as(usize, 1), fd.params.items.len);
-        const p0 = fd.params.items[0].NonVoidArg;
+        _ = try std.testing.expectEqual(@as(usize, 1), fuc.params.items.len);
+        const p0 = fuc.params.items[0].NonVoidArg;
         _ = try std.testing.expect(std.meta.activeTag(p0.type) == .UChar);
         _ = try std.testing.expectEqualStrings((try p0.declarator.unwrapIdentDecl()).Ident, "b");
     }
     {
         const fc = prog.externalDecls.items[2].FunctionDecl;
-        const fd = try fc.declarator.unwrapFuncDeclarator();
-        _ = try std.testing.expectEqualStrings((try fd.declarator.unwrapIdentDecl()).Ident, "fc");
+        _ = try std.testing.expectEqualStrings(fc.name, "fc");
         _ = try std.testing.expect(std.meta.activeTag(fc.returnType) == .Char);
-        _ = try std.testing.expectEqual(@as(usize, 1), fd.params.items.len);
-        const p0 = fd.params.items[0].NonVoidArg;
+        _ = try std.testing.expectEqual(@as(usize, 1), fc.params.items.len);
+        const p0 = fc.params.items[0].NonVoidArg;
         _ = try std.testing.expect(std.meta.activeTag(p0.type) == .Char);
         _ = try std.testing.expectEqualStrings((try p0.declarator.unwrapIdentDecl()).Ident, "c");
     }
 
     // main function
     const mainFn = prog.externalDecls.items[3].FunctionDecl;
-    _ = try std.testing.expectEqualStrings((try mainFn.declarator.unwrapFuncDeclarator()).declarator.Ident, "main");
+    _ = try std.testing.expectEqualStrings(mainFn.name, "main");
     const items = mainFn.blockItems.items;
     // sa: signed char
     {
@@ -849,7 +846,7 @@ test "parser param types: array decays to pointer" {
     var p = try parser.Parser.init(allocator, l);
     const prog = try p.parseProgram();
     const fdecl = prog.externalDecls.items[0].FunctionDecl;
-    const param = fdecl.declarator.FunDeclarator.params.items[0].NonVoidArg;
+    const param = fdecl.params.items[0].NonVoidArg;
     // Expect param type is pointer to int (array parameter adjustment)
     try std.testing.expect(std.meta.activeTag(param.type) == .Pointer);
     try std.testing.expect(std.meta.activeTag(param.type.Pointer.*) == .Integer);
@@ -867,7 +864,7 @@ test "parser param types: multi-dim array decays one level" {
     var p = try parser.Parser.init(allocator, l);
     const prog = try p.parseProgram();
     const gdecl = prog.externalDecls.items[0].FunctionDecl;
-    const param = gdecl.declarator.FunDeclarator.params.items[0].NonVoidArg;
+    const param = gdecl.params.items[0].NonVoidArg;
     // Expect pointer to int[3]
     try std.testing.expect(std.meta.activeTag(param.type) == .Pointer);
     try std.testing.expect(std.meta.activeTag(param.type.Pointer.*) == .Array);
@@ -887,7 +884,7 @@ test "parser param types: pointer then array => extra pointer" {
     var p = try parser.Parser.init(allocator, l);
     const prog = try p.parseProgram();
     const hdecl = prog.externalDecls.items[0].FunctionDecl;
-    const param = hdecl.declarator.FunDeclarator.params.items[0].NonVoidArg;
+    const param = hdecl.params.items[0].NonVoidArg;
     // int *a[5] parameter => decay one array layer, plus nested pointer => int**
     try std.testing.expect(std.meta.activeTag(param.type) == .Pointer);
     try std.testing.expect(std.meta.activeTag(param.type.Pointer.*) == .Pointer);
@@ -926,10 +923,10 @@ test "parse function args as long" {
     const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(functionStr)));
     const p = try parser.Parser.init(allocator, l);
     const decl = try p.parseExternalDecl();
-    _ = try std.testing.expectEqual(decl.FunctionDecl.declarator.FunDeclarator.params.items[0].NonVoidArg.type, ast.Type.Long);
-    _ = try std.testing.expectEqualStrings(decl.FunctionDecl.declarator.FunDeclarator.params.items[0].NonVoidArg.declarator.Ident, "a");
-    _ = try std.testing.expectEqual(decl.FunctionDecl.declarator.FunDeclarator.params.items[1].NonVoidArg.type, ast.Type.Long);
-    _ = try std.testing.expectEqualStrings(decl.FunctionDecl.declarator.FunDeclarator.params.items[1].NonVoidArg.declarator.Ident, "b");
+    _ = try std.testing.expectEqual(decl.FunctionDecl.params.items[0].NonVoidArg.type, ast.Type.Long);
+    _ = try std.testing.expectEqualStrings((try decl.FunctionDecl.params.items[0].NonVoidArg.declarator.unwrapIdentDecl()).Ident, "a");
+    _ = try std.testing.expectEqual(decl.FunctionDecl.params.items[1].NonVoidArg.type, ast.Type.Long);
+    _ = try std.testing.expectEqualStrings((try decl.FunctionDecl.params.items[1].NonVoidArg.declarator.unwrapIdentDecl()).Ident, "b");
 }
 
 test "divide" {

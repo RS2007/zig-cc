@@ -52,6 +52,21 @@ fn buildArrayType(allocator: std.mem.Allocator, baseType: AST.Type, sizes: []con
     return .{ .Array = .{ .size = sizes[0], .ty = inner_type } };
 }
 
+fn findMainFunDeclarator(declarator: *AST.Declarator) *AST.FunDeclarator {
+    return switch (declarator.*) {
+        .Ident => unreachable,
+        .PointerDeclarator => |ptr| findMainFunDeclarator(ptr),
+        .ArrayDeclarator => |arr| findMainFunDeclarator(arr.declarator),
+        .FunDeclarator => |fun| {
+            if (fun.declarator.containsFuncDeclarator()) {
+                return findMainFunDeclarator(fun.declarator);
+            } else {
+                return fun;
+            }
+        },
+    };
+}
+
 fn getDeclaratorType(allocator: std.mem.Allocator, declarator: *AST.Declarator, baseType: AST.Type) !*AST.Type {
     const declaratorType = try allocator.create(AST.Type);
     declaratorType.* = switch (declarator.*) {
@@ -66,7 +81,23 @@ fn getDeclaratorType(allocator: std.mem.Allocator, declarator: *AST.Declarator, 
             const derived_type = try buildArrayType(allocator, baseType, sizes);
             break :blk (try getDeclaratorType(allocator, arr.declarator, derived_type)).*;
         },
-        .FunDeclarator => unreachable,
+        .FunDeclarator => |fun| blk: {
+            var args = std.ArrayList(*AST.Type).init(allocator);
+            for (fun.params.items) |arg| {
+                switch (arg.*) {
+                    .Void => {},
+                    .NonVoidArg => |nonVoid| {
+                        const copied = try allocator.create(AST.Type);
+                        copied.* = try nonVoid.type.deepCopy(allocator);
+                        try args.append(copied);
+                    },
+                }
+            }
+            const returnType = try allocator.create(AST.Type);
+            returnType.* = baseType;
+            const functionType = AST.Type{ .Function = .{ .args = args, .returnType = returnType } };
+            break :blk (try getDeclaratorType(allocator, fun.declarator, functionType)).*;
+        },
     };
     return declaratorType;
 }
@@ -327,15 +358,20 @@ pub const Parser = struct {
         if (qualifier != null) {
             _ = try self.l.nextToken(self.allocator);
         }
-        const returnType = try self.parseType();
+        const baseType = try self.parseType();
         const declarator = try self.parseDeclarator();
         const externalDecl = try self.allocator.create(AST.ExternalDecl);
         // INFO: We are not implementing function pointers for now, so if there
         // is a function declarator, that implies a function declaration.
         if (declarator.containsFuncDeclarator()) {
-            const functionDecl = try self.allocator.create(AST.FunctionDef);
-            functionDecl.* = .{
-                .declarator = declarator,
+            const fullType = (try getDeclaratorType(self.allocator, declarator, baseType)).*;
+            std.debug.assert(fullType == .Function);
+            const mainFunDecl = findMainFunDeclarator(declarator);
+            const functionDef = try self.allocator.create(AST.FunctionDef);
+            functionDef.* = .{
+                .name = (try declarator.unwrapIdentDecl()).Ident,
+                .params = mainFunDecl.params,
+                .returnType = fullType.Function.returnType.*,
                 .blockItems = switch ((try self.l.peekToken(self.allocator)).?.type) {
                     .SEMICOLON => blk: {
                         _ = try self.l.nextToken(self.allocator);
@@ -362,18 +398,17 @@ pub const Parser = struct {
                         unreachable;
                     },
                 },
-                .returnType = returnType,
                 .storageClass = qualifier,
             };
             externalDecl.* = .{
-                .FunctionDecl = functionDecl,
+                .FunctionDecl = functionDef,
             };
             return externalDecl;
         }
         const varDeclaration = try self.allocator.create(AST.Declaration);
         varDeclaration.* = .{
             .name = (try declarator.unwrapIdentDecl()).Ident,
-            .type = (try getDeclaratorType(self.allocator, declarator, returnType)).*,
+            .type = (try getDeclaratorType(self.allocator, declarator, baseType)).*,
             .varInitValue = switch ((try self.l.nextToken(self.allocator)).type) {
                 .SEMICOLON => null,
                 .ASSIGN => blk: {

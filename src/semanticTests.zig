@@ -39,7 +39,7 @@ test "parse globals" {
         }
     };
     std.log.warn("Globals not renamed: {s}\n", .{program.externalDecls.items[0].VarDeclaration.name});
-    std.log.warn("Globals1: {s}\n", .{program.externalDecls.items[1].FunctionDecl.declarator.FunDeclarator.declarator.Ident});
+    std.log.warn("Globals1: {s}\n", .{program.externalDecls.items[1].FunctionDecl.name});
     std.log.warn("Locals renamed: {s}\n", .{
         program.externalDecls.items[1].FunctionDecl.blockItems.items[0].Declaration.name,
     });
@@ -67,7 +67,7 @@ test "parse with storage classes" {
     };
     std.log.warn("Globals not renamed: {s}\n", .{program.externalDecls.items[0].VarDeclaration.name});
     std.log.warn("Globals storageClass: {any}\n", .{program.externalDecls.items[0].VarDeclaration.storageClass});
-    std.log.warn("Globals1: {s}\n", .{program.externalDecls.items[1].FunctionDecl.declarator.FunDeclarator.declarator.Ident});
+    std.log.warn("Globals1: {s}\n", .{program.externalDecls.items[1].FunctionDecl.name});
     std.log.warn("Globals1 storageClass: {any}\n", .{program.externalDecls.items[1].FunctionDecl.storageClass});
     std.log.warn("Locals renamed: {s}\n", .{
         program.externalDecls.items[1].FunctionDecl.blockItems.items[0].Declaration.name,

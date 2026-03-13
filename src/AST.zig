@@ -88,16 +88,14 @@ pub const ExternalDecl = union(ExternalDeclType) {
                 const tacFunctionDef = try renderer.allocator.create(tac.FunctionDef);
                 var instructions = std.ArrayList(*tac.Instruction).init(renderer.allocator);
                 try functionDecl.genTAC(renderer, &instructions, symbolTable);
-                const functionDeclarator = try functionDecl.declarator.unwrapFuncDeclarator();
-                const fnName = (try functionDeclarator.declarator.unwrapIdentDecl()).Ident;
                 tacFunctionDef.* = .{
-                    .name = fnName,
+                    .name = functionDecl.name,
                     .args = std.ArrayList([]u8).init(renderer.allocator),
                     .instructions = instructions,
                     //TODO: Change this later
                     .global = true,
                 };
-                for (functionDeclarator.params.items) |arg| {
+                for (functionDecl.params.items) |arg| {
                     const argName = (try arg.NonVoidArg.declarator.unwrapIdentDecl()).Ident;
                     try tacFunctionDef.args.append(argName);
                 }
@@ -711,10 +709,10 @@ pub fn astPointerTypeFromDepth(@"type": Type, depth: usize, allocator: std.mem.A
 }
 
 pub const FunctionDef = struct {
-    // INFO: The functiondef types get rewritten during the typecheck stage
-    declarator: *Declarator,
-    blockItems: std.ArrayList(*BlockItem),
+    name: []u8,
+    params: std.ArrayList(*Arg),
     returnType: Type,
+    blockItems: std.ArrayList(*BlockItem),
     storageClass: ?Qualifier,
 
     pub fn isDefined(self: *FunctionDef) bool {
@@ -724,50 +722,6 @@ pub const FunctionDef = struct {
     pub fn genTAC(functionDef: FunctionDef, renderer: *TACRenderer, instructions: *std.ArrayList(*tac.Instruction), symbolTable: std.StringHashMap(*semantic.Symbol)) !void {
         for (functionDef.blockItems.items) |blockItem| {
             try blockItem.genTAC(renderer, instructions, @constCast(&symbolTable));
-        }
-    }
-    pub fn fixReturnType(self: *FunctionDef, allocator: std.mem.Allocator) !void {
-        const tentativeReturnType = self.returnType;
-        var pointer_depth: usize = 0;
-        var array_dims = std.ArrayList(usize).init(allocator);
-        defer array_dims.deinit();
-
-        var runner: *Declarator = self.declarator;
-        // Walk wrappers until we reach the function declarator, collecting
-        // array dimensions and pointer depth that contribute to the return type.
-        while (true) {
-            switch (runner.*) {
-                .PointerDeclarator => |ptr| {
-                    pointer_depth += 1;
-                    runner = ptr;
-                },
-                .ArrayDeclarator => |arr| {
-                    for (arr.size.items) |sz| {
-                        try array_dims.append(sz);
-                    }
-                    runner = arr.declarator;
-                },
-                .FunDeclarator => break,
-                .Ident => unreachable,
-            }
-        }
-
-        // Build the base return type by applying array dimensions (from inner to outer)
-        var base: Type = tentativeReturnType;
-        if (array_dims.items.len > 0) {
-            var i: isize = @as(isize, @intCast(array_dims.items.len)) - 1;
-            while (i >= 0) : (i -= 1) {
-                const inner = try allocator.create(Type);
-                inner.* = base;
-                base = .{ .Array = .{ .size = array_dims.items[@as(usize, @intCast(i))], .ty = inner } };
-            }
-        }
-
-        // Finally, apply the pointer depth collected before the function.
-        if (pointer_depth > 0) {
-            self.returnType = try astPointerTypeFromDepth(base, pointer_depth, allocator);
-        } else {
-            self.returnType = base; // usually same as tentativeReturnType
         }
     }
 };
@@ -1330,7 +1284,7 @@ pub const Declarator = union(enum) {
         return switch (self.*) {
             .Ident => @constCast(self),
             .PointerDeclarator => |pointerDeclarator| pointerDeclarator.unwrapIdentDecl(),
-            .FunDeclarator => DeclaratorError.FunctionDeclCantUnwrapIdent,
+            .FunDeclarator => |fun| fun.declarator.unwrapIdentDecl(),
             .ArrayDeclarator => |arrDeclarator| arrDeclarator.declarator.unwrapIdentDecl(),
         };
     }
@@ -2224,10 +2178,10 @@ pub const VarResolver = struct {
                 .FunctionDecl => |functionDecl| {
                     var scope = std.StringHashMap(*VarResolveSymInfo).init(self.allocator);
                     try self.varMap.append(&scope);
-                    const funDeclarator = try functionDecl.declarator.unwrapFuncDeclarator();
-                    for (funDeclarator.params.items) |arg| {
-                        std.debug.assert(std.meta.activeTag(arg.*) == .NonVoidArg);
-                        try self.resolveDeclarator(arg.NonVoidArg.declarator, id);
+                    for (functionDecl.params.items) |arg| {
+                        if (std.meta.activeTag(arg.*) == .NonVoidArg) {
+                            try self.resolveDeclarator(arg.NonVoidArg.declarator, id);
+                        }
                     }
                     for (functionDecl.blockItems.items) |blockItem| {
                         try blockStatementScopeVariableResolve(

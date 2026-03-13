@@ -169,7 +169,7 @@ pub const Typechecker = struct {
             if (std.meta.activeTag(externalDecl.*) == .FunctionDecl) {
                 for (externalDecl.FunctionDecl.blockItems.items) |blkItem| {
                     resolveBlockReturns(self, blkItem, externalDecl.FunctionDecl.returnType) catch |err| {
-                        std.log.warn("Error at fn: {s}\n", .{(try externalDecl.FunctionDecl.declarator.unwrapFuncDeclarator()).declarator.Ident});
+                        std.log.warn("Error at fn: {s}\n", .{externalDecl.FunctionDecl.name});
                         return err;
                     };
                 }
@@ -527,18 +527,15 @@ pub fn typecheckExternalDecl(self: *Typechecker, externalDecl: *AST.ExternalDecl
         // different, and so is the arg length
         //     - This will be implemented later
         .FunctionDecl => |functionDecl| {
-            const functionDeclarator = try functionDecl.declarator.unwrapFuncDeclarator();
-            functionDecl.fixReturnType(self.allocator) catch unreachable;
-            std.debug.assert(std.meta.activeTag(functionDeclarator.declarator.*) == .Ident);
-            if (self.symbolTable.get(functionDeclarator.declarator.Ident)) |sym| {
+            if (self.symbolTable.get(functionDecl.name)) |sym| {
                 if (std.meta.activeTag(sym.typeInfo) != .Function) {
-                    try self.errors.append(try std.fmt.allocPrint(self.allocator, "Global variable {s} redeclared as function\n", .{functionDecl.declarator.FunDeclarator.declarator.Ident}));
+                    try self.errors.append(try std.fmt.allocPrint(self.allocator, "Global variable {s} redeclared as function\n", .{functionDecl.name}));
                     return TypeError.GlobVarRedeclaredAsFn;
                 }
                 const nonStaticLinkageMismatch = !sym.attributes.FunctionAttr.global and (functionDecl.storageClass != AST.Qualifier.STATIC);
                 const staticLinkageMismatch = sym.attributes.FunctionAttr.global and (functionDecl.storageClass == AST.Qualifier.STATIC);
                 if (nonStaticLinkageMismatch or staticLinkageMismatch) {
-                    try self.errors.append(try std.fmt.allocPrint(self.allocator, "Global variable {s} redeclared as non-static\n", .{functionDecl.declarator.FunDeclarator.declarator.Ident}));
+                    try self.errors.append(try std.fmt.allocPrint(self.allocator, "Global variable {s} redeclared as non-static\n", .{functionDecl.name}));
                     return TypeError.LinkageMismatch;
                 }
 
@@ -546,16 +543,16 @@ pub fn typecheckExternalDecl(self: *Typechecker, externalDecl: *AST.ExternalDecl
                     try self.errors.append(try std.fmt.allocPrint(
                         self.allocator,
                         "Function redefinition of {s}\n",
-                        .{functionDecl.declarator.FunDeclarator.declarator.Ident},
+                        .{functionDecl.name},
                     ));
                     return TypeError.FnRedefined;
                 }
 
-                for (0..functionDeclarator.params.items.len) |i| {
-                    if (std.meta.activeTag(functionDeclarator.params.items[i].NonVoidArg.type) != std.meta.activeTag(sym.typeInfo.Function.args.items[i].*)) {
+                for (0..functionDecl.params.items.len) |i| {
+                    if (std.meta.activeTag(functionDecl.params.items[i].NonVoidArg.type) != std.meta.activeTag(sym.typeInfo.Function.args.items[i].*)) {
                         try self.errors.append(try std.fmt.allocPrint(self.allocator, "Argument mismatch in function redeclaration: function name = {s}, function arg mismatch between {any} and {any}\n", .{
-                            functionDecl.declarator.FunDeclarator.declarator.Ident,
-                            functionDecl.declarator.FunDeclarator.params.items[i].NonVoidArg.type,
+                            functionDecl.name,
+                            functionDecl.params.items[i].NonVoidArg.type,
                             sym.typeInfo.Function.args.items[i],
                         }));
                         return TypeError.FnPrevDeclArgMismatch;
@@ -569,24 +566,23 @@ pub fn typecheckExternalDecl(self: *Typechecker, externalDecl: *AST.ExternalDecl
                     try self.errors.append(try std.fmt.allocPrint(
                         self.allocator,
                         "Function {s} has mismatching declarations\n",
-                        .{functionDecl.declarator.FunDeclarator.declarator.Ident},
+                        .{functionDecl.name},
                     ));
                     return TypeError.FnPrevDeclArgMismatch;
                 }
 
-                if (functionDeclarator.params.items.len != sym.typeInfo.Function.args.items.len) {
+                if (functionDecl.params.items.len != sym.typeInfo.Function.args.items.len) {
                     try self.errors.append(try std.fmt.allocPrint(
                         self.allocator,
                         "Function {s} has mismatching declarations\n",
-                        .{functionDecl.declarator.FunDeclarator.declarator.Ident},
+                        .{functionDecl.name},
                     ));
                     return TypeError.FnArgNumMismatch;
                 }
             }
             const fnSym = try self.allocator.create(Symbol);
-            const fnName = (try functionDeclarator.declarator.unwrapIdentDecl()).Ident;
             var fnArgsList = std.ArrayList(*AST.Type).init(self.allocator);
-            for (functionDeclarator.params.items) |arg| {
+            for (functionDecl.params.items) |arg| {
                 // Types for parameters are fully constructed in the parser
                 // (including array-to-pointer decay). No fixups needed here.
                 try fnArgsList.append(&arg.NonVoidArg.type);
@@ -605,9 +601,9 @@ pub fn typecheckExternalDecl(self: *Typechecker, externalDecl: *AST.ExternalDecl
                     },
                 },
             };
-            try self.symbolTable.put(fnName, fnSym);
+            try self.symbolTable.put(functionDecl.name, fnSym);
 
-            for (functionDeclarator.params.items) |arg| {
+            for (functionDecl.params.items) |arg| {
                 const argSym = try self.allocator.create(Symbol);
                 argSym.* = .{
                     .typeInfo = arg.NonVoidArg.type,
