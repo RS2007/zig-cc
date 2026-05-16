@@ -1102,3 +1102,15 @@ test "multidim arrays with fancy expressions" {
         }
     }
 }
+
+test "casting values explicitly" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
+    defer arena.deinit();
+    const programStr = "long longValue = (long)4;";
+    const l = try lexer.Lexer.init(allocator, @as([]u8, @constCast(programStr)));
+    var p = try parser.Parser.init(allocator, l);
+    const externalDecl = try p.parseDeclaration();
+    _ = try std.testing.expectEqual(externalDecl.varInitValue.?.Expression.CastExpr.toType, .Long);
+    _ = try std.testing.expectEqual(externalDecl.varInitValue.?.Expression.CastExpr.expr.getType(), .Integer);
+}

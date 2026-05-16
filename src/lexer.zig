@@ -57,6 +57,15 @@ pub const TokenType = enum {
     CHAR_TYPE,
     CHAR_LITERAL,
     STRING_LITERAL,
+
+    const Self = @This();
+
+    pub fn isTypeSpecifier(self: Self) bool {
+        return switch (self) {
+            .INT_TYPE, .FLOAT_TYPE, .LONG_TYPE, .CHAR_TYPE, .UNSIGNED_LONG, .UNSIGNED_INT => true,
+            else => false,
+        };
+    }
 };
 
 pub const Token = struct {

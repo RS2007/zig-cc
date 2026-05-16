@@ -266,6 +266,7 @@ pub const ExpressionType = enum {
     Deref,
     ArrSubscript,
     String,
+    CastExpr,
 };
 
 fn convertASTSymbolsToTACDeclarations(
@@ -445,7 +446,7 @@ pub const Type = union(enum) {
         if (std.meta.activeTag(self.*) != std.meta.activeTag(other.*)) return false;
         return switch (self.*) {
             .Pointer => |ptr| ptr.eq(other.Pointer),
-            .Array => |arr| arr.ty.eq(other.Array.ty) and arr.len == other.Array.len,
+            .Array => |arr| arr.ty.eq(other.Array.ty) and arr.size == other.Array.size,
             else => true,
         };
     }
@@ -1392,6 +1393,11 @@ pub const ArrSubscript = struct {
 
 pub const CharType: Type = .Char;
 
+pub const CastExpr = struct {
+    expr: *Expression,
+    toType: Type,
+};
+
 pub const Expression = union(ExpressionType) {
     Constant: Constant,
     Unary: Unary,
@@ -1405,6 +1411,7 @@ pub const Expression = union(ExpressionType) {
     Deref: Deref,
     ArrSubscript: ArrSubscript,
     String: []u8,
+    CastExpr: CastExpr,
     const Self = @This();
 
     pub inline fn getType(self: *Self) Type {
@@ -1421,6 +1428,7 @@ pub const Expression = union(ExpressionType) {
             .AddrOf => |addrOf| addrOf.type.?,
             .ArrSubscript => |arrSubscript| arrSubscript.type.?,
             .String => |str| .{ .Array = .{ .size = str.len + 1, .ty = @constCast(&CharType) } },
+            .CastExpr => |castExpr| castExpr.toType,
         };
     }
 

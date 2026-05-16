@@ -946,8 +946,26 @@ pub const Parser = struct {
         return node;
     }
 
+    pub fn parseCastExp(self: *Parser) ParserError!*AST.Expression {
+        std.debug.assert((try self.l.nextToken(self.allocator)).type == .LPAREN);
+        const toType = try self.parseType();
+        std.debug.assert((try self.l.nextToken(self.allocator)).type == .RPAREN);
+        const expr = try self.parseExpression(0);
+        const castExpr = try self.allocator.create(AST.Expression);
+        castExpr.* = .{
+            .CastExpr = .{ .toType = toType, .expr = expr },
+        };
+        return castExpr;
+    }
+
     pub fn parseFactor(self: *Parser) ParserError!*AST.Expression {
-        const peekToken = (try self.l.peekToken(self.allocator)).?;
+        // TODO: test possible bug surface area, what if just one token
+        // can be peeked?
+        const peekedTwoTokens = try self.l.peekTwoTokens(self.allocator);
+        if (peekedTwoTokens[1].?.type.isTypeSpecifier()) {
+            return self.parseCastExp();
+        }
+        const peekToken = peekedTwoTokens[0].?;
         return switch (peekToken.type) {
             .LONG => try self.parseLong(),
             .INTEGER => try self.parseInteger(),
